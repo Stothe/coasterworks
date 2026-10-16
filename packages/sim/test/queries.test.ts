@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { MAX_HEIGHT, Sim, createDefaultRegistry, createWorld } from "../src/index.js";
+import {
+  MAX_HEIGHT,
+  Sim,
+  createDefaultRegistry,
+  createWorld,
+  getCorner,
+  setCorner,
+  tileIndex,
+} from "../src/index.js";
 
 function setup(opts: { width?: number; height?: number } = {}) {
   const world = createWorld({
@@ -113,33 +121,78 @@ describe("terrain_get", () => {
     expect(JSON.parse(JSON.stringify(data))).toEqual(data);
   });
 
-  it("lays out an offset area row by row", () => {
+  it("lays out a wide, offset area row-major: a row runs along x, rows stack along y", () => {
     const { world, sim } = setup();
-    // Raising tile (3, 2) lifts its corners (3,2), (4,2), (3,3), and (4,3).
-    for (const [name, input] of [
-      ["terrain_raise", { x: 3, y: 2, w: 1, h: 1 }],
-      ["terrain_set_surface", { x: 3, y: 2, w: 1, h: 1, surface: 2 }],
-      ["terrain_set_water", { x: 2, y: 1, w: 1, h: 1, level: 12 }],
-    ] as const) {
-      expect(sim.execute(name, input).ok).toBe(true);
+    // The area is 3 tiles wide and 2 tall at (2, 1), so its corners are 4 wide and 3 tall:
+    // corner columns are x 2..5 and corner rows are y 1..3. It is not square, so swapping rows
+    // and columns changes every index below.
+    const [x, y, w, h] = [2, 1, 3, 2];
+    // Each feature sits off the diagonal and is alone in its layer.
+    setCorner(world.terrain, 5, 1, 21); // column 3, row 0
+    setCorner(world.terrain, 4, 2, 20); // column 2, row 1
+    expect(sim.execute("terrain_set_surface", { x: 4, y: 1, w: 1, h: 1, surface: 3 }).ok).toBe(
+      true,
+    ); // column 2, row 0
+    expect(sim.execute("terrain_set_water", { x: 2, y: 2, w: 1, h: 1, level: 12 }).ok).toBe(true); // column 0, row 1
+
+    const corners = new Array<number>((w + 1) * (h + 1)).fill(8);
+    corners[0 * (w + 1) + 3] = 21;
+    corners[1 * (w + 1) + 2] = 20;
+    const surface = new Array<number>(w * h).fill(0);
+    surface[0 * w + 2] = 3;
+    const water = new Array<number>(w * h).fill(0);
+    water[1 * w + 0] = 12;
+
+    expect(sim.query("terrain_get", { x, y, w, h })).toEqual({
+      ok: true,
+      result: { x, y, w, h, corners, surface, water },
+    });
+    // Spelled out, so the expected arrays above cannot drift from the layout they describe.
+    expect(corners).toEqual([8, 8, 8, 21, 8, 8, 20, 8, 8, 8, 8, 8]);
+    expect(surface).toEqual([0, 0, 3, 0, 0, 0]);
+    expect(water).toEqual([0, 0, 0, 12, 0, 0]);
+  });
+
+  it("lays out a tall area the same way, matching the world's own accessors", () => {
+    const { world, sim } = setup();
+    // Heights, surfaces, and water that differ along x and along y, so no transposition matches.
+    const t = world.terrain;
+    for (let cy = 0; cy <= t.height; cy++) {
+      for (let cx = 0; cx <= t.width; cx++) setCorner(t, cx, cy, (cx * 5 + cy * 2) % 60);
+    }
+    for (let ty = 0; ty < t.height; ty++) {
+      for (let tx = 0; tx < t.width; tx++) {
+        t.surface[tileIndex(t, tx, ty)] = (tx + ty * 2) % 5;
+        t.water[tileIndex(t, tx, ty)] = (tx * 3 + ty) % 60;
+      }
     }
 
-    // The area covers tiles x 2..4 and y 1..3, so corners x 2..5 and y 1..4: 4 wide, 4 tall.
-    const result = sim.query("terrain_get", { x: 2, y: 1, w: 3, h: 3 });
-    expect(result.ok).toBe(true);
-    const data = result.ok
-      ? (result.result as { corners: number[]; surface: number[]; water: number[] })
-      : { corners: [], surface: [], water: [] };
-    expect(data.corners).toHaveLength(16);
-    expect(data.surface).toHaveLength(9);
-    expect(data.water).toHaveLength(9);
-    // Corner (3,2) is column 1 of row 1; (4,2) is column 2 of row 1; (3,3) and (4,3) are in row 2.
-    const raised = data.corners.map((h, i) => (h === 9 ? i : -1)).filter((i) => i >= 0);
-    expect(raised).toEqual([5, 6, 9, 10]);
-    // Tile (3, 2) is column 1 of row 1; tile (2, 1) is the first tile.
-    expect(data.surface).toEqual([0, 0, 0, 0, 2, 0, 0, 0, 0]);
-    expect(data.water).toEqual([12, 0, 0, 0, 0, 0, 0, 0, 0]);
-    expect(world.terrain.corners).toBeInstanceOf(Int16Array);
+    for (const [x, y, w, h] of [
+      [3, 2, 2, 5],
+      [1, 4, 6, 2],
+      [0, 0, 16, 16],
+    ] as const) {
+      const result = sim.query("terrain_get", { x, y, w, h });
+      expect(result.ok).toBe(true);
+      const data = result.ok
+        ? (result.result as { corners: number[]; surface: number[]; water: number[] })
+        : { corners: [], surface: [], water: [] };
+      expect(data.corners).toHaveLength((w + 1) * (h + 1));
+      expect(data.surface).toHaveLength(w * h);
+      expect(data.water).toHaveLength(w * h);
+      for (let row = 0; row <= h; row++) {
+        for (let col = 0; col <= w; col++) {
+          expect(data.corners[row * (w + 1) + col]).toBe(getCorner(t, x + col, y + row));
+        }
+      }
+      for (let row = 0; row < h; row++) {
+        for (let col = 0; col < w; col++) {
+          const tile = tileIndex(t, x + col, y + row);
+          expect(data.surface[row * w + col]).toBe(t.surface[tile]);
+          expect(data.water[row * w + col]).toBe(t.water[tile]);
+        }
+      }
+    }
   });
 
   it("returns copies, so changing the result does not change the world", () => {
@@ -238,6 +291,29 @@ describe("log_recent", () => {
     sim.query("log_recent", {});
     expect(world.log).toEqual(before);
     expect(world.log[0]).toHaveProperty("undo");
+  });
+
+  it("returns copies of each input, so changing the result does not change the log", () => {
+    const { world, sim } = setup();
+    sim.execute("terrain_raise", { x: 0, y: 0, w: 1, h: 1 });
+    sim.execute("finance_take_loan", { amount: 1_000_00 });
+    const before = structuredClone(world.log);
+
+    const result = sim.query("log_recent", {});
+    const entries = result.ok ? (result.result as Array<Record<string, any>>) : [];
+    expect(entries).toHaveLength(2);
+    for (const entry of entries) {
+      entry.input.x = 99;
+      entry.input.amount = 1;
+      entry.name = "changed";
+      entry.cost = -1;
+    }
+
+    expect(world.log).toEqual(before);
+    // Redo still sees the original input.
+    expect(sim.undo().ok).toBe(true);
+    expect(sim.redo().ok).toBe(true);
+    expect(world.finance.loan).toBe(1_000_00);
   });
 
   it("includes the undo and redo entries, and keeps undoneBy on an undone command", () => {

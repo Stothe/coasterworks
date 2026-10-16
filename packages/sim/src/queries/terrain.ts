@@ -8,7 +8,7 @@ const MAX_AREA_SIDE = 64;
 /** Heights, surfaces, and water for a rectangle of tiles. */
 export const terrainGet = defineQuery({
   name: "terrain_get",
-  description: `Reads an area of terrain, at most ${MAX_AREA_SIDE}x${MAX_AREA_SIDE} tiles. corners holds (w+1)*(h+1) heights, row by row. surface and water hold w*h values, row by row.`,
+  description: `Reads an area of terrain, at most ${MAX_AREA_SIDE}x${MAX_AREA_SIDE} tiles. corners holds (w+1)*(h+1) heights; surface and water hold w*h values each. All are row-major: index = row*(w+1)+col for corners, row*w+col for tiles; a row runs along x, rows stack along y.`,
   category: "terrain",
   input: z.object({
     x: z.int().min(0),
