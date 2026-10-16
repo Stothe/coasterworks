@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -16,9 +16,12 @@ let dir: string;
 
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "coasterworks-cli-"));
+  // A token in the developer's own environment must not change what these tests see.
+  vi.stubEnv("COASTERWORKS_MCP_TOKEN", undefined);
 });
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await rm(dir, { recursive: true, force: true });
 });
 
@@ -349,9 +352,16 @@ describe("usage", () => {
   it("lists mcp, and says that run and exec leave the save alone without --out", async () => {
     const done = await cli("frobnicate");
     expect(done.stderr).toContain(
-      "  mcp      --save <file> [--out <file>] [--http <port> --token <token>]",
+      "  mcp      --save <file> [--out <file>] [--http <port> [--token <token>] [--allow-files]]",
     );
     expect(done.stderr).toContain("Without --out, run and exec do not modify the save.");
+  });
+
+  it("documents the token environment variable and warns about --allow-files", async () => {
+    const done = await cli("frobnicate");
+    expect(done.stderr).toContain("COASTERWORKS_MCP_TOKEN");
+    expect(done.stderr).toContain("--allow-files adds the save_write and save_load file tools");
+    expect(done.stderr).toContain("lets any holder of the token read and write files as you");
   });
 });
 
@@ -371,8 +381,25 @@ describe("mcp usage", () => {
     expect(done.code).toBe(2);
     expect(done.stdout).toBe("");
     expect(done.stderr).toMatch(/^error: --http needs --token/);
+    expect(done.stderr).toContain("COASTERWORKS_MCP_TOKEN");
     expect(done.stderr).toContain("Usage:");
     expect(await exists(out)).toBe(false);
+  });
+
+  it("treats an empty COASTERWORKS_MCP_TOKEN as unset", async () => {
+    vi.stubEnv("COASTERWORKS_MCP_TOKEN", "");
+    const file = await makePark();
+    const done = await cli("mcp", "--save", file, "--http", "0");
+    expect(done.code).toBe(2);
+    expect(done.stderr).toMatch(/^error: --http needs --token/);
+  });
+
+  it("is still a usage error to give --token without --http when the environment has a token", async () => {
+    vi.stubEnv("COASTERWORKS_MCP_TOKEN", "env-tok");
+    const file = await makePark();
+    const done = await cli("mcp", "--save", file, "--token", "t");
+    expect(done.code).toBe(2);
+    expect(done.stderr).toMatch(/^error: --token needs --http/);
   });
 
   it("is a usage error to give --token without --http, or an empty --token", async () => {
@@ -462,15 +489,64 @@ describe("mcp over HTTP", () => {
 
     const client = await httpClient(server.info.url, "tok");
     const names = (await client.listTools()).tools.map((t) => t.name);
-    expect(names).toEqual(
-      expect.arrayContaining(["terrain_raise", "park_status", "undo", "save_write", "save_load"]),
-    );
+    expect(names).toEqual(expect.arrayContaining(["terrain_raise", "park_status", "undo", "redo"]));
     await client.close();
 
     const stopped = await server.stop();
     expect(stopped.code).toBe(0);
     expect(stopped.stderr).toBe("");
     expect(stopped.stdout).toBe(`${JSON.stringify(server.info)}\n`);
+  });
+
+  it("leaves out the file tools unless --allow-files is given", async () => {
+    const file = await makePark();
+    const server = await startHttp("--save", file, "--http", "0", "--token", "tok");
+    const client = await httpClient(server.info.url, "tok");
+    const names = (await client.listTools()).tools.map((t) => t.name);
+    expect(names).toContain("terrain_raise");
+    expect(names).not.toContain("save_write");
+    expect(names).not.toContain("save_load");
+    await client.close();
+    expect((await server.stop()).code).toBe(0);
+  });
+
+  it("lists the file tools with --allow-files", async () => {
+    const file = await makePark();
+    const server = await startHttp(
+      "--save",
+      file,
+      "--http",
+      "0",
+      "--token",
+      "tok",
+      "--allow-files",
+    );
+    const client = await httpClient(server.info.url, "tok");
+    const names = (await client.listTools()).tools.map((t) => t.name);
+    expect(names).toEqual(expect.arrayContaining(["terrain_raise", "save_write", "save_load"]));
+    await client.close();
+    expect((await server.stop()).code).toBe(0);
+  });
+
+  it("takes the token from COASTERWORKS_MCP_TOKEN when --token is omitted", async () => {
+    vi.stubEnv("COASTERWORKS_MCP_TOKEN", "env-tok");
+    const file = await makePark();
+    const server = await startHttp("--save", file, "--http", "0");
+    await expect(httpClient(server.info.url, "nope")).rejects.toThrow();
+    const client = await httpClient(server.info.url, "env-tok");
+    expect((await client.listTools()).tools.map((t) => t.name)).toContain("terrain_raise");
+    await client.close();
+    expect((await server.stop()).code).toBe(0);
+  });
+
+  it("prefers --token over COASTERWORKS_MCP_TOKEN", async () => {
+    vi.stubEnv("COASTERWORKS_MCP_TOKEN", "env-tok");
+    const file = await makePark();
+    const server = await startHttp("--save", file, "--http", "0", "--token", "flag-tok");
+    await expect(httpClient(server.info.url, "env-tok")).rejects.toThrow();
+    const client = await httpClient(server.info.url, "flag-tok");
+    await client.close();
+    expect((await server.stop()).code).toBe(0);
   });
 
   it("turns away a client with the wrong token", async () => {
@@ -683,6 +759,20 @@ describe("bin mcp", () => {
     }
   });
 
+  it("lists the file tools over stdio, which is the local trust boundary", async (ctx) => {
+    if (!existsSync(dist)) ctx.skip(`${dist} is missing; run \`pnpm build\` to enable this test`);
+    const file = await makePark();
+    const server = start("--save", file);
+    server.send(INITIALIZE);
+    server.send(INITIALIZED);
+    server.send({ jsonrpc: "2.0", id: 3, method: "tools/list" });
+    const [, listed] = await server.lines(2);
+    const names = listed.result.tools.map((t: { name: string }) => t.name);
+    expect(names).toEqual(expect.arrayContaining(["terrain_raise", "save_write", "save_load"]));
+    server.child.stdin.end();
+    expect(await server.exited).toBe(0);
+  });
+
   it("answers a call that stdin's end follows straight away", async (ctx) => {
     if (!existsSync(dist)) ctx.skip(`${dist} is missing; run \`pnpm build\` to enable this test`);
     const file = await makePark();
@@ -745,5 +835,24 @@ describe("bin mcp", () => {
     expect(await server.exited).toBe(0);
     expect(server.stderr()).toBe("");
     expect((await readPark(out)).finance.cash).toBe(10_000_00 - 45_000);
+  });
+
+  it("serves HTTP with the token from COASTERWORKS_MCP_TOKEN and no file tools", async (ctx) => {
+    if (!existsSync(dist)) ctx.skip(`${dist} is missing; run \`pnpm build\` to enable this test`);
+    vi.stubEnv("COASTERWORKS_MCP_TOKEN", "env-tok");
+    const file = await makePark();
+    const server = start("--save", file, "--http", "0");
+    const [info] = await server.lines(1);
+
+    await expect(httpClient(info.url, "nope")).rejects.toThrow();
+    const client = await httpClient(info.url, "env-tok");
+    const names = (await client.listTools()).tools.map((t) => t.name);
+    expect(names).toContain("terrain_raise");
+    expect(names).not.toContain("save_write");
+    await client.close();
+
+    server.child.kill("SIGINT");
+    expect(await server.exited).toBe(0);
+    expect(server.stderr()).toBe("");
   });
 });

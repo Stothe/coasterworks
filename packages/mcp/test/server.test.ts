@@ -149,7 +149,8 @@ describe("commands", () => {
 
     const bad = await client.callTool({ name: "terrain_raise", arguments: { ...RAISE, x: -1 } });
     expect(isError(bad)).toBe(true);
-    expect(textOf(bad)).toContain("x");
+    // The message ends with the path of the bad field ("... at x"), not just any word with an x.
+    expect(textOf(bad)).toMatch(/\bat x\b/);
     expect(sim.hash()).toBe(before);
     expect(sim.world.log).toHaveLength(0);
   });

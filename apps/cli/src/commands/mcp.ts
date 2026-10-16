@@ -13,11 +13,19 @@ function untilAborted(signal: AbortSignal | undefined): Promise<void> {
   });
 }
 
+/** The environment variable that supplies the HTTP bearer token when `--token` is not given. */
+const TOKEN_ENV = "COASTERWORKS_MCP_TOKEN";
+
 /**
- * `mcp --save <file> [--out <file>] [--http <port> --token <token>]`: serves the park to an MCP
- * client until it hangs up (stdio) or the user stops it (`io.signal`). Stdio is the default; its
- * stdout carries only the protocol, so this prints nothing there. With `--http` it listens on
- * 127.0.0.1 and prints `{ url, port }` once it is ready.
+ * `mcp --save <file> [--out <file>] [--http <port> [--token <token>] [--allow-files]]`: serves the
+ * park to an MCP client until it hangs up (stdio) or the user stops it (`io.signal`). Stdio is the
+ * default; its stdout carries only the protocol, so this prints nothing there. With `--http` it
+ * listens on 127.0.0.1 and prints `{ url, port }` once it is ready.
+ *
+ * The token comes from `--token`, or else from `COASTERWORKS_MCP_TOKEN`, so it need not appear in
+ * a process list. The `save_write` and `save_load` tools read and write files as the user. Over
+ * stdio the client is the local process that launched this one, so they are on. Over HTTP anyone
+ * with the token could use them, so they stay off unless `--allow-files` asks for them.
  *
  * With `--out` the park is written after every call that changes it and once more on the way
  * out, never over `--save` unless asked.
@@ -31,22 +39,29 @@ export async function mcpCommand(args: string[], io: CliIO): Promise<number> {
         out: { type: "string" },
         http: { type: "string" },
         token: { type: "string" },
+        "allow-files": { type: "boolean" },
       },
       allowPositionals: false,
     }),
   );
   const save = requireOption("save", values.save);
-  if (values.http !== undefined && values.token === undefined) {
-    throw new UsageError("--http needs --token");
-  }
   if (values.http === undefined && values.token !== undefined) {
     throw new UsageError("--token needs --http");
   }
   if (values.token === "") throw new UsageError("--token must not be empty");
+  // An empty variable counts as unset, as a shell's `FOO= cmd` usually means it.
+  const envToken = process.env[TOKEN_ENV];
+  const token = values.token ?? (envToken === "" ? undefined : envToken);
+  if (values.http !== undefined && token === undefined) {
+    throw new UsageError(`--http needs --token (or ${TOKEN_ENV} in the environment)`);
+  }
   const port = integerOption("http", values.http, { min: 0, max: 65535 });
 
   const sim = new Sim(await readPark(save));
-  const options: McpServerOptions = { allowFiles: true };
+  // Stdio always has the file tools. Over HTTP they are opt-in; see the doc comment above.
+  const options: McpServerOptions = {
+    allowFiles: port === undefined || values["allow-files"] === true,
+  };
 
   // One write at a time: they share a temporary file, and a later one has the newer park anyway.
   let writing: Promise<void> = Promise.resolve();
@@ -64,7 +79,7 @@ export async function mcpCommand(args: string[], io: CliIO): Promise<number> {
   if (port === undefined) {
     await serveStdio(sim, io.signal === undefined ? options : { ...options, signal: io.signal });
   } else {
-    const http = await serveHttp(sim, { ...options, port, token: values.token ?? "" });
+    const http = await serveHttp(sim, { ...options, port, token: token ?? "" });
     try {
       printJson(io, { url: http.url, port: http.port });
       await untilAborted(io.signal);

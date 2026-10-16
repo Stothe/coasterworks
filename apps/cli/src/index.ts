@@ -18,12 +18,15 @@ Commands:
   run      --save <file> --days <n> [--out <file>]
   inspect  <file>
   exec     --save <file> --command <name> [--input <json>] [--out <file>]
-  mcp      --save <file> [--out <file>] [--http <port> --token <token>]
+  mcp      --save <file> [--out <file>] [--http <port> [--token <token>] [--allow-files]]
 
 Output is one line of JSON on stdout. Exit codes: 0 ok, 1 failed, 2 bad usage.
 Without --out, run and exec do not modify the save.
 mcp serves the park to an MCP client over stdio, or over HTTP with --http (0 picks a port).
 Stdio carries only the protocol; HTTP prints {"url","port"} once it is listening. Ctrl-C stops it.
+--http needs a token: --token, or else the COASTERWORKS_MCP_TOKEN environment variable.
+--allow-files adds the save_write and save_load file tools over HTTP; stdio always has them.
+  Warning: it lets any holder of the token read and write files as you.
 `;
 
 type Command = (args: string[], io: CliIO) => Promise<number>;
