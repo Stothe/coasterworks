@@ -1,6 +1,7 @@
 import { gunzipSync, gzipSync, strFromU8, strToU8 } from "fflate";
 import { z } from "zod";
 import { Rng } from "../rng.js";
+import { hashWorld } from "../world/hash.js";
 import { MAX_MAP, SCHEMA_VERSION, type LogEntry, type World } from "../world/types.js";
 import { fromBase64, toBase64 } from "./base64.js";
 import { CORRUPT_MESSAGE, SaveError } from "./error.js";
@@ -11,12 +12,17 @@ import { migrate, schemaVersionOf } from "./migrate.js";
  *
  *   { schemaVersion, meta: { name, seed, created }, tick,
  *     terrain: { width, height, corners, surface, water },
- *     finance, rng: [w0, w1, w2, w3], log, undoStack, redoStack, nextId }
+ *     finance, rng: [w0, w1, w2, w3], log, undoStack, redoStack, nextId, hash }
  *
  * Each terrain array is `{ "$t": "Int16Array" | "Uint8Array", "$b64": "<base64>" }`, holding the
  * array's values as little-endian bytes. `fflate` does the gzip so the same code runs in Node and
  * in browsers. Keys are written in a fixed order and the gzip header carries no timestamp, so
  * saving the same world twice gives the same bytes.
+ *
+ * `hash` is `hashWorld` of the saved world and is the last key. `gunzipSync` does not check the gzip
+ * CRC, so a damaged file can unzip to different but well-formed content; loading rebuilds the world
+ * and refuses it unless its hash matches. `hashWorld` leaves out `meta.created` and the contents of
+ * the log (only its length), so edits to those are not caught.
  */
 
 type TypedArrayName = "Int16Array" | "Uint8Array";
@@ -94,6 +100,7 @@ const saveSchema = z.object({
   undoStack: z.array(int),
   redoStack: z.array(int),
   nextId: int.min(1),
+  hash: z.string(),
 });
 
 /** Fixed key order, and no key at all for an absent `undo` or `undoneBy`. */
@@ -138,6 +145,7 @@ export function serializeWorld(world: World): Uint8Array {
     undoStack: world.undoStack,
     redoStack: world.redoStack,
     nextId: world.nextId,
+    hash: hashWorld(world),
   };
   // `mtime: 0` leaves the clock out of the gzip header; otherwise fflate stamps the current time.
   return gzipSync(strToU8(JSON.stringify(doc)), { mtime: 0 });
@@ -153,8 +161,9 @@ function parseDocument(bytes: Uint8Array): unknown {
 
 /**
  * Reads a save written by `serializeWorld`. Throws `SaveError` if the bytes are not a valid save, if
- * it is from a newer schema than this build reads, or if an older schema cannot be migrated. Older
- * saves are run through `migrate` before they are checked.
+ * it is from a newer schema than this build reads, if an older schema cannot be migrated, or if the
+ * rebuilt world does not match the hash stored in the save. Older saves are run through `migrate`
+ * before they are checked.
  */
 export function deserializeWorld(bytes: Uint8Array): World {
   const raw = parseDocument(bytes);
@@ -200,7 +209,7 @@ export function deserializeWorld(bytes: Uint8Array): World {
     return entry;
   });
 
-  return {
+  const world: World = {
     meta: {
       schemaVersion: doc.schemaVersion,
       name: doc.meta.name,
@@ -220,4 +229,6 @@ export function deserializeWorld(bytes: Uint8Array): World {
     redoStack: doc.redoStack,
     nextId: doc.nextId,
   };
+  if (hashWorld(world) !== doc.hash) throw new SaveError(CORRUPT_MESSAGE);
+  return world;
 }

@@ -17,6 +17,7 @@
   "devDependencies": {
     "@types/node": "^22",
     "prettier": "^3",
+    "tsx": "^4.23.15",
     "typescript": "^5.6",
     "vitest": "^3"
   }

@@ -241,7 +241,9 @@ describe("save format", () => {
       "undoStack",
       "redoStack",
       "nextId",
+      "hash",
     ]);
+    expect(doc.hash).toBe(hashWorld(world));
     expect(doc.schemaVersion).toBe(SCHEMA_VERSION);
     expect(doc.meta).toEqual({ name: world.meta.name, seed: 4242, created: CREATED });
     expect(doc.rng).toEqual([...world.rng.state]);
@@ -357,6 +359,8 @@ describe("deserializeWorld errors", () => {
       "array without bytes": (doc) =>
         ((doc.terrain as Record<string, unknown>).surface = { $t: "Uint8Array" }),
       "stack of strings": (doc) => (doc.undoStack = ["a"]),
+      "missing hash": (doc) => delete doc.hash,
+      "numeric hash": (doc) => (doc.hash = 5),
     };
     for (const [label, damage] of Object.entries(cases)) {
       const doc = structuredClone(good);
@@ -414,6 +418,105 @@ describe("deserializeWorld errors", () => {
         expect(error).toBeInstanceOf(SaveError);
       }
     }
+  });
+});
+
+/** Flips the low bit of the first byte of one of the terrain arrays inside a document. */
+function tamperTerrain(doc: Record<string, unknown>, key: "corners" | "surface" | "water"): void {
+  const terrain = doc.terrain as Record<string, { $b64: string }>;
+  const bytes = fromBase64((terrain[key] as { $b64: string }).$b64);
+  bytes[0] = (bytes[0] as number) ^ 1;
+  (terrain[key] as { $b64: string }).$b64 = toBase64(bytes);
+}
+
+describe("save integrity", () => {
+  it("loads a document that was unzipped and zipped again unchanged", () => {
+    const world = playedSim().world;
+    const loaded = deserializeWorld(writeDoc(readDoc(serializeWorld(world))));
+    expect(hashWorld(loaded)).toBe(hashWorld(world));
+  });
+
+  it("refuses a save whose content was edited after it was written", () => {
+    const world = playedSim().world;
+    const edits: Record<string, (doc: Record<string, unknown>) => void> = {
+      "a corner height": (doc) => tamperTerrain(doc, "corners"),
+      "a surface byte": (doc) => tamperTerrain(doc, "surface"),
+      "a water byte": (doc) => tamperTerrain(doc, "water"),
+      cash: (doc) => {
+        const finance = doc.finance as { cash: number };
+        finance.cash += 1;
+      },
+      loan: (doc) => {
+        const finance = doc.finance as { loan: number };
+        finance.loan += 100;
+      },
+      "month start cash": (doc) => {
+        const finance = doc.finance as { monthStart: { cash: number } };
+        finance.monthStart.cash += 1;
+      },
+      tick: (doc) => (doc.tick = (doc.tick as number) + 1),
+      "rng state": (doc) => {
+        const rng = doc.rng as number[];
+        rng[0] = ((rng[0] as number) ^ 1) >>> 0;
+      },
+      "next id": (doc) => (doc.nextId = (doc.nextId as number) + 1),
+      "undo stack": (doc) => (doc.undoStack = []),
+      "redo stack": (doc) => (doc.redoStack = [...(doc.redoStack as number[]), 1]),
+      name: (doc) => {
+        const meta = doc.meta as { name: string };
+        meta.name += "!";
+      },
+      seed: (doc) => {
+        const meta = doc.meta as { seed: number };
+        meta.seed += 1;
+      },
+      "log length": (doc) => (doc.log = (doc.log as unknown[]).slice(1)),
+    };
+    for (const [label, edit] of Object.entries(edits)) {
+      const doc = readDoc(serializeWorld(world));
+      edit(doc);
+      let caught: unknown;
+      try {
+        deserializeWorld(writeDoc(doc));
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught, label).toBeInstanceOf(SaveError);
+      expect((caught as SaveError).message, label).toBe("Save file is corrupt");
+    }
+  });
+
+  it("refuses a save whose stored hash is wrong, even when the content is untouched", () => {
+    const doc = readDoc(serializeWorld(playedSim().world));
+    doc.hash = "0000000000000000";
+    expectSaveError(() => deserializeWorld(writeDoc(doc)), /^Save file is corrupt$/);
+    doc.hash = "";
+    expectSaveError(() => deserializeWorld(writeDoc(doc)), /^Save file is corrupt$/);
+  });
+
+  it("never loads a damaged save as a different world, whatever one flipped byte does", () => {
+    const world = createWorld({ width: 3, height: 3, seed: 9, name: "flip" });
+    const expected = hashWorld(world);
+    const bytes = serializeWorld(world);
+    let loadedAnyway = 0;
+    for (const mask of [0x01, 0x80, 0xff]) {
+      for (let i = 0; i < bytes.length; i++) {
+        const damaged = Uint8Array.from(bytes);
+        damaged[i] = (damaged[i] as number) ^ mask;
+        let loaded: World | undefined;
+        try {
+          loaded = deserializeWorld(damaged);
+        } catch (error) {
+          expect(error).toBeInstanceOf(SaveError);
+        }
+        if (loaded !== undefined) {
+          expect(hashWorld(loaded), `byte ${i} xor ${mask}`).toBe(expected);
+          loadedAnyway++;
+        }
+      }
+    }
+    // Some flips land where they change nothing, such as the gzip header's OS byte.
+    expect(loadedAnyway).toBeGreaterThan(0);
   });
 });
 
