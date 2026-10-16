@@ -14,7 +14,7 @@ export type { CliIO } from "./io.js";
 const USAGE = `Usage: coasterworks <command> [options]
 
 Commands:
-  new      --out <file> [--width 64] [--height 64] [--seed <n>] [--name <s>]
+  new      --out <file> [--width 64] [--height 64] [--seed <n>] [--name <s>] [--force]
   run      --save <file> --days <n> [--out <file>]
   inspect  <file>
   exec     --save <file> --command <name> [--input <json>] [--out <file>]
@@ -22,6 +22,7 @@ Commands:
 
 Output is one line of JSON on stdout. Exit codes: 0 ok, 1 failed, 2 bad usage.
 Without --out, run and exec do not modify the save.
+new refuses to replace an existing file unless given --force.
 mcp serves the park to an MCP client over stdio, or over HTTP with --http (0 picks a port).
 Stdio carries only the protocol; HTTP prints {"url","port"} once it is listening. Ctrl-C stops it.
 --http needs a token: --token, or else the COASTERWORKS_MCP_TOKEN environment variable.

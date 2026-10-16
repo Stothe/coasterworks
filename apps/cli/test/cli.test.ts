@@ -118,6 +118,29 @@ describe("new", () => {
     expect(await exists(file)).toBe(false);
   });
 
+  it("refuses to overwrite an existing file, and leaves it alone", async () => {
+    const file = await makePark("keep.park");
+    const before = await readFile(file);
+    const again = await cli("new", "--out", file, "--width", "8", "--height", "8", "--seed", "2");
+    expect(again.code).toBe(1);
+    expect(again.stdout).toBe("");
+    expect(again.stderr).toBe(`error: ${file} already exists (use --force to overwrite)\n`);
+    expect(Buffer.compare(await readFile(file), before)).toBe(0);
+    expect(await readdir(dir)).toEqual(["keep.park"]);
+  });
+
+  it("overwrites an existing file with --force", async () => {
+    const file = await makePark("replace.park");
+    const again = await cli(
+      ...["new", "--out", file, "--width", "8", "--height", "8", "--seed", "2", "--force"],
+      ...["--name", "Second"],
+    );
+    expect(again.code).toBe(0);
+    expect(parseOut(again)).toMatchObject({ name: "Second", width: 8, height: 8 });
+    expect((await readPark(file)).meta.name).toBe("Second");
+    expect(await readdir(dir)).toEqual(["replace.park"]);
+  });
+
   it("is a usage error without --out", async () => {
     const made = await cli("new", "--width", "8");
     expect(made.code).toBe(2);
@@ -601,6 +624,26 @@ describe("mcp over HTTP", () => {
       client.callTool({ name: "terrain_raise", arguments: { x: i, y: 0, w: 1, h: 1 } }),
     );
     for (const result of await Promise.all(raises)) expect(result.isError).toBe(false);
+    await client.close();
+    expect((await server.stop()).code).toBe(0);
+    expect((await readPark(out)).finance.cash).toBe(10_000_00 - 8 * 4 * 50_00);
+    expect((await readdir(dir)).filter((name) => name.includes(".tmp-"))).toEqual([]);
+  });
+
+  it("keeps the park when save_write targets the --out path while commands write it", async () => {
+    const file = await makePark();
+    const out = join(dir, "shared.park");
+    const server = await startHttp(
+      ...["--save", file, "--out", out, "--http", "0", "--token", "tok", "--allow-files"],
+    );
+    const client = await httpClient(server.info.url, "tok");
+    // The tool's writes and the ones after each command all land on one path, so they would share
+    // one temporary file if they were not taken in turn.
+    const calls = Array.from({ length: 8 }, (_, i) => [
+      client.callTool({ name: "terrain_raise", arguments: { x: i, y: 0, w: 1, h: 1 } }),
+      client.callTool({ name: "save_write", arguments: { path: out } }),
+    ]).flat();
+    for (const result of await Promise.all(calls)) expect(result.isError).toBe(false);
     await client.close();
     expect((await server.stop()).code).toBe(0);
     expect((await readPark(out)).finance.cash).toBe(10_000_00 - 8 * 4 * 50_00);

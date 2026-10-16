@@ -58,22 +58,24 @@ export async function mcpCommand(args: string[], io: CliIO): Promise<number> {
   const port = integerOption("http", values.http, { min: 0, max: 65535 });
 
   const sim = new Sim(await readPark(save));
+
+  // One write at a time: they share a temporary file, and a later one has the newer park anyway.
+  // `--out` and the `save_write` tool both go through this queue, so a client that writes to the
+  // `--out` path itself cannot race the writes that follow its own commands.
+  let writing: Promise<void> = Promise.resolve();
+  const enqueue = (task: () => Promise<void>): Promise<void> => {
+    const next = writing.then(task);
+    writing = next.catch(() => {});
+    return next;
+  };
+
   // Stdio always has the file tools. Over HTTP they are opt-in; see the doc comment above.
   const options: McpServerOptions = {
     allowFiles: port === undefined || values["allow-files"] === true,
+    writePark: (path, world) => enqueue(() => writePark(path, world)),
   };
-
-  // One write at a time: they share a temporary file, and a later one has the newer park anyway.
-  let writing: Promise<void> = Promise.resolve();
   const out = values.out;
-  const writeOut =
-    out === undefined
-      ? undefined
-      : () => {
-          const next = writing.then(() => writePark(out, sim.world));
-          writing = next.catch(() => {});
-          return next;
-        };
+  const writeOut = out === undefined ? undefined : () => enqueue(() => writePark(out, sim.world));
   if (writeOut !== undefined) options.onMutate = writeOut;
 
   if (port === undefined) {

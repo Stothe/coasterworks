@@ -148,6 +148,22 @@ describe("Registry", () => {
     expect(() => registry.register({ ...addCash, name: "build_ride_2" })).not.toThrow();
   });
 
+  it("reserves the names of the MCP file tools, for commands and queries alike", () => {
+    const registry = new Registry();
+    for (const name of ["save_write", "save_load"]) {
+      expect(() => registry.register({ ...addCash, name }), name).toThrow(
+        `Name is reserved for MCP built-in tools: ${name}`,
+      );
+      expect(() => registry.registerQuery({ ...peek, name }), name).toThrow(
+        `Name is reserved for MCP built-in tools: ${name}`,
+      );
+    }
+    expect(registry.commands()).toEqual([]);
+    expect(registry.queries()).toEqual([]);
+    // Only the exact names are taken; the rest of the `save_` family is free.
+    expect(() => registry.register({ ...addCash, name: "save_game" })).not.toThrow();
+  });
+
   it("rejects a name that is already registered, across commands and queries", () => {
     const registry = makeRegistry();
     expect(() => registry.register(addCash)).toThrow(/already registered/);
@@ -483,6 +499,26 @@ describe("undoLast and redoLast", () => {
       name: "redo",
       input: { target: 1 },
       cost: 300,
+    });
+  });
+
+  it("redo of a command with no undo data leaves the entry without an undo key", () => {
+    const { world, registry } = setup();
+    executeCommand(world, registry, "test_add_cash", { amount: 10 }, "player");
+    const entry = world.log[0];
+    expect(entry).toBeDefined();
+    expect("undo" in (entry ?? {})).toBe(false);
+
+    undoLast(world, registry, "player");
+    expect(redoLast(world, registry, "player").ok).toBe(true);
+    expect("undo" in (entry ?? {})).toBe(false);
+    expect(world.log[0]).toStrictEqual({
+      id: 1,
+      tick: 0,
+      client: "player",
+      name: "test_add_cash",
+      input: { amount: 10 },
+      cost: 0,
     });
   });
 

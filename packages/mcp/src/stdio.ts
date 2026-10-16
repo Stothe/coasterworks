@@ -20,7 +20,9 @@ export interface StdioOptions extends McpServerOptions {
 export async function serveStdio(sim: Sim, opts: StdioOptions = {}): Promise<void> {
   const { stdin = process.stdin, stdout = process.stdout, signal, ...serverOptions } = opts;
   const server = createMcpServer(sim, serverOptions);
+  let closeServer: () => void = () => {};
   const closed = new Promise<void>((resolve) => {
+    closeServer = resolve;
     server.server.onclose = resolve;
   });
 
@@ -31,7 +33,14 @@ export async function serveStdio(sim: Sim, opts: StdioOptions = {}): Promise<voi
       // Let the answers to those calls reach the stream before it closes.
       await new Promise((resolve) => setImmediate(resolve));
       await server.close();
-    })();
+    })().catch((err: unknown) => {
+      // Nothing is listening for this promise, so a failure to close must not go unhandled. Say so
+      // on stderr (stdout carries only the protocol) and let `serveStdio` finish regardless.
+      process.stderr.write(
+        `coasterworks mcp: error while stopping: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      closeServer();
+    });
   };
 
   // The transport itself never notices stdin ending.

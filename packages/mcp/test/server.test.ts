@@ -1,10 +1,17 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { Sim, createWorld, deserializeWorld, hashWorld, serializeWorld } from "@coasterworks/sim";
+import {
+  Sim,
+  createWorld,
+  deserializeWorld,
+  hashWorld,
+  serializeWorld,
+  type World,
+} from "@coasterworks/sim";
 import { createMcpServer, type McpServerOptions } from "../src/index.js";
 
 const NAME = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -326,6 +333,74 @@ describe("file tools", () => {
     expect(written.error).toBe(false);
     expect(written.json).toMatchObject({ ok: true, path: file });
     expect(hashWorld(deserializeWorld(await readFile(file)))).toBe(sim.hash());
+  });
+
+  it("save_write leaves no temporary file behind, and its output loads", async () => {
+    const sim = makeSim();
+    const client = await connect(sim, { allowFiles: true });
+    await call(client, "terrain_raise", RAISE);
+    const file = join(dir, "clean.park");
+
+    // Once to create the file and once to replace it.
+    expect((await call(client, "save_write", { path: file })).error).toBe(false);
+    await call(client, "terrain_raise", { x: 4, y: 4, w: 1, h: 1 });
+    expect((await call(client, "save_write", { path: file })).error).toBe(false);
+
+    expect(await readdir(dir)).toEqual(["clean.park"]);
+    expect(hashWorld(deserializeWorld(await readFile(file)))).toBe(sim.hash());
+  });
+
+  it("save_write cleans up after a failure, and keeps writes to one path from colliding", async () => {
+    const sim = makeSim();
+    const client = await connect(sim, { allowFiles: true });
+    const file = join(dir, "busy.park");
+
+    // Eight at once would share one temporary file if they were not taken in turn.
+    const results = await Promise.all(
+      Array.from({ length: 8 }, () => call(client, "save_write", { path: file })),
+    );
+    for (const result of results) expect(result.json).toMatchObject({ ok: true, path: file });
+    expect(await readdir(dir)).toEqual(["busy.park"]);
+
+    // A directory in the way makes the rename fail; the temporary file must not outlive it.
+    await mkdir(join(dir, "taken"));
+    expect((await call(client, "save_write", { path: join(dir, "taken") })).error).toBe(true);
+    expect((await readdir(dir)).sort()).toEqual(["busy.park", "taken"]);
+  });
+
+  it("save_write hands the path and the current world to opts.writePark", async () => {
+    const sim = makeSim();
+    const written: Array<{ path: string; world: World }> = [];
+    const client = await connect(sim, {
+      allowFiles: true,
+      writePark: async (path, world) => void written.push({ path, world }),
+    });
+    await call(client, "terrain_raise", RAISE);
+    const file = join(dir, "never-created.park");
+
+    const result = await call(client, "save_write", { path: file });
+    expect(result.error).toBe(false);
+    expect(result.json).toMatchObject({ ok: true, path: file });
+    expect(written).toHaveLength(1);
+    expect(written[0]?.path).toBe(file);
+    expect(written[0]?.world).toBe(sim.world);
+    // The default writer was not used.
+    expect(await readdir(dir)).toEqual([]);
+  });
+
+  it("save_write reports a failure of opts.writePark as an error", async () => {
+    const client = await connect(makeSim(), {
+      allowFiles: true,
+      writePark: async () => {
+        throw new Error("quota exceeded");
+      },
+    });
+    const file = join(dir, "q.park");
+    const result = await call(client, "save_write", { path: file });
+    expect(result.error).toBe(true);
+    expect(result.json.ok).toBe(false);
+    expect(result.json.error).toContain(file);
+    expect(result.json.error).toContain("quota exceeded");
   });
 
   it("save_load replaces the world, keeps the registry, and undo history comes with it", async () => {

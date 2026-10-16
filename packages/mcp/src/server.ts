@@ -1,8 +1,8 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { deserializeWorld, serializeWorld, type Sim } from "@coasterworks/sim";
+import { deserializeWorld, serializeWorld, type Sim, type World } from "@coasterworks/sim";
 import { z } from "zod";
 import { VERSION } from "./version.js";
 
@@ -22,6 +22,38 @@ export interface McpServerOptions {
    * tool result still reports that the call ran, with the failure in `saveError`.
    */
   onMutate?: (sim: Sim) => void | Promise<unknown>;
+  /**
+   * How `save_write` puts the park on disk. It must create the folder of `path` if needed, and
+   * either leave a whole file at `path` or throw; its rejection becomes the tool's error. A caller
+   * that also writes files itself, as the CLI does for `--out`, passes the writer it shares with
+   * that code so the two cannot trample each other. The default writes `path` atomically.
+   */
+  writePark?: (path: string, world: World) => Promise<void>;
+}
+
+/** The end of the chain of writes the default `writePark` has queued; see there. */
+let defaultWrites: Promise<void> = Promise.resolve();
+
+/**
+ * The default `writePark`: makes the folder, writes the park beside `path` and renames it into
+ * place, so a crash or a full disk never leaves a half-written save. The temporary file is named
+ * for the process, so writes run one at a time (across every server in the process, because the
+ * HTTP transport builds a server per request); a later write has the newer park anyway.
+ */
+function writeParkAtomically(path: string, world: World): Promise<void> {
+  const next = defaultWrites.then(async () => {
+    await mkdir(dirname(path), { recursive: true });
+    const temp = `${path}.tmp-${process.pid}`;
+    try {
+      await writeFile(temp, serializeWorld(world));
+      await rename(temp, path);
+    } catch (err) {
+      await rm(temp, { force: true });
+      throw err;
+    }
+  });
+  defaultWrites = next.catch(() => {});
+  return next;
 }
 
 /** Tool calls in progress on each server; see `whenIdle`. */
@@ -146,6 +178,7 @@ export function createMcpServer(sim: Sim, opts: McpServerOptions = {}): McpServe
   );
 
   if (opts.allowFiles === true) {
+    const writePark = opts.writePark ?? writeParkAtomically;
     server.registerTool(
       "save_write",
       {
@@ -156,10 +189,8 @@ export function createMcpServer(sim: Sim, opts: McpServerOptions = {}): McpServe
       },
       tracked(async ({ path }) => {
         try {
-          const bytes = serializeWorld(sim.world);
-          await mkdir(dirname(path), { recursive: true });
-          await writeFile(path, bytes);
-          return toolResult({ ok: true, path, bytes: bytes.byteLength });
+          await writePark(path, sim.world);
+          return toolResult({ ok: true, path });
         } catch (err) {
           return toolResult({
             ok: false,

@@ -61,7 +61,10 @@ export function redoLast(world: World, registry: Registry, client: ClientKind): 
   const lacking = checkCash(world, entry.cost);
   if (lacking !== null) return { ok: false, error: lacking };
 
-  entry.undo = def.apply(world, entry.input);
+  // Same as `executeCommand`: a command with nothing to undo leaves no `undo` key at all.
+  const undo = def.apply(world, entry.input);
+  if (undo !== undefined) entry.undo = undo;
+  else delete entry.undo;
   world.finance.cash -= entry.cost;
   delete entry.undoneBy;
   world.redoStack.pop();

@@ -1,5 +1,6 @@
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Sim, createWorld } from "@coasterworks/sim";
 import { serveStdio } from "../src/index.js";
 
@@ -116,6 +117,28 @@ describe("serveStdio", () => {
     await done;
     expect(stdin.listenerCount("data")).toBe(0);
     expect(abort.signal.aborted).toBe(true);
+  });
+
+  it("finishes and reports on stderr, not stdout, when closing the server fails", async () => {
+    const close = vi
+      .spyOn(McpServer.prototype, "close")
+      .mockRejectedValueOnce(new Error("pipe broke"));
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const { stdin, stdout, raw } = pipes();
+      const done = serveStdio(makeSim(), { stdin, stdout });
+      await until(() => stdin.listenerCount("data") === 1);
+      stdin.end();
+      // Resolves rather than hanging on a close that will never come; an unhandled rejection from
+      // the stop would fail the run.
+      await done;
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(stderr).toHaveBeenCalledWith(expect.stringContaining("pipe broke"));
+      expect(raw()).toBe("");
+    } finally {
+      close.mockRestore();
+      stderr.mockRestore();
+    }
   });
 
   it("returns at once when the signal is already aborted", async () => {
