@@ -71,7 +71,8 @@ const logEntrySchema = z.object({
   client: z.enum(["player", "agent", "replay", "system"]),
   name: z.string(),
   input: z.unknown().optional(),
-  cost: int.min(0),
+  // Negative for the `undo` entry of a priced command, which records the refund.
+  cost: int,
   undo: z.unknown().optional(),
   undoneBy: int.optional(),
 });

@@ -27,7 +27,8 @@ export function schemaVersionOf(doc: unknown): number {
  * Brings a save document up to `SCHEMA_VERSION` by running each migration from the document's
  * version onwards, in order, and setting `schemaVersion` after each step. A document already at
  * (or past) the current version is returned as it is. Throws `SaveError` if a version in the way
- * has no migration. `migrations` is a parameter so tests can inject their own.
+ * has no migration, or if a migration throws (a `SaveError` it throws itself is passed on as it
+ * is). `migrations` is a parameter so tests can inject their own.
  */
 export function migrate(doc: unknown, migrations: Record<number, Migration> = MIGRATIONS): unknown {
   let version = schemaVersionOf(doc);
@@ -37,7 +38,13 @@ export function migrate(doc: unknown, migrations: Record<number, Migration> = MI
     if (step === undefined) {
       throw new SaveError(`No migration from schema ${version} to ${version + 1}`);
     }
-    const next = step(current);
+    let next: unknown;
+    try {
+      next = step(current);
+    } catch (error) {
+      if (error instanceof SaveError) throw error;
+      throw new SaveError(CORRUPT_MESSAGE, { cause: error });
+    }
     if (!isRecord(next)) throw new SaveError(CORRUPT_MESSAGE);
     version++;
     current = { ...next, schemaVersion: version };

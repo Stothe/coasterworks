@@ -28,13 +28,17 @@ function freshWorld(width = 12, height = 10): World {
   });
 }
 
-/** A world with history: three commands, one undone (so redo has an entry), and 500 ticks. */
+/**
+ * A world with history: three commands, the last (priced) one undone so redo has an entry and the
+ * log holds an `undo` entry with a negative cost, then 500 ticks.
+ */
 function playedSim(): Sim {
   const sim = new Sim(freshWorld(16, 16));
   expect(sim.execute("terrain_raise", { x: 2, y: 2, w: 4, h: 4, steps: 2 }, "agent").ok).toBe(true);
-  expect(sim.execute("terrain_set_water", { x: 8, y: 8, w: 3, h: 2, level: 12 }).ok).toBe(true);
   expect(sim.execute("finance_take_loan", { amount: 2_000_00 }).ok).toBe(true);
+  expect(sim.execute("terrain_set_water", { x: 8, y: 8, w: 3, h: 2, level: 12 }).ok).toBe(true);
   expect(sim.undo().ok).toBe(true);
+  expect(sim.world.log.some((entry) => entry.cost < 0)).toBe(true);
   sim.step(500);
   return sim;
 }
@@ -121,6 +125,26 @@ describe("save round trip", () => {
     const loaded = deserializeWorld(serializeWorld(world));
     expect(loaded.log).toStrictEqual(world.log);
     expect(hashWorld(loaded)).toBe(hashWorld(world));
+  });
+
+  it("loads a save whose log holds an undone priced command (negative undo cost)", () => {
+    const sim = new Sim(freshWorld(8, 8));
+    const raised = sim.execute("terrain_raise", { x: 1, y: 1, w: 2, h: 2 });
+    expect(raised.ok && raised.cost).toBeGreaterThan(0);
+    expect(sim.undo().ok).toBe(true);
+    const undoEntry = sim.world.log[1];
+    expect(undoEntry?.name).toBe("undo");
+    expect(undoEntry?.cost).toBeLessThan(0);
+
+    const loaded = deserializeWorld(serializeWorld(sim.world));
+    expect(hashWorld(loaded)).toBe(hashWorld(sim.world));
+    expect(loaded.log).toStrictEqual(sim.world.log);
+    expect(loaded.log[1]?.cost).toBe(undoEntry?.cost);
+
+    const loadedSim = new Sim(loaded);
+    expect(loadedSim.redo().ok).toBe(true);
+    expect(sim.redo().ok).toBe(true);
+    expect(loadedSim.hash()).toBe(sim.hash());
   });
 
   it("keeps simulating identically after a load", () => {
@@ -448,6 +472,44 @@ describe("migrate", () => {
     for (const doc of [null, undefined, 3, "x", [], {}, { schemaVersion: "1" }]) {
       expectSaveError(() => migrate(doc), "Save file is corrupt");
     }
+  });
+
+  it("wraps an error thrown by a migration in a SaveError, keeping the cause", () => {
+    const boom = new TypeError("Cannot read properties of undefined (reading 'x')");
+    let caught: unknown;
+    try {
+      migrate(
+        { schemaVersion: 0 },
+        {
+          0: () => {
+            throw boom;
+          },
+        },
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(SaveError);
+    expect((caught as SaveError).message).toBe("Save file is corrupt");
+    expect((caught as SaveError).cause).toBe(boom);
+  });
+
+  it("passes a SaveError thrown by a migration through unchanged", () => {
+    const own = new SaveError("Park is too old to read");
+    let caught: unknown;
+    try {
+      migrate(
+        { schemaVersion: 0 },
+        {
+          0: () => {
+            throw own;
+          },
+        },
+      );
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(own);
   });
 
   it("throws SaveError when a migration returns something that is not a document", () => {
