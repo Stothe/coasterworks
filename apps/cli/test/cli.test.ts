@@ -1,10 +1,13 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { createWorld, hashWorld } from "@coasterworks/sim";
 import { main, type CliIO } from "../src/index.js";
 import { readPark, writePark } from "../src/io.js";
@@ -343,11 +346,200 @@ describe("usage", () => {
     expect(noValue.stderr).toContain("Usage:");
   });
 
-  it("reserves mcp for a later task", async () => {
-    const done = await cli("mcp", "--save", join(dir, "m.park"));
+  it("lists mcp, and says that run and exec leave the save alone without --out", async () => {
+    const done = await cli("frobnicate");
+    expect(done.stderr).toContain(
+      "  mcp      --save <file> [--out <file>] [--http <port> --token <token>]",
+    );
+    expect(done.stderr).toContain("Without --out, run and exec do not modify the save.");
+  });
+});
+
+describe("mcp usage", () => {
+  it("is a usage error without --save", async () => {
+    const done = await cli("mcp");
+    expect(done.code).toBe(2);
+    expect(done.stdout).toBe("");
+    expect(done.stderr).toMatch(/^error: missing required option --save/);
+    expect(done.stderr).toContain("Usage:");
+  });
+
+  it("is a usage error to give --http without --token, and writes nothing", async () => {
+    const file = await makePark();
+    const out = join(dir, "never.park");
+    const done = await cli("mcp", "--save", file, "--http", "0", "--out", out);
+    expect(done.code).toBe(2);
+    expect(done.stdout).toBe("");
+    expect(done.stderr).toMatch(/^error: --http needs --token/);
+    expect(done.stderr).toContain("Usage:");
+    expect(await exists(out)).toBe(false);
+  });
+
+  it("is a usage error to give --token without --http, or an empty --token", async () => {
+    const file = await makePark();
+    const noHttp = await cli("mcp", "--save", file, "--token", "t");
+    expect(noHttp.code).toBe(2);
+    expect(noHttp.stderr).toMatch(/^error: --token needs --http/);
+    const empty = await cli("mcp", "--save", file, "--http", "0", "--token", "");
+    expect(empty.code).toBe(2);
+    expect(empty.stderr).toMatch(/^error: --token must not be empty/);
+  });
+
+  it("is a usage error for an unknown option or a stray argument", async () => {
+    const file = await makePark();
+    expect((await cli("mcp", "--save", file, "--bogus")).code).toBe(2);
+    expect((await cli("mcp", "--save", file, "extra")).code).toBe(2);
+  });
+
+  it.each(["abc", "1.5", "70000", "65536"])("rejects --http %s with exit 1", async (port) => {
+    const file = await makePark();
+    const done = await cli("mcp", "--save", file, "--http", port, "--token", "t");
     expect(done.code).toBe(1);
     expect(done.stdout).toBe("");
-    expect(done.stderr).toBe("error: mcp is not available yet\n");
+    expect(done.stderr).toMatch(/^error: --http must be an integer from 0 to 65535/);
+  });
+
+  it("exits 1 when the park cannot be read", async () => {
+    const missing = join(dir, "missing.park");
+    const done = await cli("mcp", "--save", missing, "--http", "0", "--token", "t");
+    expect(done.code).toBe(1);
+    expect(done.stdout).toBe("");
+    expect(done.stderr).toMatch(new RegExp(`^error: Cannot read park file ${missing}: `));
+  });
+});
+
+/** Starts `mcp --http 0` in the background; `stop` aborts it, as SIGINT does, and waits for exit. */
+async function startHttp(...args: string[]) {
+  const out: string[] = [];
+  const err: string[] = [];
+  const abort = new AbortController();
+  let listening: (line: string) => void = () => {};
+  const firstLine = new Promise<string>((resolve) => (listening = resolve));
+  const io: CliIO = {
+    stdout: (s) => {
+      out.push(s);
+      listening(out.join(""));
+    },
+    stderr: (s) => err.push(s),
+    signal: abort.signal,
+  };
+  const done = main(["mcp", ...args], io);
+  const printed = await Promise.race([
+    firstLine,
+    done.then((code) => {
+      throw new Error(`mcp exited with ${code} before listening: ${err.join("")}`);
+    }),
+  ]);
+  const info = JSON.parse(printed) as { url: string; port: number };
+  return {
+    info,
+    async stop(): Promise<Outcome> {
+      abort.abort();
+      const code = await done;
+      return { code, stdout: out.join(""), stderr: err.join("") };
+    },
+  };
+}
+
+async function httpClient(url: string, token: string): Promise<Client> {
+  const transport = new StreamableHTTPClientTransport(new URL(url), {
+    requestInit: { headers: { Authorization: `Bearer ${token}` } },
+  });
+  const client = new Client({ name: "test", version: "0.0.0" });
+  // The cast is for the SDK's optional `sessionId` against `exactOptionalPropertyTypes`.
+  await client.connect(transport as Transport);
+  return client;
+}
+
+describe("mcp over HTTP", () => {
+  const raise = { x: 0, y: 0, w: 2, h: 2 };
+
+  it("prints its url as one line of JSON, lists the tools over HTTP, and stops on abort", async () => {
+    const file = await makePark();
+    const server = await startHttp("--save", file, "--http", "0", "--token", "tok");
+    expect(server.info.port).toBeGreaterThan(0);
+    expect(server.info.url).toBe(`http://127.0.0.1:${server.info.port}/mcp`);
+
+    const client = await httpClient(server.info.url, "tok");
+    const names = (await client.listTools()).tools.map((t) => t.name);
+    expect(names).toEqual(
+      expect.arrayContaining(["terrain_raise", "park_status", "undo", "save_write", "save_load"]),
+    );
+    await client.close();
+
+    const stopped = await server.stop();
+    expect(stopped.code).toBe(0);
+    expect(stopped.stderr).toBe("");
+    expect(stopped.stdout).toBe(`${JSON.stringify(server.info)}\n`);
+  });
+
+  it("turns away a client with the wrong token", async () => {
+    const file = await makePark();
+    const server = await startHttp("--save", file, "--http", "0", "--token", "tok");
+    await expect(httpClient(server.info.url, "nope")).rejects.toThrow();
+    expect((await server.stop()).code).toBe(0);
+  });
+
+  it("writes --out after each command and on stop, and leaves --save alone", async () => {
+    const file = await makePark();
+    const before = await readFile(file);
+    const out = join(dir, "served.park");
+    const server = await startHttp("--save", file, "--out", out, "--http", "0", "--token", "tok");
+    expect(await exists(out)).toBe(false);
+
+    const client = await httpClient(server.info.url, "tok");
+    await client.callTool({ name: "terrain_raise", arguments: raise });
+    // Written before the call returned, not just at shutdown.
+    expect((await readPark(out)).finance.cash).toBe(10_000_00 - 45_000);
+
+    await client.callTool({ name: "undo", arguments: {} });
+    expect((await readPark(out)).finance.cash).toBe(10_000_00);
+    await client.callTool({ name: "redo", arguments: {} });
+    await client.close();
+
+    expect((await server.stop()).code).toBe(0);
+    expect((await readPark(out)).finance.cash).toBe(10_000_00 - 45_000);
+    expect(Buffer.compare(await readFile(file), before)).toBe(0);
+    // No stray temp files from the atomic writes.
+    expect((await readdir(dir)).filter((name) => name.includes(".tmp-"))).toEqual([]);
+  });
+
+  it("does not modify the save, and writes nothing, without --out", async () => {
+    const file = await makePark();
+    const before = await readFile(file);
+    const server = await startHttp("--save", file, "--http", "0", "--token", "tok");
+    const client = await httpClient(server.info.url, "tok");
+    await client.callTool({ name: "terrain_raise", arguments: raise });
+    await client.close();
+    expect((await server.stop()).code).toBe(0);
+    expect(Buffer.compare(await readFile(file), before)).toBe(0);
+    expect(await readdir(dir)).toEqual(["a.park"]);
+  });
+
+  it("keeps the park when several calls write at once", async () => {
+    const file = await makePark();
+    const out = join(dir, "busy.park");
+    const server = await startHttp("--save", file, "--out", out, "--http", "0", "--token", "tok");
+    const client = await httpClient(server.info.url, "tok");
+    const raises = Array.from({ length: 8 }, (_, i) =>
+      client.callTool({ name: "terrain_raise", arguments: { x: i, y: 0, w: 1, h: 1 } }),
+    );
+    for (const result of await Promise.all(raises)) expect(result.isError).toBe(false);
+    await client.close();
+    expect((await server.stop()).code).toBe(0);
+    expect((await readPark(out)).finance.cash).toBe(10_000_00 - 8 * 4 * 50_00);
+    expect((await readdir(dir)).filter((name) => name.includes(".tmp-"))).toEqual([]);
+  });
+
+  it("exits 1 when it cannot listen", async () => {
+    const file = await makePark();
+    const first = await startHttp("--save", file, "--http", "0", "--token", "tok");
+    const second = await cli(
+      ...["mcp", "--save", file, "--http", String(first.info.port), "--token", "tok"],
+    );
+    expect(second.code).toBe(1);
+    expect(second.stderr).toMatch(/^error: .*EADDRINUSE/);
+    expect((await first.stop()).code).toBe(0);
   });
 });
 
@@ -357,6 +549,24 @@ describe("park files", () => {
     const file = join(dir, "x", "y", "rt.park");
     await writePark(file, world);
     expect(hashWorld(await readPark(file))).toBe(hashWorld(world));
+  });
+
+  it("writePark replaces an existing park whole and leaves no temp file behind", async () => {
+    const file = join(dir, "again.park");
+    await writePark(file, createWorld({ width: 4, height: 4, seed: 1, name: "One" }));
+    const second = createWorld({ width: 8, height: 8, seed: 2, name: "Two" });
+    await writePark(file, second);
+    expect(hashWorld(await readPark(file))).toBe(hashWorld(second));
+    expect(await readdir(dir)).toEqual(["again.park"]);
+  });
+
+  it("writePark cleans up its temp file and throws when it cannot finish", async () => {
+    // A directory is in the way, so the final rename fails.
+    const target = join(dir, "in-the-way");
+    await mkdir(target);
+    const world = createWorld({ width: 4, height: 4, seed: 1, name: "X" });
+    await expect(writePark(target, world)).rejects.toThrow();
+    expect(await readdir(dir)).toEqual(["in-the-way"]);
   });
 
   it("readPark names the file when it is missing or damaged", async () => {
@@ -397,5 +607,143 @@ describe("bin", () => {
     const made = spawnBin(link, "new", "--out", file);
     expect(made.status).toBe(0);
     expect(JSON.parse(made.stdout).name).toBe("New Park");
+  });
+});
+
+describe("bin mcp", () => {
+  const dist = resolve(dirname(fileURLToPath(import.meta.url)), "../dist/index.js");
+
+  const INITIALIZE = {
+    jsonrpc: "2.0",
+    id: 1,
+    method: "initialize",
+    params: {
+      protocolVersion: "2025-06-18",
+      capabilities: {},
+      clientInfo: { name: "raw", version: "0.0.0" },
+    },
+  };
+  const INITIALIZED = { jsonrpc: "2.0", method: "notifications/initialized" };
+  const RAISE = {
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/call",
+    params: { name: "terrain_raise", arguments: { x: 0, y: 0, w: 2, h: 2 } },
+  };
+
+  /** Spawns the built bin as `mcp ...` and collects what it writes. */
+  function start(...args: string[]) {
+    const child = spawn(process.execPath, [dist, "mcp", ...args], { stdio: "pipe" });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
+    const exited = new Promise<number | null>((resolve) => child.on("close", resolve));
+    return {
+      child,
+      exited,
+      send: (message: unknown) => child.stdin.write(`${JSON.stringify(message)}\n`),
+      stdout: () => stdout,
+      stderr: () => stderr,
+      /** Waits for `count` complete lines on stdout. */
+      async lines(count: number): Promise<any[]> {
+        for (let i = 0; i < 400; i++) {
+          const lines = stdout.split("\n").filter((line) => line !== "");
+          if (lines.length >= count) return lines.map((line) => JSON.parse(line));
+          await new Promise((r) => setTimeout(r, 25));
+        }
+        throw new Error(`expected ${count} lines, got: ${stdout}\n${stderr}`);
+      },
+    };
+  }
+
+  it("speaks only JSON-RPC on stdout, writes --out, and exits 0 when stdin closes", async (ctx) => {
+    if (!existsSync(dist)) ctx.skip(`${dist} is missing; run \`pnpm build\` to enable this test`);
+    const file = await makePark();
+    const out = join(dir, "stdio.park");
+    const server = start("--save", file, "--out", out);
+
+    server.send(INITIALIZE);
+    server.send(INITIALIZED);
+    server.send(RAISE);
+    const [init, raised] = await server.lines(2);
+    expect(init.result.serverInfo.name).toBe("coasterworks");
+    expect(JSON.parse(raised.result.content[0].text)).toEqual({ ok: true, id: 1, cost: 45_000 });
+    expect((await readPark(out)).finance.cash).toBe(10_000_00 - 45_000);
+
+    server.child.stdin.end();
+    expect(await server.exited).toBe(0);
+    expect(server.stderr()).toBe("");
+    // Every byte on stdout was a protocol message.
+    for (const line of server
+      .stdout()
+      .split("\n")
+      .filter((l) => l !== "")) {
+      expect(JSON.parse(line).jsonrpc).toBe("2.0");
+    }
+  });
+
+  it("answers a call that stdin's end follows straight away", async (ctx) => {
+    if (!existsSync(dist)) ctx.skip(`${dist} is missing; run \`pnpm build\` to enable this test`);
+    const file = await makePark();
+    const out = join(dir, "oneshot.park");
+    const server = start("--save", file, "--out", out);
+    server.child.stdin.end(
+      [INITIALIZE, INITIALIZED, RAISE].map((m) => `${JSON.stringify(m)}\n`).join(""),
+    );
+    expect(await server.exited).toBe(0);
+    const answers = server
+      .stdout()
+      .split("\n")
+      .filter((l) => l !== "")
+      .map((l) => JSON.parse(l));
+    expect(answers.map((a) => a.id)).toEqual([1, 2]);
+    expect((await readPark(out)).finance.cash).toBe(10_000_00 - 45_000);
+  });
+
+  it("does not modify the save without --out", async (ctx) => {
+    if (!existsSync(dist)) ctx.skip(`${dist} is missing; run \`pnpm build\` to enable this test`);
+    const file = await makePark();
+    const before = await readFile(file);
+    const server = start("--save", file);
+    server.child.stdin.end(
+      [INITIALIZE, INITIALIZED, RAISE].map((m) => `${JSON.stringify(m)}\n`).join(""),
+    );
+    expect(await server.exited).toBe(0);
+    expect(Buffer.compare(await readFile(file), before)).toBe(0);
+    expect(await readdir(dir)).toEqual(["a.park"]);
+  });
+
+  it("writes --out and exits 0 on SIGINT", async (ctx) => {
+    if (!existsSync(dist)) ctx.skip(`${dist} is missing; run \`pnpm build\` to enable this test`);
+    const file = await makePark();
+    const out = join(dir, "sigint.park");
+    const server = start("--save", file, "--out", out);
+    server.send(INITIALIZE);
+    await server.lines(1);
+    expect(await exists(out)).toBe(false);
+
+    server.child.kill("SIGINT");
+    expect(await server.exited).toBe(0);
+    expect(server.stderr()).toBe("");
+    expect(hashWorld(await readPark(out))).toBe(hashWorld(await readPark(file)));
+  });
+
+  it("serves HTTP until SIGINT, then writes --out and exits 0", async (ctx) => {
+    if (!existsSync(dist)) ctx.skip(`${dist} is missing; run \`pnpm build\` to enable this test`);
+    const file = await makePark();
+    const out = join(dir, "http.park");
+    const server = start("--save", file, "--out", out, "--http", "0", "--token", "tok");
+    const [info] = await server.lines(1);
+    expect(info.url).toBe(`http://127.0.0.1:${info.port}/mcp`);
+
+    const client = await httpClient(info.url, "tok");
+    await client.callTool({ name: "terrain_raise", arguments: { x: 0, y: 0, w: 2, h: 2 } });
+    await client.close();
+
+    server.child.kill("SIGINT");
+    expect(await server.exited).toBe(0);
+    expect(server.stderr()).toBe("");
+    expect((await readPark(out)).finance.cash).toBe(10_000_00 - 45_000);
   });
 });

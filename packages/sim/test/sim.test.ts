@@ -9,6 +9,7 @@ import {
   createWorld,
   financeSystem,
   getCorner,
+  hashWorld,
   type System,
 } from "../src/index.js";
 
@@ -47,6 +48,28 @@ describe("Sim construction", () => {
     expect(a.systems).toEqual([financeSystem]);
     a.systems.push({ name: "extra", tick: () => {} });
     expect(b.systems).toEqual([financeSystem]);
+  });
+});
+
+describe("Sim.replaceWorld", () => {
+  it("swaps the world and keeps the registry and systems", () => {
+    const { world, sim } = setup({ seed: 1 });
+    const registry = sim.registry;
+    const systems = sim.systems;
+    const other = createWorld({ width: 4, height: 4, seed: 2, name: "other" });
+
+    sim.replaceWorld(other);
+
+    expect(sim.world).toBe(other);
+    expect(sim.registry).toBe(registry);
+    expect(sim.systems).toBe(systems);
+    expect(sim.hash()).toBe(hashWorld(other));
+    expect(sim.query("park_status", {})).toMatchObject({ ok: true, result: { name: "other" } });
+    // The old world is left alone, and commands now change the new one.
+    expect(world.meta.name).toBe("t");
+    expect(sim.execute("finance_take_loan", { amount: 100_00 }).ok).toBe(true);
+    expect(other.finance.loan).toBe(100_00);
+    expect(world.finance.loan).toBe(0);
   });
 });
 

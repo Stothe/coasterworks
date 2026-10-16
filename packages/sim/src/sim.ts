@@ -15,14 +15,27 @@ import type { ClientKind, World } from "./world/types.js";
  * Every client (CLI, MCP server, renderer) holds one.
  */
 export class Sim {
-  readonly world: World;
+  private current: World;
   readonly registry: Registry;
   /** Run in this order on every tick. Later tasks append their own. */
   systems: System[] = [financeSystem];
 
   constructor(world: World, registry: Registry = createDefaultRegistry()) {
-    this.world = world;
+    this.current = world;
     this.registry = registry;
+  }
+
+  /** The park being simulated. Only `replaceWorld` changes which one that is. */
+  get world(): World {
+    return this.current;
+  }
+
+  /**
+   * Swaps in another world, such as one loaded from a save. The registry and systems stay. The old
+   * world is left as it was; do not keep using it through this sim.
+   */
+  replaceWorld(world: World): void {
+    this.current = world;
   }
 
   /**

@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { UsageError } from "./args.js";
 import { execCommand } from "./commands/exec.js";
 import { inspectCommand } from "./commands/inspect.js";
+import { mcpCommand } from "./commands/mcp.js";
 import { newCommand } from "./commands/new.js";
 import { runCommand } from "./commands/run.js";
 import type { CliIO } from "./io.js";
@@ -17,8 +18,12 @@ Commands:
   run      --save <file> --days <n> [--out <file>]
   inspect  <file>
   exec     --save <file> --command <name> [--input <json>] [--out <file>]
+  mcp      --save <file> [--out <file>] [--http <port> --token <token>]
 
 Output is one line of JSON on stdout. Exit codes: 0 ok, 1 failed, 2 bad usage.
+Without --out, run and exec do not modify the save.
+mcp serves the park to an MCP client over stdio, or over HTTP with --http (0 picks a port).
+Stdio carries only the protocol; HTTP prints {"url","port"} once it is listening. Ctrl-C stops it.
 `;
 
 type Command = (args: string[], io: CliIO) => Promise<number>;
@@ -28,13 +33,7 @@ const COMMANDS = new Map<string, Command>([
   ["run", runCommand],
   ["inspect", inspectCommand],
   ["exec", execCommand],
-  // Reserved; the MCP server arrives in a later task.
-  [
-    "mcp",
-    async () => {
-      throw new Error("mcp is not available yet");
-    },
-  ],
+  ["mcp", mcpCommand],
 ]);
 
 /** Runs the CLI and returns its exit code: 0 on success, 1 on failure, 2 on a usage error. */
@@ -72,6 +71,14 @@ if (isEntryPoint()) {
     stdout: (text) => process.stdout.write(text),
     stderr: (text) => process.stderr.write(text),
   };
+  const argv = process.argv.slice(2);
+  // Only `mcp` handles Ctrl-C itself, to save the park and close cleanly. A second Ctrl-C, with
+  // the handler spent, ends the process as usual.
+  if (argv[0] === "mcp") {
+    const stop = new AbortController();
+    for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => stop.abort());
+    io.signal = stop.signal;
+  }
   // `exitCode`, not `exit()`, so output piped to a slow reader is not cut off.
-  process.exitCode = await main(process.argv.slice(2), io);
+  process.exitCode = await main(argv, io);
 }

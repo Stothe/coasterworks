@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import {
   SaveError,
@@ -12,6 +12,8 @@ import {
 export interface CliIO {
   stdout: (text: string) => void;
   stderr: (text: string) => void;
+  /** Aborts when the user asks a long-running command, such as `mcp`, to stop. */
+  signal?: AbortSignal;
 }
 
 /** Writes `value` to stdout as one line of JSON. Every successful command's output is this. */
@@ -49,8 +51,19 @@ export async function readPark(path: string): Promise<World> {
   }
 }
 
-/** Saves a park to `path`, creating its directory if needed. */
+/**
+ * Saves a park to `path`, creating its directory if needed. The file is written beside `path` and
+ * renamed over it, so a crash or a full disk never leaves a half-written save. Two writes to one
+ * path at once would share that temporary file; callers must not overlap them.
+ */
 export async function writePark(path: string, world: World): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, serializeWorld(world));
+  const temp = `${path}.tmp-${process.pid}`;
+  try {
+    await writeFile(temp, serializeWorld(world));
+    await rename(temp, path);
+  } catch (err) {
+    await rm(temp, { force: true });
+    throw err;
+  }
 }
