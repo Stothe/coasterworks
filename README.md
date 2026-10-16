@@ -75,6 +75,7 @@ Configuration for an MCP client that speaks Streamable HTTP, such as a project's
 
 - `packages/sim`: the deterministic simulation core: world, commands, queries, undo, and the save format (`@coasterworks/sim`)
 - `packages/mcp`: the MCP server that exposes sim commands to agents over stdio and HTTP (`@coasterworks/mcp`)
+- `packages/protocol`: the wire between a running sim and its clients: messages, binary snapshots, `SimHostServer` and `SimClient` (`@coasterworks/protocol`)
 - `apps/cli`: the `coasterworks` command line app: `new`, `run`, `inspect`, `exec`, `query`, `undo`, `redo`, and `mcp`
 
 ## Determinism
