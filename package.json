@@ -8,7 +8,7 @@
   },
   "scripts": {
     "typecheck": "pnpm -r --if-present typecheck",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "test:watch": "vitest",
     "build": "pnpm -r build",
     "format": "prettier --write .",
