@@ -7,6 +7,7 @@ export type { ExecResult } from "./commands/execute.js";
 export { Registry } from "./commands/registry.js";
 export { redoLast, undoLast } from "./commands/undo.js";
 export { fnv1a64, hashString, hexHash } from "./hash.js";
+export { createDefaultRegistry } from "./registry-default.js";
 export { Rng } from "./rng.js";
 export type { RngState } from "./rng.js";
 export {

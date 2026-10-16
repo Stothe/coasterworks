@@ -69,7 +69,7 @@ export function executeCommand(
   world.finance.cash -= cost;
   const entry = appendLog(world, client, name, input, cost);
   if (def.undoable) {
-    entry.undo = undo;
+    if (undo !== undefined) entry.undo = undo;
     world.undoStack.push(entry.id);
   }
   world.redoStack.length = 0;

@@ -355,6 +355,13 @@ describe("executeCommand", () => {
     expect(world.undoStack).toEqual([1, 2]);
   });
 
+  it("logs an undoable command whose apply returns nothing without an undo property", () => {
+    const { world, registry } = setup();
+    executeCommand(world, registry, "test_add_cash", { amount: 10 }, "player");
+    expect(world.undoStack).toEqual([1]);
+    expect(world.log[0]).not.toHaveProperty("undo");
+  });
+
   it("logs a non-undoable command without putting it on the undo stack", () => {
     const { world, registry } = setup();
     executeCommand(world, registry, "test_add_cash", { amount: 10 }, "player");
