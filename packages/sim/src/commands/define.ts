@@ -41,13 +41,23 @@ export function defineCommand<I, U>(def: CommandDef<I, U>): CommandDef<I, U> {
   return def;
 }
 
-/** A read of the world. A query never changes it and is never logged. */
+/**
+ * A read of the world. A query never changes it and is never logged.
+ *
+ * `run` may throw to say the input cannot be answered, such as an area off the map. `runQuery`
+ * returns the error's message to the caller instead of throwing.
+ */
 export interface QueryDef<I = unknown, R = unknown> {
   name: string;
   description: string;
   category: Category;
   input: InputSchema<I>;
   run: (world: World, input: I) => R;
+}
+
+/** Declares a query. This returns `def` unchanged; it exists so `I` and `R` are inferred. */
+export function defineQuery<I, R>(def: QueryDef<I, R>): QueryDef<I, R> {
+  return def;
 }
 
 export interface CatalogEntry {
@@ -78,7 +88,7 @@ export function parseInput<I>(schema: z.ZodType<I>, raw: unknown): ParseResult<I
 
 export type QueryResult = { ok: true; result: unknown } | { ok: false; error: string };
 
-/** Parses the input and runs the named query. */
+/** Parses the input and runs the named query. An error the query throws becomes `{ ok: false }`. */
 export function runQuery(
   world: World,
   registry: Registry,
@@ -89,5 +99,9 @@ export function runQuery(
   if (!def) return { ok: false, error: `Unknown query: ${name}` };
   const parsed = parseInput(def.input, rawInput);
   if (!parsed.ok) return parsed;
-  return { ok: true, result: def.run(world, parsed.data) };
+  try {
+    return { ok: true, result: def.run(world, parsed.data) };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }

@@ -34,8 +34,9 @@ export function appendLog(
 
 /**
  * Runs a command: parse, validate, check cash, apply, charge, log. Any failure returns an error
- * and leaves the world untouched. A command that succeeds clears the redo stack, and joins the
- * undo stack if it is undoable.
+ * and leaves the world untouched. An undoable command that succeeds joins the undo stack and
+ * clears the redo stack, because the history it would redo no longer follows from the world. A
+ * command that cannot be undone, such as `sim_advance`, leaves both stacks alone.
  *
  * Throws if the command's cost is not a non-negative integer of cents, which is a bug in the command.
  */
@@ -71,7 +72,7 @@ export function executeCommand(
   if (def.undoable) {
     if (undo !== undefined) entry.undo = undo;
     world.undoStack.push(entry.id);
+    world.redoStack.length = 0;
   }
-  world.redoStack.length = 0;
   return { ok: true, id: entry.id, cost };
 }

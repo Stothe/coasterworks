@@ -9,6 +9,9 @@ import {
   terrainSetWater,
   terrainSmooth,
 } from "./commands/terrain.js";
+import { logRecent, undoState } from "./queries/log.js";
+import { parkBounds, parkStatus } from "./queries/park.js";
+import { terrainGet } from "./queries/terrain.js";
 
 /** A registry holding every command and query in the sim. */
 export function createDefaultRegistry(): Registry {
@@ -22,5 +25,10 @@ export function createDefaultRegistry(): Registry {
   registry.register(simAdvance);
   registry.register(financeTakeLoan);
   registry.register(financeRepayLoan);
+  registry.registerQuery(parkStatus);
+  registry.registerQuery(parkBounds);
+  registry.registerQuery(terrainGet);
+  registry.registerQuery(logRecent);
+  registry.registerQuery(undoState);
   return registry;
 }

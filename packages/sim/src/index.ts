@@ -1,6 +1,6 @@
 export const VERSION = "0.0.0";
 
-export { defineCommand, runQuery } from "./commands/define.js";
+export { defineCommand, defineQuery, runQuery } from "./commands/define.js";
 export type {
   CatalogEntry,
   Category,

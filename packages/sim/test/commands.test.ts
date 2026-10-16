@@ -4,6 +4,7 @@ import {
   Registry,
   createWorld,
   defineCommand,
+  defineQuery,
   executeCommand,
   hashWorld,
   redoLast,
@@ -372,18 +373,24 @@ describe("executeCommand", () => {
     expect(world.undoStack).toEqual([1]);
   });
 
-  it("clears the redo stack on a new command, undoable or not", () => {
+  it("clears the redo stack when an undoable command succeeds", () => {
     const { world, registry } = setup();
-    for (const [name, input] of [
-      ["test_add_cash", { amount: 10 }],
-      ["test_note", {}],
-    ] as const) {
-      executeCommand(world, registry, "test_add_cash", { amount: 5 }, "player");
-      undoLast(world, registry, "player");
-      expect(world.redoStack).toHaveLength(1);
-      expect(executeCommand(world, registry, name, input, "player").ok).toBe(true);
-      expect(world.redoStack).toEqual([]);
-    }
+    executeCommand(world, registry, "test_add_cash", { amount: 5 }, "player");
+    undoLast(world, registry, "player");
+    expect(world.redoStack).toHaveLength(1);
+    expect(executeCommand(world, registry, "test_add_cash", { amount: 10 }, "player").ok).toBe(
+      true,
+    );
+    expect(world.redoStack).toEqual([]);
+  });
+
+  it("keeps the redo stack when a command that cannot be undone succeeds", () => {
+    const { world, registry } = setup();
+    executeCommand(world, registry, "test_add_cash", { amount: 5 }, "player");
+    undoLast(world, registry, "player");
+    expect(executeCommand(world, registry, "test_note", {}, "system").ok).toBe(true);
+    expect(world.redoStack).toEqual([1]);
+    expect(redoLast(world, registry, "player")).toMatchObject({ ok: true });
   });
 
   it("keeps the redo stack when a new command fails", () => {
@@ -633,5 +640,59 @@ describe("runQuery", () => {
     const result = runQuery(world, registry, "test_peek_cash", { extra: "x" });
     expect(result.ok).toBe(false);
     expect(!result.ok && result.error).toMatch(/^extra \S/);
+  });
+
+  it("returns the message of an error the query throws, without changing the world", () => {
+    const { world, registry } = setup();
+    registry.registerQuery({
+      name: "test_throws",
+      description: "Always fails.",
+      category: "park",
+      input: z.object({ fail: z.boolean() }),
+      run: (_world: World, input: { fail: boolean }) => {
+        if (input.fail) throw new RangeError("Area is outside the park");
+        return "fine";
+      },
+    });
+    const before = hashWorld(world);
+    expect(runQuery(world, registry, "test_throws", { fail: true })).toEqual({
+      ok: false,
+      error: "Area is outside the park",
+    });
+    expect(runQuery(world, registry, "test_throws", { fail: false })).toEqual({
+      ok: true,
+      result: "fine",
+    });
+    expect(hashWorld(world)).toBe(before);
+  });
+
+  it("returns a thrown value that is not an Error as text", () => {
+    const { world, registry } = setup();
+    registry.registerQuery({
+      name: "test_throws_text",
+      description: "Throws a string.",
+      category: "park",
+      input: z.object({}),
+      run: () => {
+        throw "plain text";
+      },
+    });
+    expect(runQuery(world, registry, "test_throws_text", {})).toEqual({
+      ok: false,
+      error: "plain text",
+    });
+  });
+});
+
+describe("defineQuery", () => {
+  it("returns the definition unchanged", () => {
+    const def = {
+      name: "test_peek_twice",
+      description: "Reads cash twice.",
+      category: "finance" as const,
+      input: z.object({}),
+      run: (world: World) => world.finance.cash * 2,
+    };
+    expect(defineQuery(def)).toBe(def);
   });
 });

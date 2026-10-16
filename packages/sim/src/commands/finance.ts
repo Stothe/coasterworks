@@ -28,7 +28,7 @@ export const financeRepayLoan = defineCommand({
   name: "finance_repay_loan",
   description: "Pays back part or all of the loan out of the cash on hand. Amount is in cents.",
   category: "finance",
-  input: z.object({ amount: z.int().min(100) }),
+  input: z.object({ amount: z.int().min(1) }),
   undoable: true,
   validate: (world, { amount }) => {
     if (amount > world.finance.loan) return `You only owe ${formatMoney(world.finance.loan)}`;

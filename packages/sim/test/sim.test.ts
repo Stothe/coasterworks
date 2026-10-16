@@ -220,6 +220,33 @@ describe("Sim.execute, undo, redo", () => {
     expect(getCorner(world.terrain, 0, 0)).toBe(9);
   });
 
+  it("can still redo after a command that cannot be undone runs in between", () => {
+    const { world, sim } = setup();
+    sim.execute("terrain_raise", { x: 0, y: 0, w: 1, h: 1 });
+    expect(sim.undo().ok).toBe(true);
+    expect(sim.execute("sim_advance", { days: 1 }).ok).toBe(true);
+    expect(world.redoStack).toEqual([1]);
+    expect(sim.redo().ok).toBe(true);
+    expect(getCorner(world.terrain, 0, 0)).toBe(9);
+    expect(world.tick).toBe(TICKS_PER_DAY);
+  });
+
+  it("can still undo after a command that cannot be undone runs in between", () => {
+    const { world, sim } = setup();
+    sim.execute("terrain_raise", { x: 0, y: 0, w: 1, h: 1 });
+    expect(sim.execute("sim_advance", { days: 1 }).ok).toBe(true);
+    expect(sim.undo().ok).toBe(true);
+    expect(getCorner(world.terrain, 0, 0)).toBe(8);
+  });
+
+  it("drops the redo stack when a new undoable command runs", () => {
+    const { sim } = setup();
+    sim.execute("terrain_raise", { x: 0, y: 0, w: 1, h: 1 });
+    sim.undo();
+    sim.execute("terrain_lower", { x: 3, y: 3, w: 1, h: 1 });
+    expect(sim.redo()).toEqual({ ok: false, error: "Nothing to redo" });
+  });
+
   it("reports unknown commands and nothing to undo or redo", () => {
     const { sim } = setup();
     expect(sim.execute("nope_nothing", {})).toEqual({
@@ -396,9 +423,28 @@ describe("finance_repay_loan", () => {
     expect(world.finance.loan).toBe(5_000_00);
   });
 
-  it("rejects an amount under 100 cents", () => {
-    const { sim } = withLoan(5_000_00);
-    expect(sim.execute("finance_repay_loan", { amount: 99 }).ok).toBe(false);
+  it("rejects an amount under 1 cent or not a whole number of cents", () => {
+    const { world, sim } = withLoan(5_000_00);
+    for (const amount of [0, -100, 0.5, 100.5]) {
+      expect(sim.execute("finance_repay_loan", { amount }).ok).toBe(false);
+    }
+    expect(sim.execute("finance_repay_loan", {}).ok).toBe(false);
+    expect(world.finance.loan).toBe(5_000_00);
+  });
+
+  it("can repay a residual of less than a dollar, down to a single cent", () => {
+    const { world, sim } = setup();
+    expect(sim.execute("finance_take_loan", { amount: 10_000_00 }).ok).toBe(true);
+    expect(sim.execute("finance_repay_loan", { amount: 9_999_50 }).ok).toBe(true);
+    expect(world.finance.loan).toBe(50);
+    expect(sim.execute("finance_repay_loan", { amount: 50 }).ok).toBe(true);
+    expect(world.finance.loan).toBe(0);
+    expect(world.finance.cash).toBe(10_000_00);
+
+    expect(sim.execute("finance_take_loan", { amount: 100 }).ok).toBe(true);
+    expect(sim.execute("finance_repay_loan", { amount: 99 }).ok).toBe(true);
+    expect(sim.execute("finance_repay_loan", { amount: 1 }).ok).toBe(true);
+    expect(world.finance.loan).toBe(0);
   });
 
   it("is undone by adding the amount back to the loan and the cash, and redone", () => {
