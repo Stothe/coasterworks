@@ -32,3 +32,19 @@ jobs:
       - run: pnpm build
       - run: pnpm test
       - run: pnpm format:check
+
+  # The same golden scenario on JavaScriptCore (Bun) instead of V8 (Node). Re-recording the hash
+  # there must change nothing: a difference means the sim depends on an engine detail.
+  golden-jsc:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: bun packages/sim/scripts/update-golden.ts
+      - run: git diff --exit-code packages/sim/test/golden/scenario-1.hash

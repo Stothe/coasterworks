@@ -55,3 +55,15 @@ export function integerOption(
   }
   return parsed;
 }
+
+/**
+ * The parsed value of a `--input` option, or `{}` if it was not given. Text that is not JSON is an
+ * ordinary error, not a usage error: the command line is well formed but its value is wrong.
+ */
+export function jsonInputOption(value: string | undefined): unknown {
+  try {
+    return JSON.parse(value ?? "{}");
+  } catch {
+    throw new Error("--input is not valid JSON");
+  }
+}

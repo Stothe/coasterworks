@@ -9,7 +9,14 @@ import { createMcpServer, type McpServerOptions } from "./server.js";
 export interface HttpOptions extends McpServerOptions {
   /** The port to listen on; 0, the default, picks a free one. */
   port?: number;
-  /** The address to listen on. Defaults to loopback, so only this machine can connect. */
+  /**
+   * The address to listen on. Defaults to loopback, so only this machine can connect.
+   *
+   * To stop a web page from reaching the server through a hostname it controls (DNS rebinding), a
+   * request is refused with 403 unless its `Host` header is `127.0.0.1`, `localhost`, or this
+   * address, with or without the port. A wildcard address such as `0.0.0.0` therefore serves
+   * clients that connect by one of the loopback names, and no others.
+   */
   host?: string;
   /** Every request must send `Authorization: Bearer <token>`. */
   token: string;
@@ -25,6 +32,19 @@ export interface HttpServer {
 
 const PATH = "/mcp";
 const METHODS = ["POST", "GET", "DELETE"];
+/** Addresses that listen on every interface; a client can name the server by none of them. */
+const WILDCARDS = new Set(["0.0.0.0", "::"]);
+
+/**
+ * The `Host` header values that may reach the server: loopback by name and by address, plus the
+ * address it was told to listen on, each bare and with the port, as a client's `Host` carries it.
+ */
+function allowedHostsFor(host: string, port: number): string[] {
+  const names = new Set(["127.0.0.1", "localhost"]);
+  // An IPv6 address appears in a Host header in brackets.
+  if (!WILDCARDS.has(host)) names.add(host.includes(":") ? `[${host}]` : host);
+  return [...names].flatMap((name) => [name, `${name}:${port}`]);
+}
 
 function sha256(text: string): Buffer {
   return createHash("sha256").update(text).digest();
@@ -37,13 +57,16 @@ function sendJson(res: ServerResponse, status: number, body: unknown, headers = 
 
 /**
  * Serves `sim` over Streamable HTTP at `/mcp`, for clients that cannot spawn a process. Every
- * request needs the bearer `token`. The server keeps no session: each request gets its own MCP
- * server, and they all share `sim`.
+ * request needs the bearer `token` and a `Host` header that names this machine (see
+ * `HttpOptions.host`); the token is checked first. The server keeps no session: each request gets
+ * its own MCP server, and they all share `sim`.
  */
 export async function serveHttp(sim: Sim, opts: HttpOptions): Promise<HttpServer> {
   const { port = 0, host = "127.0.0.1", token, ...serverOptions } = opts;
   if (token === "") throw new Error("serveHttp needs a non-empty token");
   const wanted = sha256(token);
+  // Known once the server is listening, and always set before the first request is handled.
+  let allowedHosts: string[] = [];
 
   const authorized = (req: IncomingMessage): boolean => {
     const given = /^Bearer (.+)$/i.exec(req.headers.authorization ?? "")?.[1];
@@ -64,7 +87,12 @@ export async function serveHttp(sim: Sim, opts: HttpOptions): Promise<HttpServer
     const server = createMcpServer(sim, serverOptions);
     // Stateless, which is what leaving out `sessionIdGenerator` means: a transport serves one
     // request, so each gets its own, torn down with the response.
-    const transport = new StreamableHTTPServerTransport({ enableJsonResponse: true });
+    // The SDK checks the Host header and answers 403 itself; see `HttpOptions.host`.
+    const transport = new StreamableHTTPServerTransport({
+      enableJsonResponse: true,
+      enableDnsRebindingProtection: true,
+      allowedHosts,
+    });
     res.once("close", () => void server.close().catch(() => {}));
     // The cast is for the SDK's `onclose?: () => void` against `exactOptionalPropertyTypes`.
     await server.connect(transport as Transport);
@@ -86,6 +114,7 @@ export async function serveHttp(sim: Sim, opts: HttpOptions): Promise<HttpServer
     });
   });
   const bound = (http.address() as AddressInfo).port;
+  allowedHosts = allowedHostsFor(host, bound);
 
   let closing: Promise<void> | undefined;
   return {

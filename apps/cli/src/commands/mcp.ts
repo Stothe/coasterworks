@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { parseArgs } from "node:util";
 import { serveHttp, serveStdio, type McpServerOptions } from "@coasterworks/mcp";
 import { Sim } from "@coasterworks/sim";
@@ -23,9 +24,13 @@ const TOKEN_ENV = "COASTERWORKS_MCP_TOKEN";
  * listens on 127.0.0.1 and prints `{ url, port }` once it is ready.
  *
  * The token comes from `--token`, or else from `COASTERWORKS_MCP_TOKEN`, so it need not appear in
- * a process list. The `save_write` and `save_load` tools read and write files as the user. Over
- * stdio the client is the local process that launched this one, so they are on. Over HTTP anyone
- * with the token could use them, so they stay off unless `--allow-files` asks for them.
+ * a process list. With neither, a random one is made (32 bytes from `node:crypto`, base64url, 43
+ * characters) and printed too, as `{ url, port, token }`, because the client has no other way to
+ * learn it. A token the caller supplied is never printed back.
+ *
+ * The `save_write` and `save_load` tools read and write `.park` files as the user. Over stdio the
+ * client is the local process that launched this one, so they are on. Over HTTP anyone with the
+ * token could use them, so they stay off unless `--allow-files` asks for them.
  *
  * With `--out` the park is written after every call that changes it and once more on the way
  * out, never over `--save` unless asked.
@@ -51,10 +56,9 @@ export async function mcpCommand(args: string[], io: CliIO): Promise<number> {
   if (values.token === "") throw new UsageError("--token must not be empty");
   // An empty variable counts as unset, as a shell's `FOO= cmd` usually means it.
   const envToken = process.env[TOKEN_ENV];
-  const token = values.token ?? (envToken === "" ? undefined : envToken);
-  if (values.http !== undefined && token === undefined) {
-    throw new UsageError(`--http needs --token (or ${TOKEN_ENV} in the environment)`);
-  }
+  const given = values.token ?? (envToken === "" ? undefined : envToken);
+  const generated = values.http !== undefined && given === undefined;
+  const token = generated ? randomBytes(32).toString("base64url") : given;
   const port = integerOption("http", values.http, { min: 0, max: 65535 });
 
   const sim = new Sim(await readPark(save));
@@ -83,7 +87,10 @@ export async function mcpCommand(args: string[], io: CliIO): Promise<number> {
   } else {
     const http = await serveHttp(sim, { ...options, port, token: token ?? "" });
     try {
-      printJson(io, { url: http.url, port: http.port });
+      printJson(
+        io,
+        generated ? { url: http.url, port: http.port, token } : { url: http.url, port: http.port },
+      );
       await untilAborted(io.signal);
     } finally {
       await http.close();

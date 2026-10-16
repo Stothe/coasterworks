@@ -2,7 +2,7 @@ import { z } from "zod";
 import { defineCommand } from "./define.js";
 
 /** Most days a single `sim_advance` can run: ten years. */
-const MAX_ADVANCE_DAYS = 3650;
+export const MAX_ADVANCE_DAYS = 3650;
 
 /**
  * Runs the simulation forward. The command changes nothing itself: `Sim.execute` does the

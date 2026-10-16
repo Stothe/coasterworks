@@ -1,5 +1,5 @@
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { dirname, extname } from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { deserializeWorld, serializeWorld, type Sim, type World } from "@coasterworks/sim";
@@ -12,8 +12,9 @@ export interface McpServerOptions {
   /** The server version clients see. Defaults to this package's version. */
   version?: string;
   /**
-   * Adds the `save_write` and `save_load` tools, which let a client read and write any file this
-   * process can. Off by default; turn it on only for a client you trust.
+   * Adds the `save_write` and `save_load` tools, which let a client read and write any `.park` file
+   * this process can (they refuse any other name). Off by default; turn it on only for a client you
+   * trust.
    */
   allowFiles?: boolean;
   /**
@@ -74,6 +75,11 @@ function titleOf(name: string): string {
 /** Every tool answers with its result as one block of JSON; a failure is `{ ok: false, error }`. */
 function toolResult<T extends { ok: boolean }>(result: T): CallToolResult {
   return { content: [{ type: "text", text: JSON.stringify(result) }], isError: !result.ok };
+}
+
+/** True for a path that ends in `.park`, in any case. The file tools touch nothing else. */
+function isParkPath(path: string): boolean {
+  return extname(path).toLowerCase() === ".park";
 }
 
 function reasonOf(err: unknown): string {
@@ -183,11 +189,14 @@ export function createMcpServer(sim: Sim, opts: McpServerOptions = {}): McpServe
       "save_write",
       {
         title: "Save write",
-        description: "Writes the park to a .park file at `path`, creating its folder if needed.",
+        description:
+          "Writes the park to a .park file at `path` (the name must end in .park), creating its folder if needed.",
         inputSchema: { path: z.string().min(1).describe("Where to write the file") },
         annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
       },
       tracked(async ({ path }) => {
+        if (!isParkPath(path))
+          return toolResult({ ok: false, error: "Only .park files can be written" });
         try {
           await writePark(path, sim.world);
           return toolResult({ ok: true, path });
@@ -204,11 +213,14 @@ export function createMcpServer(sim: Sim, opts: McpServerOptions = {}): McpServe
       "save_load",
       {
         title: "Save load",
-        description: "Replaces the park, and its undo history, with the .park file at `path`.",
+        description:
+          "Replaces the park, and its undo history, with the .park file at `path` (the name must end in .park).",
         inputSchema: { path: z.string().min(1).describe("The file to read") },
         annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
       },
       tracked(async ({ path }) => {
+        if (!isParkPath(path))
+          return toolResult({ ok: false, error: "Only .park files can be read" });
         let world;
         try {
           world = deserializeWorld(await readFile(path));

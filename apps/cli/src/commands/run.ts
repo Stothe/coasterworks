@@ -1,10 +1,7 @@
 import { parseArgs } from "node:util";
-import { Sim } from "@coasterworks/sim";
+import { MAX_ADVANCE_DAYS, Sim } from "@coasterworks/sim";
 import { integerOption, parseOrUsage, requireOption } from "../args.js";
 import { printJson, queryOrThrow, readPark, writePark, type CliIO } from "../io.js";
-
-/** The most days one `sim_advance` accepts: ten years. */
-const MAX_DAYS = 3650;
 
 /** `run --save <file> --days <n> [--out <file>]`: advances a park and prints its status. */
 export async function runCommand(args: string[], io: CliIO): Promise<number> {
@@ -20,7 +17,10 @@ export async function runCommand(args: string[], io: CliIO): Promise<number> {
     }),
   );
   const save = requireOption("save", values.save);
-  const days = integerOption("days", requireOption("days", values.days), { min: 1, max: MAX_DAYS });
+  const days = integerOption("days", requireOption("days", values.days), {
+    min: 1,
+    max: MAX_ADVANCE_DAYS,
+  });
 
   const sim = new Sim(await readPark(save));
   // Through `execute`, not `advanceDays`, so the log records that time passed.

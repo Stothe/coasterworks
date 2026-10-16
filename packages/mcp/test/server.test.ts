@@ -363,9 +363,9 @@ describe("file tools", () => {
     expect(await readdir(dir)).toEqual(["busy.park"]);
 
     // A directory in the way makes the rename fail; the temporary file must not outlive it.
-    await mkdir(join(dir, "taken"));
-    expect((await call(client, "save_write", { path: join(dir, "taken") })).error).toBe(true);
-    expect((await readdir(dir)).sort()).toEqual(["busy.park", "taken"]);
+    await mkdir(join(dir, "taken.park"));
+    expect((await call(client, "save_write", { path: join(dir, "taken.park") })).error).toBe(true);
+    expect((await readdir(dir)).sort()).toEqual(["busy.park", "taken.park"]);
   });
 
   it("save_write hands the path and the current world to opts.writePark", async () => {
@@ -450,10 +450,62 @@ describe("file tools", () => {
   it("save_write reports a path it cannot write as an error", async () => {
     const sim = makeSim();
     const client = await connect(sim, { allowFiles: true });
-    await mkdir(join(dir, "taken"));
-    const result = await call(client, "save_write", { path: join(dir, "taken") });
+    await mkdir(join(dir, "taken.park"));
+    const result = await call(client, "save_write", { path: join(dir, "taken.park") });
     expect(result.error).toBe(true);
     expect(result.json.ok).toBe(false);
-    expect(result.json.error).toContain("taken");
+    expect(result.json.error).toContain("taken.park");
+  });
+
+  it.each(["x.txt", "x.json", "x", "x.park.bak", ".park", "x.parks"])(
+    "save_write refuses %s, because only .park files can be written",
+    async (name) => {
+      const written: string[] = [];
+      const client = await connect(makeSim(), {
+        allowFiles: true,
+        writePark: async (path) => void written.push(path),
+      });
+      const result = await call(client, "save_write", { path: join(dir, name) });
+      expect(result.error).toBe(true);
+      expect(result.json).toEqual({ ok: false, error: "Only .park files can be written" });
+      expect(written).toEqual([]);
+      expect(await readdir(dir)).toEqual([]);
+    },
+  );
+
+  it.each(["x.txt", "x.json", "x", "x.park.bak", ".park", "x.parks"])(
+    "save_load refuses %s, because only .park files can be read, even when it holds a park",
+    async (name) => {
+      const source = makeSim();
+      source.execute("terrain_raise", RAISE, "agent");
+      const file = join(dir, name);
+      await writeFile(file, serializeWorld(source.world));
+
+      const sim = makeSim();
+      let mutations = 0;
+      const client = await connect(sim, { allowFiles: true, onMutate: () => void mutations++ });
+      const before = sim.hash();
+      const result = await call(client, "save_load", { path: file });
+      expect(result.error).toBe(true);
+      expect(result.json).toEqual({ ok: false, error: "Only .park files can be read" });
+      expect(sim.hash()).toBe(before);
+      expect(mutations).toBe(0);
+    },
+  );
+
+  it("takes the .park extension in any case", async () => {
+    const sim = makeSim();
+    const client = await connect(sim, { allowFiles: true });
+    await call(client, "terrain_raise", RAISE);
+    const file = join(dir, "SHOUT.PARK");
+    expect((await call(client, "save_write", { path: file })).error).toBe(false);
+    expect(hashWorld(deserializeWorld(await readFile(file)))).toBe(sim.hash());
+
+    const other = makeSim();
+    const otherClient = await connect(other, { allowFiles: true });
+    const mixed = join(dir, "Mixed.Park");
+    await writeFile(mixed, serializeWorld(sim.world));
+    expect((await call(otherClient, "save_load", { path: mixed })).error).toBe(false);
+    expect(other.hash()).toBe(sim.hash());
   });
 });

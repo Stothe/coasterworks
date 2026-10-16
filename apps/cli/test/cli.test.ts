@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { createWorld, hashWorld } from "@coasterworks/sim";
+import { MAX_ADVANCE_DAYS, createWorld, hashWorld } from "@coasterworks/sim";
 import { main, type CliIO } from "../src/index.js";
 import { readPark, writePark } from "../src/io.js";
 
@@ -288,6 +288,16 @@ describe("run", () => {
     expect((await cli("run", "--save", file, "--days", "3650")).code).toBe(0);
   });
 
+  it("takes its limit from the sim's MAX_ADVANCE_DAYS, and says what it is", async () => {
+    const file = await makePark();
+    expect(MAX_ADVANCE_DAYS).toBe(3650);
+    const over = await cli("run", "--save", file, "--days", String(MAX_ADVANCE_DAYS + 1));
+    expect(over.code).toBe(1);
+    expect(over.stderr).toBe(
+      `error: --days must be an integer from 1 to ${MAX_ADVANCE_DAYS}, got "${MAX_ADVANCE_DAYS + 1}"\n`,
+    );
+  });
+
   it("is a usage error without --save or --days", async () => {
     const noDays = await cli("run", "--save", join(dir, "x.park"));
     expect(noDays.code).toBe(2);
@@ -295,6 +305,176 @@ describe("run", () => {
     const noSave = await cli("run", "--days", "3");
     expect(noSave.code).toBe(2);
     expect(noSave.stderr).toMatch(/^error: missing required option --save/);
+  });
+});
+
+describe("query", () => {
+  it("prints the query result as one line of JSON", async () => {
+    const file = await makePark();
+    const done = await cli("query", "--save", file, "--name", "park_status");
+    expect(done.code).toBe(0);
+    expect(done.stderr).toBe("");
+    const printed = parseOut(done);
+    expect(printed.ok).toBe(true);
+    expect(printed.result).toMatchObject({ date: "March 1, Year 1", cash: 10_000_00 });
+  });
+
+  it("passes --input to the query", async () => {
+    const file = await makePark();
+    const done = await cli(
+      ...["query", "--save", file, "--name", "terrain_get"],
+      ...["--input", '{"x":0,"y":0,"w":2,"h":2}'],
+    );
+    expect(done.code).toBe(0);
+    const { ok, result } = parseOut(done);
+    expect(ok).toBe(true);
+    // 2x2 tiles touch 3x3 corners.
+    expect(result.corners).toHaveLength(9);
+    expect(result.surface).toHaveLength(4);
+    expect(result.water).toHaveLength(4);
+  });
+
+  it("never modifies the save or adds to its log", async () => {
+    const file = await makePark();
+    const before = await readFile(file);
+    expect((await cli("query", "--save", file, "--name", "log_recent")).code).toBe(0);
+    expect(Buffer.compare(await readFile(file), before)).toBe(0);
+  });
+
+  it("exits 1, printing the failed result, when the query refuses its input", async () => {
+    const file = await makePark();
+    const outside = await cli(
+      ...["query", "--save", file, "--name", "terrain_get"],
+      ...["--input", '{"x":0,"y":0,"w":40,"h":40}'],
+    );
+    expect(outside.code).toBe(1);
+    expect(parseOut(outside)).toEqual({ ok: false, error: "Area is outside the park" });
+    expect(outside.stderr).toBe("error: Area is outside the park\n");
+
+    const missing = await cli("query", "--save", file, "--name", "terrain_get");
+    expect(missing.code).toBe(1);
+    expect(parseOut(missing).ok).toBe(false);
+  });
+
+  it("exits 1 for an unknown query", async () => {
+    const file = await makePark();
+    const done = await cli("query", "--save", file, "--name", "nope");
+    expect(done.code).toBe(1);
+    const printed = parseOut(done);
+    expect(printed.ok).toBe(false);
+    expect(printed.error).toBeTypeOf("string");
+    expect(done.stderr).toBe(`error: ${printed.error}\n`);
+  });
+
+  it("exits 1 with a clear message when --input is not JSON", async () => {
+    const file = await makePark();
+    const done = await cli("query", "--save", file, "--name", "terrain_get", "--input", "{x");
+    expect(done.code).toBe(1);
+    expect(done.stdout).toBe("");
+    expect(done.stderr).toBe("error: --input is not valid JSON\n");
+  });
+
+  it("exits 1 when the park cannot be read", async () => {
+    const missing = join(dir, "missing.park");
+    const done = await cli("query", "--save", missing, "--name", "park_status");
+    expect(done.code).toBe(1);
+    expect(done.stderr).toMatch(new RegExp(`^error: Cannot read park file ${missing}: `));
+  });
+
+  it("is a usage error without --save or --name, or with --out", async () => {
+    const noSave = await cli("query", "--name", "park_status");
+    expect(noSave.code).toBe(2);
+    expect(noSave.stderr).toMatch(/^error: missing required option --save/);
+    const noName = await cli("query", "--save", join(dir, "x.park"));
+    expect(noName.code).toBe(2);
+    expect(noName.stderr).toMatch(/^error: missing required option --name/);
+    const file = await makePark();
+    const withOut = await cli("query", "--save", file, "--name", "park_status", "--out", "x");
+    expect(withOut.code).toBe(2);
+    expect(withOut.stderr).toContain("Usage:");
+  });
+});
+
+describe("undo and redo", () => {
+  const raise = JSON.stringify({ x: 0, y: 0, w: 2, h: 2 });
+
+  /** A park with one raise done, and the file it is in. */
+  async function raised(): Promise<string> {
+    const file = await makePark();
+    const after = join(dir, "raised.park");
+    const done = await cli(
+      ...["exec", "--save", file, "--command", "terrain_raise", "--input", raise],
+      ...["--out", after],
+    );
+    expect(done.code).toBe(0);
+    return after;
+  }
+
+  it("undo takes back the last command as the agent, and restores the cash", async () => {
+    const file = await raised();
+    const out = join(dir, "undone.park");
+    const done = await cli("undo", "--save", file, "--out", out);
+    expect(done.code).toBe(0);
+    expect(done.stderr).toBe("");
+    // The refund is the raise's cost, negated; the undo is the second log entry.
+    expect(parseOut(done)).toEqual({ ok: true, id: 2, cost: -45_000 });
+
+    const { status, log } = parseOut(await cli("inspect", out));
+    expect(status.cash).toBe(10_000_00);
+    expect(log[0]).toMatchObject({ name: "undo", client: "agent", cost: -45_000 });
+    // The source save is untouched.
+    expect(parseOut(await cli("inspect", file)).status.cash).toBe(10_000_00 - 45_000);
+  });
+
+  it("redo does the command again and charges for it again", async () => {
+    const raisedFile = await raised();
+    const undone = join(dir, "undone.park");
+    expect((await cli("undo", "--save", raisedFile, "--out", undone)).code).toBe(0);
+
+    const redone = join(dir, "redone.park");
+    const done = await cli("redo", "--save", undone, "--out", redone);
+    expect(done.code).toBe(0);
+    expect(parseOut(done)).toEqual({ ok: true, id: 3, cost: 45_000 });
+
+    const { status, log } = parseOut(await cli("inspect", redone));
+    expect(status.cash).toBe(10_000_00 - 45_000);
+    expect(log[0]).toMatchObject({ name: "redo", client: "agent", cost: 45_000 });
+  });
+
+  it("can write over the save it read", async () => {
+    const file = await raised();
+    expect((await cli("undo", "--save", file, "--out", file)).code).toBe(0);
+    expect(parseOut(await cli("inspect", file)).status.cash).toBe(10_000_00);
+    expect((await cli("redo", "--save", file, "--out", file)).code).toBe(0);
+    expect(parseOut(await cli("inspect", file)).status.cash).toBe(10_000_00 - 45_000);
+  });
+
+  it.each([
+    ["undo", "Nothing to undo"],
+    ["redo", "Nothing to redo"],
+  ])(
+    "%s exits 1, prints the failed result, and writes nothing when there is nothing to do",
+    async (name, error) => {
+      const file = await makePark();
+      const out = join(dir, "never.park");
+      const done = await cli(name, "--save", file, "--out", out);
+      expect(done.code).toBe(1);
+      expect(parseOut(done)).toEqual({ ok: false, error });
+      expect(done.stderr).toBe(`error: ${error}\n`);
+      expect(await exists(out)).toBe(false);
+    },
+  );
+
+  it.each(["undo", "redo"])("%s is a usage error without --out or --save", async (name) => {
+    const file = await makePark();
+    const noOut = await cli(name, "--save", file);
+    expect(noOut.code).toBe(2);
+    expect(noOut.stderr).toMatch(/^error: missing required option --out/);
+    const noSave = await cli(name, "--out", join(dir, "x.park"));
+    expect(noSave.code).toBe(2);
+    expect(noSave.stderr).toMatch(/^error: missing required option --save/);
+    const stray = await cli(name, "--save", file, "--out", join(dir, "x.park"), "extra");
+    expect(stray.code).toBe(2);
   });
 });
 
@@ -380,6 +560,19 @@ describe("usage", () => {
     expect(done.stderr).toContain("Without --out, run and exec do not modify the save.");
   });
 
+  it("lists query, undo, and redo", async () => {
+    const done = await cli("frobnicate");
+    expect(done.stderr).toContain("  query    --save <file> --name <query> [--input <json>]");
+    expect(done.stderr).toContain("  undo     --save <file> --out <file>");
+    expect(done.stderr).toContain("  redo     --save <file> --out <file>");
+  });
+
+  it("says that --http makes and prints a token when it is given none", async () => {
+    const done = await cli("frobnicate");
+    expect(done.stderr).toContain("makes a random token and prints it");
+    expect(done.stderr).not.toContain("--http needs a token");
+  });
+
   it("documents the token environment variable and warns about --allow-files", async () => {
     const done = await cli("frobnicate");
     expect(done.stderr).toContain("COASTERWORKS_MCP_TOKEN");
@@ -395,26 +588,6 @@ describe("mcp usage", () => {
     expect(done.stdout).toBe("");
     expect(done.stderr).toMatch(/^error: missing required option --save/);
     expect(done.stderr).toContain("Usage:");
-  });
-
-  it("is a usage error to give --http without --token, and writes nothing", async () => {
-    const file = await makePark();
-    const out = join(dir, "never.park");
-    const done = await cli("mcp", "--save", file, "--http", "0", "--out", out);
-    expect(done.code).toBe(2);
-    expect(done.stdout).toBe("");
-    expect(done.stderr).toMatch(/^error: --http needs --token/);
-    expect(done.stderr).toContain("COASTERWORKS_MCP_TOKEN");
-    expect(done.stderr).toContain("Usage:");
-    expect(await exists(out)).toBe(false);
-  });
-
-  it("treats an empty COASTERWORKS_MCP_TOKEN as unset", async () => {
-    vi.stubEnv("COASTERWORKS_MCP_TOKEN", "");
-    const file = await makePark();
-    const done = await cli("mcp", "--save", file, "--http", "0");
-    expect(done.code).toBe(2);
-    expect(done.stderr).toMatch(/^error: --http needs --token/);
   });
 
   it("is still a usage error to give --token without --http when the environment has a token", async () => {
@@ -480,7 +653,7 @@ async function startHttp(...args: string[]) {
       throw new Error(`mcp exited with ${code} before listening: ${err.join("")}`);
     }),
   ]);
-  const info = JSON.parse(printed) as { url: string; port: number };
+  const info = JSON.parse(printed) as { url: string; port: number; token?: string };
   return {
     info,
     async stop(): Promise<Outcome> {
@@ -519,6 +692,56 @@ describe("mcp over HTTP", () => {
     expect(stopped.code).toBe(0);
     expect(stopped.stderr).toBe("");
     expect(stopped.stdout).toBe(`${JSON.stringify(server.info)}\n`);
+  });
+
+  it("makes a 43-character token when none is given, prints it, and requires it", async () => {
+    const file = await makePark();
+    const out = join(dir, "never.park");
+    const server = await startHttp("--save", file, "--out", out, "--http", "0");
+    const { token } = server.info;
+    expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(Object.keys(server.info)).toEqual(["url", "port", "token"]);
+
+    await expect(httpClient(server.info.url, "nope")).rejects.toThrow();
+    const client = await httpClient(server.info.url, token as string);
+    expect((await client.listTools()).tools.map((t) => t.name)).toContain("terrain_raise");
+    await client.close();
+
+    const stopped = await server.stop();
+    expect(stopped.code).toBe(0);
+    expect(stopped.stderr).toBe("");
+    // One line of JSON, token included.
+    expect(stopped.stdout).toBe(`${JSON.stringify(server.info)}\n`);
+  });
+
+  it("makes a different token each time", async () => {
+    const file = await makePark();
+    const first = await startHttp("--save", file, "--http", "0");
+    const second = await startHttp("--save", file, "--http", "0");
+    expect(first.info.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(second.info.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(second.info.token).not.toBe(first.info.token);
+    expect((await first.stop()).code).toBe(0);
+    expect((await second.stop()).code).toBe(0);
+  });
+
+  it("treats an empty COASTERWORKS_MCP_TOKEN as unset, and makes a token", async () => {
+    vi.stubEnv("COASTERWORKS_MCP_TOKEN", "");
+    const file = await makePark();
+    const server = await startHttp("--save", file, "--http", "0");
+    expect(server.info.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect((await server.stop()).code).toBe(0);
+  });
+
+  it("does not print a token that it was given", async () => {
+    vi.stubEnv("COASTERWORKS_MCP_TOKEN", "env-tok");
+    const file = await makePark();
+    const fromEnv = await startHttp("--save", file, "--http", "0");
+    expect(fromEnv.info.token).toBeUndefined();
+    const fromFlag = await startHttp("--save", file, "--http", "0", "--token", "flag-tok");
+    expect(fromFlag.info.token).toBeUndefined();
+    expect((await fromEnv.stop()).stdout).not.toContain("tok");
+    expect((await fromFlag.stop()).stdout).not.toContain("tok");
   });
 
   it("leaves out the file tools unless --allow-files is given", async () => {
@@ -892,6 +1115,24 @@ describe("bin mcp", () => {
     const names = (await client.listTools()).tools.map((t) => t.name);
     expect(names).toContain("terrain_raise");
     expect(names).not.toContain("save_write");
+    await client.close();
+
+    server.child.kill("SIGINT");
+    expect(await server.exited).toBe(0);
+    expect(server.stderr()).toBe("");
+  });
+
+  it("serves HTTP with a token it made and printed when it is given none", async (ctx) => {
+    if (!existsSync(dist)) ctx.skip(`${dist} is missing; run \`pnpm build\` to enable this test`);
+    const file = await makePark();
+    const server = start("--save", file, "--http", "0");
+    const [info] = await server.lines(1);
+    expect(Object.keys(info)).toEqual(["url", "port", "token"]);
+    expect(info.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+
+    await expect(httpClient(info.url, "nope")).rejects.toThrow();
+    const client = await httpClient(info.url, info.token);
+    expect((await client.listTools()).tools.map((t) => t.name)).toContain("terrain_raise");
     await client.close();
 
     server.child.kill("SIGINT");

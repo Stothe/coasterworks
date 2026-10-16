@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import {
   LOAN_MAX,
+  MAX_ADVANCE_DAYS,
   Registry,
   Sim,
   TICKS_PER_DAY,
@@ -191,6 +192,15 @@ describe("sim_advance", () => {
     const { world, sim } = setup();
     expect(sim.execute("sim_advance", { days: 3650 }).ok).toBe(true);
     expect(world.tick).toBe(3650 * TICKS_PER_DAY);
+  });
+
+  it("exports the limit it enforces, for callers that check before they ask", () => {
+    expect(MAX_ADVANCE_DAYS).toBe(3650);
+    const { sim } = setup();
+    expect(sim.execute("sim_advance", { days: MAX_ADVANCE_DAYS + 1 }).ok).toBe(false);
+    expect(sim.registry.catalog().find((e) => e.name === "sim_advance")?.description).toContain(
+      `1 to ${MAX_ADVANCE_DAYS}`,
+    );
   });
 
   it("records the client and is not undoable", () => {

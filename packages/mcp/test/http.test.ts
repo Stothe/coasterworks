@@ -1,3 +1,5 @@
+import { request } from "node:http";
+import { networkInterfaces } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -56,6 +58,44 @@ function rawPost(headers: Record<string, string> = {}, path = "/mcp") {
       ...headers,
     },
     body: INITIALIZE,
+  });
+}
+
+/**
+ * POSTs to the server with `host` as the Host header. `fetch` takes its Host from the URL, so this
+ * goes through `node:http`, which sends the header it is given.
+ */
+function postWithHost(
+  host: string,
+  headers: Record<string, string> = {},
+  body: string = INITIALIZE,
+  target: { address: string; port: number } = { address: "127.0.0.1", port: http.port },
+): Promise<{ status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const req = request(
+      {
+        host: target.address,
+        port: target.port,
+        path: "/mcp",
+        method: "POST",
+        headers: {
+          host,
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          "content-length": String(Buffer.byteLength(body)),
+          ...headers,
+        },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () =>
+          resolve({ status: res.statusCode ?? 0, text: Buffer.concat(chunks).toString("utf8") }),
+        );
+      },
+    );
+    req.on("error", reject);
+    req.end(body);
   });
 }
 
@@ -160,5 +200,77 @@ describe("serveHttp", () => {
     await expect(fetch(url, { method: "POST" })).rejects.toThrow();
     // A second close is harmless.
     await http.close();
+  });
+});
+
+describe("DNS rebinding protection", () => {
+  const bearer = { authorization: `Bearer ${TOKEN}` };
+  const RAISE_CALL = JSON.stringify({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/call",
+    params: { name: "terrain_raise", arguments: { x: 0, y: 0, w: 2, h: 2 } },
+  });
+
+  it("serves a request whose Host names loopback, with or without the port", async () => {
+    for (const host of [
+      "127.0.0.1",
+      "localhost",
+      `127.0.0.1:${http.port}`,
+      `localhost:${http.port}`,
+    ]) {
+      const response = await postWithHost(host, bearer);
+      expect(response.status, host).toBe(200);
+      expect(response.text, host).toContain('"serverInfo"');
+    }
+  });
+
+  it("answers 403 from the SDK, after the token checks out, when Host names another site", async () => {
+    for (const host of [
+      "evil.example",
+      `evil.example:${http.port}`,
+      "127.0.0.1.evil.example",
+      `localhost:${http.port + 1}`,
+    ]) {
+      const response = await postWithHost(host, bearer);
+      expect(response.status, host).toBe(403);
+      expect(JSON.parse(response.text).error.message, host).toBe(`Invalid Host header: ${host}`);
+    }
+  });
+
+  it("does not run a command sent with a foreign Host header and the right token", async () => {
+    const before = sim.hash();
+    const refused = await postWithHost("evil.example", bearer, RAISE_CALL);
+    expect(refused.status).toBe(403);
+    expect(sim.hash()).toBe(before);
+
+    // The same call with a loopback Host does run, so the check above means something.
+    const served = await postWithHost(`127.0.0.1:${http.port}`, bearer, RAISE_CALL);
+    expect(served.status).toBe(200);
+    expect(sim.world.finance.cash).toBe(955_000);
+  });
+
+  it("answers 401, not 403, to a foreign Host header with no token, because the token is checked first", async () => {
+    const response = await postWithHost("evil.example");
+    expect(response.status).toBe(401);
+    expect(JSON.parse(response.text)).toEqual({ error: "unauthorized" });
+  });
+
+  it("also allows the address it was told to listen on, when that is not loopback", async (ctx) => {
+    const lan = Object.values(networkInterfaces())
+      .flat()
+      .find((info) => info !== undefined && info.family === "IPv4" && !info.internal);
+    if (lan === undefined) return ctx.skip();
+    const bound = await serveHttp(sim, { port: 0, host: lan.address, token: TOKEN });
+    try {
+      const target = { address: lan.address, port: bound.port };
+      const bearer = { authorization: `Bearer ${TOKEN}` };
+      for (const host of [lan.address, `${lan.address}:${bound.port}`, `localhost:${bound.port}`]) {
+        expect((await postWithHost(host, bearer, INITIALIZE, target)).status, host).toBe(200);
+      }
+      expect((await postWithHost("evil.example", bearer, INITIALIZE, target)).status).toBe(403);
+    } finally {
+      await bound.close();
+    }
   });
 });

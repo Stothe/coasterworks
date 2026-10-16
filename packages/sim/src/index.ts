@@ -11,6 +11,7 @@ export type {
 export { executeCommand } from "./commands/execute.js";
 export type { ExecResult } from "./commands/execute.js";
 export { Registry } from "./commands/registry.js";
+export { MAX_ADVANCE_DAYS } from "./commands/sim.js";
 export { redoLast, undoLast } from "./commands/undo.js";
 export { fnv1a64, hashString, hexHash } from "./hash.js";
 export { createDefaultRegistry } from "./registry-default.js";

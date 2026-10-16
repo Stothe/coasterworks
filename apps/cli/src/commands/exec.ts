@@ -1,6 +1,6 @@
 import { parseArgs } from "node:util";
 import { Sim } from "@coasterworks/sim";
-import { parseOrUsage, requireOption } from "../args.js";
+import { jsonInputOption, parseOrUsage, requireOption } from "../args.js";
 import { printJson, readPark, writePark, type CliIO } from "../io.js";
 
 /**
@@ -22,12 +22,7 @@ export async function execCommand(args: string[], io: CliIO): Promise<number> {
   );
   const save = requireOption("save", values.save);
   const command = requireOption("command", values.command);
-  let input: unknown;
-  try {
-    input = JSON.parse(values.input ?? "{}");
-  } catch {
-    throw new Error("--input is not valid JSON");
-  }
+  const input = jsonInputOption(values.input);
 
   const sim = new Sim(await readPark(save));
   const result = sim.execute(command, input, "agent");

@@ -4,7 +4,9 @@ import { Rng } from "../rng.js";
 import { hashWorld } from "../world/hash.js";
 import { MAX_MAP, SCHEMA_VERSION, type LogEntry, type World } from "../world/types.js";
 import { fromBase64, toBase64 } from "./base64.js";
+import { crc32 } from "./crc32.js";
 import { CORRUPT_MESSAGE, SaveError } from "./error.js";
+import { validateWorldInvariants } from "./invariants.js";
 import { migrate, schemaVersionOf } from "./migrate.js";
 
 /*
@@ -19,19 +21,23 @@ import { migrate, schemaVersionOf } from "./migrate.js";
  * in browsers. Keys are written in a fixed order and the gzip header carries no timestamp, so
  * saving the same world twice gives the same bytes.
  *
- * `hash` is `hashWorld` of the saved world and is the last key. `gunzipSync` does not check the gzip
- * CRC, so a damaged file can unzip to different but well-formed content; loading rebuilds the world
- * and refuses it, with "Save file is corrupt", unless its hash matches. The file cannot tell damage
- * from an edit, so a save someone edited by hand gets the same message. `hashWorld` leaves out
- * `meta.created` and the contents of the log (only its length), so edits to those are not caught.
+ * `hash` is `hashWorld` of the saved world and is the last key. Loading guards against damage in
+ * three ways.
  *
- * Known limit: the stored `hash` is compared against the CURRENT build's `hashWorld` of the world
- * rebuilt after `migrate`. A migration cannot drop or recompute the stored hash, so any change to
- * what `hashWorld` covers, and any migration that changes state it covers, makes the saves written
- * before the change fail to load as corrupt. Nothing is affected while `SCHEMA_VERSION` is 1 and
- * `MIGRATIONS` is empty. The planned fix is to verify the gzip CRC32 trailer ourselves, which
- * guards against damage without depending on `hashWorld`, and to compare `hash` only when no
- * migration ran. It is scheduled for the first `SCHEMA_VERSION` bump and must land with it.
+ * 1. The gzip trailer. `gunzipSync` does not check it, so `deserializeWorld` reads it itself before
+ *    it parses anything: the last eight bytes are the CRC32 of the unzipped bytes, then their
+ *    length, both little-endian, and a mismatch is "Save file is corrupt". It depends on the file
+ *    alone, so it holds for a save from any schema version.
+ * 2. The hash. Once the world is rebuilt, `hashWorld` of it must equal `hash`, unless a migration
+ *    ran. A migrated save's `hash` was computed by the build that wrote it, over the state it had
+ *    then, so after a migration that changes state `hashWorld` covers (or a change to what
+ *    `hashWorld` covers) it would disagree with a sound save. The trailer has already vouched for
+ *    the bytes, and the schema and the invariants vouch for the shape; the next save writes a fresh
+ *    `hash`. A current save someone edited by hand and zipped again passes the trailer but not the
+ *    hash, so it gets the same message as damage. `hashWorld` leaves out `meta.created` and the
+ *    contents of the log (only its length), so edits to those are not caught.
+ * 3. The invariants in `validateWorldInvariants`: values in range, log ids in order, stack ids
+ *    that name log entries. They are checked on every load, migrated or not.
  */
 
 type TypedArrayName = "Int16Array" | "Uint8Array";
@@ -160,19 +166,56 @@ export function serializeWorld(world: World): Uint8Array {
   return gzipSync(strToU8(JSON.stringify(doc)), { mtime: 0 });
 }
 
-function parseDocument(bytes: Uint8Array): unknown {
+/** The little-endian unsigned 32-bit integer at `offset`. */
+function readUint32(bytes: Uint8Array, offset: number): number {
+  return (
+    ((bytes[offset] as number) |
+      ((bytes[offset + 1] as number) << 8) |
+      ((bytes[offset + 2] as number) << 16) |
+      ((bytes[offset + 3] as number) << 24)) >>>
+    0
+  );
+}
+
+/**
+ * Unzips a save and checks the gzip trailer, which `gunzipSync` ignores: the CRC32 and the length
+ * of the unzipped bytes, in the last eight bytes of the file. Throws `SaveError` if the bytes are
+ * not gzip or the trailer does not match what came out.
+ */
+function unzip(bytes: Uint8Array): Uint8Array {
+  let payload: Uint8Array;
   try {
-    return JSON.parse(strFromU8(gunzipSync(bytes)));
+    payload = gunzipSync(bytes);
+  } catch (error) {
+    throw new SaveError(CORRUPT_MESSAGE, { cause: error });
+  }
+  // `gunzipSync` has refused anything too short to hold a header and a trailer.
+  const trailer = bytes.length - 8;
+  if (
+    readUint32(bytes, trailer) !== crc32(payload) ||
+    readUint32(bytes, trailer + 4) !== payload.length >>> 0
+  ) {
+    throw new SaveError(CORRUPT_MESSAGE);
+  }
+  return payload;
+}
+
+function parseDocument(bytes: Uint8Array): unknown {
+  const payload = unzip(bytes);
+  try {
+    return JSON.parse(strFromU8(payload));
   } catch (error) {
     throw new SaveError(CORRUPT_MESSAGE, { cause: error });
   }
 }
 
 /**
- * Reads a save written by `serializeWorld`. Throws `SaveError` if the bytes are not a valid save, if
- * it is from a newer schema than this build reads, if an older schema cannot be migrated, or if the
- * rebuilt world does not match the hash stored in the save. Older saves are run through `migrate`
- * before they are checked.
+ * Reads a save written by `serializeWorld`. Throws `SaveError` if the bytes are not a valid save
+ * (including a gzip CRC32 or length that does not match), if it is from a newer schema than this
+ * build reads, if an older schema cannot be migrated, if the rebuilt world breaks one of the
+ * invariants in `validateWorldInvariants`, or if it does not match the hash stored in the save.
+ * Older saves are run through `migrate` first, and for those the stored hash is not compared: it
+ * describes the world as the older build saw it.
  */
 export function deserializeWorld(bytes: Uint8Array): World {
   const raw = parseDocument(bytes);
@@ -238,6 +281,10 @@ export function deserializeWorld(bytes: Uint8Array): World {
     redoStack: doc.redoStack,
     nextId: doc.nextId,
   };
-  if (hashWorld(world) !== doc.hash) throw new SaveError(CORRUPT_MESSAGE);
+  const problem = validateWorldInvariants(world);
+  if (problem !== null) throw new SaveError(CORRUPT_MESSAGE, { cause: new Error(problem) });
+  // The stored hash comes from the build that wrote the save; see the comment at the top.
+  const migrated = version < SCHEMA_VERSION;
+  if (!migrated && hashWorld(world) !== doc.hash) throw new SaveError(CORRUPT_MESSAGE);
   return world;
 }

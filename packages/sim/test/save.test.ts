@@ -1,6 +1,7 @@
 import { gunzipSync, gzipSync, strFromU8, strToU8 } from "fflate";
 import { describe, expect, it } from "vitest";
 import {
+  MAX_HEIGHT,
   MIGRATIONS,
   Rng,
   SCHEMA_VERSION,
@@ -11,9 +12,11 @@ import {
   hashWorld,
   migrate,
   serializeWorld,
+  type Migration,
   type World,
 } from "../src/index.js";
 import { fromBase64, toBase64 } from "../src/save/base64.js";
+import { validateWorldInvariants } from "../src/save/invariants.js";
 
 const CREATED = "2026-10-16T12:00:00.000Z";
 
@@ -179,11 +182,11 @@ describe("save round trip", () => {
     expect(loaded.rng.next()).toBe(Rng.fromState(world.rng.state).next());
   });
 
-  it("round-trips negative and extreme corner heights and every surface value", () => {
+  it("round-trips the lowest and highest corner heights, and every surface and water value", () => {
     const world = freshWorld(3, 2);
-    world.terrain.corners.set([-1, -32768, 32767, 0, 255, 256, -256, 0x0102, -2, 7, 8, 9]);
-    world.terrain.surface.set([0, 1, 2, 3, 4, 255]);
-    world.terrain.water.set([0, 1, 2, 3, 4, 255]);
+    world.terrain.corners.set([0, MAX_HEIGHT, 1, 62, 31, 32, 8, 16, 2, 7, 8, 9]);
+    world.terrain.surface.set([0, 1, 2, 3, 4, 0]);
+    world.terrain.water.set([0, 1, 2, 31, 62, MAX_HEIGHT]);
     const loaded = deserializeWorld(serializeWorld(world));
     expect(loaded.terrain.corners).toStrictEqual(world.terrain.corners);
     expect(loaded.terrain.surface).toStrictEqual(world.terrain.surface);
@@ -192,10 +195,10 @@ describe("save round trip", () => {
 
   it("round-trips the biggest map", () => {
     const world = createWorld({ width: 256, height: 256, seed: 1, name: "big" });
-    world.terrain.corners[12345] = -77;
+    world.terrain.corners[12345] = 41;
     const loaded = deserializeWorld(serializeWorld(world));
     expect(hashWorld(loaded)).toBe(hashWorld(world));
-    expect(loaded.terrain.corners[12345]).toBe(-77);
+    expect(loaded.terrain.corners[12345]).toBe(41);
   });
 
   it("round-trips a negative cash balance, names with quotes, and an empty created time", () => {
@@ -504,25 +507,243 @@ describe("save integrity", () => {
     const world = createWorld({ width: 3, height: 3, seed: 9, name: "flip" });
     const expected = hashWorld(world);
     const bytes = serializeWorld(world);
+    const payload = gunzipSync(bytes);
+    // Our own gzip header has no optional fields, so it is 10 bytes; the trailer is the last 8.
+    const bodyStart = 10;
+    const trailerStart = bytes.length - 8;
     let loadedAnyway = 0;
+    let refusedInBody = 0;
     for (const mask of [0x01, 0x80, 0xff]) {
       for (let i = 0; i < bytes.length; i++) {
         const damaged = Uint8Array.from(bytes);
         damaged[i] = (damaged[i] as number) ^ mask;
+        const label = `byte ${i} xor ${mask}`;
         let loaded: World | undefined;
         try {
           loaded = deserializeWorld(damaged);
         } catch (error) {
-          expect(error).toBeInstanceOf(SaveError);
+          expect(error, label).toBeInstanceOf(SaveError);
+          if (i >= bodyStart && i < trailerStart) refusedInBody++;
         }
         if (loaded !== undefined) {
-          expect(hashWorld(loaded), `byte ${i} xor ${mask}`).toBe(expected);
+          expect(hashWorld(loaded), label).toBe(expected);
           loadedAnyway++;
+          // The CRC32 and length in the trailer are checked, so no flip there gets through. The
+          // header and the deflate body can only load when the unzipped bytes did not change at
+          // all, such as a flip in the timestamp or in the padding bits after the last block.
+          expect(i, label).toBeLessThan(trailerStart);
+          expect(Buffer.compare(gunzipSync(damaged), payload), label).toBe(0);
         }
       }
     }
     // Some flips land where they change nothing, such as the gzip header's OS byte.
     expect(loadedAnyway).toBeGreaterThan(0);
+    // Flips in the compressed data that change what it unzips to are refused.
+    expect(refusedInBody).toBeGreaterThan(0);
+  });
+
+  it("refuses every change to the gzip trailer, though the content is intact", () => {
+    const bytes = serializeWorld(playedSim().world);
+    const payload = gunzipSync(bytes);
+    // The last 8 bytes are the CRC32 of the unzipped bytes, then their length, little-endian.
+    for (let i = bytes.length - 8; i < bytes.length; i++) {
+      const damaged = Uint8Array.from(bytes);
+      damaged[i] = (damaged[i] as number) ^ 0x01;
+      // `fflate` ignores the CRC32 and unzips the same document, which the hash would accept.
+      if (i < bytes.length - 4) expect(Buffer.compare(gunzipSync(damaged), payload)).toBe(0);
+      expectSaveError(() => deserializeWorld(damaged), /^Save file is corrupt$/);
+    }
+    // A length one too big still unzips to the whole document, so only the length check sees it.
+    const longer = Uint8Array.from(bytes);
+    new DataView(longer.buffer).setUint32(longer.length - 4, payload.length + 1, true);
+    expect(Buffer.compare(gunzipSync(longer), payload)).toBe(0);
+    expectSaveError(() => deserializeWorld(longer), /^Save file is corrupt$/);
+  });
+
+  it("reads the trailer from the end, so a gzip header with a file name still loads", () => {
+    const world = playedSim().world;
+    const payload = gunzipSync(serializeWorld(world));
+    const named = gzipSync(payload, { mtime: 0, filename: "my.park" });
+    expect(named.length).toBeGreaterThan(serializeWorld(world).length);
+    expect(hashWorld(deserializeWorld(named))).toBe(hashWorld(world));
+  });
+});
+
+/** Runs `run` with `step` registered as the migration from schema 0, and always removes it. */
+function withMigrationFromZero<T>(step: Migration, run: () => T): T {
+  MIGRATIONS[0] = step;
+  try {
+    return run();
+  } finally {
+    delete MIGRATIONS[0];
+  }
+}
+
+/** A schema 0 save: the current document with its version changed, zipped. */
+function oldSave(
+  world: World,
+  edit: (doc: Record<string, unknown>) => void = () => {},
+): Uint8Array {
+  const doc = readDoc(serializeWorld(world));
+  doc.schemaVersion = 0;
+  edit(doc);
+  return writeDoc(doc);
+}
+
+const addFiveHundredCents: Migration = (old) => {
+  const doc = old as { finance: { cash: number } };
+  return { ...doc, finance: { ...doc.finance, cash: doc.finance.cash + 500 } };
+};
+
+describe("migration and the stored hash", () => {
+  it("loads a migrated save whose stored hash no longer matches, and rehashes the world it built", () => {
+    const world = playedSim().world;
+    const storedHash = hashWorld(world);
+    const bytes = oldSave(world);
+
+    const loaded = withMigrationFromZero(addFiveHundredCents, () => deserializeWorld(bytes));
+
+    // The world the migration should have produced, built another way.
+    const expected = deserializeWorld(serializeWorld(world));
+    expected.finance.cash += 500;
+    expect(loaded.finance.cash).toBe(world.finance.cash + 500);
+    expect(hashWorld(loaded)).toBe(hashWorld(expected));
+    expect(hashWorld(loaded)).not.toBe(storedHash);
+    expect(loaded.meta.schemaVersion).toBe(SCHEMA_VERSION);
+    // Saved again, it is a current save whose hash is the new one.
+    expect(readDoc(serializeWorld(loaded)).hash).toBe(hashWorld(loaded));
+    expect(hashWorld(deserializeWorld(serializeWorld(loaded)))).toBe(hashWorld(loaded));
+  });
+
+  it("does not compare the stored hash of a migrated save, even a blank one", () => {
+    const world = playedSim().world;
+    const bytes = oldSave(world, (doc) => (doc.hash = ""));
+    const loaded = withMigrationFromZero(
+      (old) => old,
+      () => deserializeWorld(bytes),
+    );
+    expect(hashWorld(loaded)).toBe(hashWorld(world));
+  });
+
+  it("still compares the stored hash of a save that is already current", () => {
+    const doc = readDoc(serializeWorld(playedSim().world));
+    (doc.finance as { cash: number }).cash += 500;
+    withMigrationFromZero(addFiveHundredCents, () =>
+      expectSaveError(() => deserializeWorld(writeDoc(doc)), /^Save file is corrupt$/),
+    );
+  });
+
+  it("still refuses a migrated save whose gzip trailer is damaged", () => {
+    const bytes = oldSave(playedSim().world);
+    const damaged = Uint8Array.from(bytes);
+    damaged[bytes.length - 8] = (damaged[bytes.length - 8] as number) ^ 0x01;
+    withMigrationFromZero(
+      (old) => old,
+      () => {
+        expect(() => deserializeWorld(bytes)).not.toThrow();
+        expectSaveError(() => deserializeWorld(damaged), /^Save file is corrupt$/);
+      },
+    );
+  });
+
+  it("still holds a migrated save to the load invariants", () => {
+    // Without the hash check, the invariants are what stops a migration that loses the id counter.
+    const bytes = oldSave(playedSim().world);
+    withMigrationFromZero(
+      (old) => ({ ...(old as object), nextId: 1 }),
+      () => expectSaveError(() => deserializeWorld(bytes), /^Save file is corrupt$/),
+    );
+  });
+});
+
+/** Ways to break a world that `playedSim` makes (log ids 1 to 4, `nextId` 5, stacks [1, 2] and [3]). */
+const VIOLATIONS: Array<[string, (world: World) => void, RegExp]> = [
+  ["a corner above the highest height", (w) => (w.terrain.corners[5] = MAX_HEIGHT + 1), /corner/],
+  ["a corner below zero", (w) => (w.terrain.corners[5] = -1), /corner/],
+  ["a surface above 4", (w) => (w.terrain.surface[3] = 5), /surface/],
+  ["a water level above the highest height", (w) => (w.terrain.water[3] = MAX_HEIGHT + 1), /water/],
+  [
+    "a log id used twice",
+    (w) => ((w.log[1] as { id: number }).id = (w.log[0] as { id: number }).id),
+    /log id/,
+  ],
+  [
+    "log ids out of order",
+    (w) =>
+      w.log.splice(0, 2, w.log[1] as (typeof w.log)[number], w.log[0] as (typeof w.log)[number]),
+    /log id/,
+  ],
+  ["a log id of zero", (w) => ((w.log[0] as { id: number }).id = 0), /log id/],
+  ["a log id that is not below nextId", (w) => (w.nextId = 4), /nextId/],
+  ["an undo stack id with no log entry", (w) => w.undoStack.push(99), /undo stack/],
+  ["a redo stack id with no log entry", (w) => w.redoStack.push(99), /redo stack/],
+  [
+    "an id in both stacks",
+    (w) => w.redoStack.push(w.undoStack[0] as number),
+    /both the undo stack and the redo stack/,
+  ],
+  ["an id twice in one stack", (w) => w.undoStack.push(w.undoStack[0] as number), /more than once/],
+];
+
+describe("validateWorldInvariants", () => {
+  it("accepts a fresh world, a played one, and the extreme legal values", () => {
+    expect(validateWorldInvariants(freshWorld())).toBeNull();
+    const played = playedSim().world;
+    expect(played.undoStack.length).toBeGreaterThan(0);
+    expect(played.redoStack.length).toBeGreaterThan(0);
+    expect(validateWorldInvariants(played)).toBeNull();
+
+    const extremes = freshWorld(2, 2);
+    extremes.terrain.corners.set([0, MAX_HEIGHT, 0, MAX_HEIGHT, 0, MAX_HEIGHT, 0, MAX_HEIGHT, 0]);
+    extremes.terrain.surface.set([0, 4, 0, 4]);
+    extremes.terrain.water.set([0, MAX_HEIGHT, 0, MAX_HEIGHT]);
+    expect(validateWorldInvariants(extremes)).toBeNull();
+  });
+
+  it("allows a stack entry that has no undo data, as a loan does", () => {
+    const played = playedSim().world;
+    const loan = played.log.find((entry) => entry.name === "finance_take_loan");
+    expect(loan).toBeDefined();
+    expect("undo" in (loan as object)).toBe(false);
+    expect(played.undoStack).toContain(loan?.id);
+    expect(validateWorldInvariants(played)).toBeNull();
+  });
+
+  it.each(VIOLATIONS)("reports %s", (_label, damage, reason) => {
+    const world = playedSim().world;
+    expect(validateWorldInvariants(world)).toBeNull();
+    damage(world);
+    expect(validateWorldInvariants(world)).toMatch(reason);
+  });
+});
+
+describe("deserializeWorld and the load invariants", () => {
+  it.each(VIOLATIONS)(
+    "refuses a save with %s, though its hash and gzip are intact",
+    (_label, damage, reason) => {
+      const world = playedSim().world;
+      damage(world);
+      // `serializeWorld` hashes the damaged world, so only the invariants can refuse this save.
+      const bytes = serializeWorld(world);
+      let caught: unknown;
+      try {
+        deserializeWorld(bytes);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(SaveError);
+      expect((caught as SaveError).message).toBe("Save file is corrupt");
+      expect(((caught as SaveError).cause as Error).message).toMatch(reason);
+    },
+  );
+
+  it("still loads the largest legal terrain values", () => {
+    const world = freshWorld(2, 2);
+    world.terrain.corners.fill(MAX_HEIGHT);
+    world.terrain.surface.fill(4);
+    world.terrain.water.fill(MAX_HEIGHT);
+    const loaded = deserializeWorld(serializeWorld(world));
+    expect(hashWorld(loaded)).toBe(hashWorld(world));
   });
 });
 

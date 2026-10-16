@@ -13,7 +13,7 @@ pnpm install
 pnpm build
 ```
 
-Make a park, change it, let time pass, and look at it. Every command prints one line of JSON, and `run` and `exec` leave the file alone unless you give `--out`.
+Make a park, change it, let time pass, and look at it. Every command prints one line of JSON, and `run` and `exec` leave the file alone unless you give `--out`; `query` never changes it, and `undo` and `redo` always need `--out`.
 
 ```bash
 # Create a 64 by 64 park in my.park (add --force to replace a file that is already there)
@@ -27,9 +27,17 @@ node apps/cli/dist/index.js run --save my.park --days 30 --out my.park
 
 # Show the park's status and its recent command log
 node apps/cli/dist/index.js inspect my.park
+
+# Ask a read-only question (the result is {"ok":true,"result":...}); the file is never touched
+node apps/cli/dist/index.js query --save my.park --name park_status
+node apps/cli/dist/index.js query --save my.park --name terrain_get --input '{"x":0,"y":0,"w":4,"h":4}'
+
+# Take back the last command, then do it again (both need --out)
+node apps/cli/dist/index.js undo --save my.park --out my.park
+node apps/cli/dist/index.js redo --save my.park --out my.park
 ```
 
-Command names such as `terrain_raise` come from `packages/sim/src/commands`.
+Command names such as `terrain_raise` come from `packages/sim/src/commands`, and query names such as `park_status` and `terrain_get` from `packages/sim/src/queries`. A failed command or query exits 1 and still prints its result.
 
 ## Connect Claude Code
 
@@ -47,7 +55,7 @@ For a client that cannot start a process, serve it over HTTP instead:
 node /absolute/path/to/apps/cli/dist/index.js mcp --save /absolute/path/my.park --out /absolute/path/my.park --http 7788 --token <a-secret-you-choose>
 ```
 
-The server listens on `127.0.0.1` and wants `Authorization: Bearer <token>` on every request. To keep the token out of your process list, leave out `--token` and set `COASTERWORKS_MCP_TOKEN` instead. Over HTTP the `save_write` and `save_load` file tools are off, because they let any holder of the token read and write files as you. Turn them on with `--allow-files` only if you trust every client.
+The server listens on `127.0.0.1` and wants `Authorization: Bearer <token>` on every request, with a `Host` header that names the local machine (`127.0.0.1` or `localhost`), so a web page cannot reach it through a rebound DNS name. To keep the token out of your process list, leave out `--token` and set `COASTERWORKS_MCP_TOKEN` instead. If you give neither, the server makes a random token and prints it with the URL, as `{"url":...,"port":...,"token":...}`. Over HTTP the `save_write` and `save_load` file tools are off, because they let any holder of the token read and write files as you. Turn them on with `--allow-files` only if you trust every client; even then they only touch paths that end in `.park`.
 
 Configuration for an MCP client that speaks Streamable HTTP, such as a project's `.mcp.json`. Claude Code expands environment variables in `.mcp.json`, so the file names `COASTERWORKS_MCP_TOKEN` and should not hold a literal token (it is usually committed):
 
@@ -67,11 +75,11 @@ Configuration for an MCP client that speaks Streamable HTTP, such as a project's
 
 - `packages/sim`: the deterministic simulation core: world, commands, queries, undo, and the save format (`@coasterworks/sim`)
 - `packages/mcp`: the MCP server that exposes sim commands to agents over stdio and HTTP (`@coasterworks/mcp`)
-- `apps/cli`: the `coasterworks` command line app: `new`, `run`, `inspect`, `exec`, and `mcp`
+- `apps/cli`: the `coasterworks` command line app: `new`, `run`, `inspect`, `exec`, `query`, `undo`, `redo`, and `mcp`
 
 ## Determinism
 
-The simulation uses integer math only and draws all its randomness from a seeded generator, so the same seed and the same command log always produce the same park. CI runs a golden scenario on Linux and macOS and requires both to end on the same recorded hash.
+The simulation uses integer math only and draws all its randomness from a seeded generator, so the same seed and the same command log always produce the same park. CI runs a golden scenario on Linux and macOS (Node) and again on JavaScriptCore (Bun), and requires all of them to end on the same recorded hash.
 
 ## Development
 
