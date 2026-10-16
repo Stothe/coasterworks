@@ -21,8 +21,17 @@ import { migrate, schemaVersionOf } from "./migrate.js";
  *
  * `hash` is `hashWorld` of the saved world and is the last key. `gunzipSync` does not check the gzip
  * CRC, so a damaged file can unzip to different but well-formed content; loading rebuilds the world
- * and refuses it unless its hash matches. `hashWorld` leaves out `meta.created` and the contents of
- * the log (only its length), so edits to those are not caught.
+ * and refuses it, with "Save file is corrupt", unless its hash matches. The file cannot tell damage
+ * from an edit, so a save someone edited by hand gets the same message. `hashWorld` leaves out
+ * `meta.created` and the contents of the log (only its length), so edits to those are not caught.
+ *
+ * Known limit: the stored `hash` is compared against the CURRENT build's `hashWorld` of the world
+ * rebuilt after `migrate`. A migration cannot drop or recompute the stored hash, so any change to
+ * what `hashWorld` covers, and any migration that changes state it covers, makes the saves written
+ * before the change fail to load as corrupt. Nothing is affected while `SCHEMA_VERSION` is 1 and
+ * `MIGRATIONS` is empty. The planned fix is to verify the gzip CRC32 trailer ourselves, which
+ * guards against damage without depending on `hashWorld`, and to compare `hash` only when no
+ * migration ran. It is scheduled for the first `SCHEMA_VERSION` bump and must land with it.
  */
 
 type TypedArrayName = "Int16Array" | "Uint8Array";

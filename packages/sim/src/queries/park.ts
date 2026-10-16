@@ -7,7 +7,7 @@ import { MAX_HEIGHT } from "../world/types.js";
 export const parkStatus = defineQuery({
   name: "park_status",
   description:
-    "Describes the park: name, tick, calendar date, cash and loan in cents, and map size. Guest count and rating are 0 until guests exist.",
+    "Describes the park: name, tick, calendar date, cash and loan in cents, and map size. `month` is 0-based (March = 0). Guest count and rating are 0 until guests exist.",
   category: "park",
   input: z.object({}),
   run: (world) => {

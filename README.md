@@ -16,7 +16,7 @@ pnpm build
 Make a park, change it, let time pass, and look at it. Every command prints one line of JSON, and `run` and `exec` leave the file alone unless you give `--out`.
 
 ```bash
-# Create a 64 by 64 park in my.park
+# Create a 64 by 64 park in my.park (add --force to replace a file that is already there)
 node apps/cli/dist/index.js new --out my.park --name "Demo Park" --seed 1
 
 # Raise a patch of land (the result says what it cost, in cents)
@@ -49,7 +49,7 @@ node /absolute/path/to/apps/cli/dist/index.js mcp --save /absolute/path/my.park 
 
 The server listens on `127.0.0.1` and wants `Authorization: Bearer <token>` on every request. To keep the token out of your process list, leave out `--token` and set `COASTERWORKS_MCP_TOKEN` instead. Over HTTP the `save_write` and `save_load` file tools are off, because they let any holder of the token read and write files as you. Turn them on with `--allow-files` only if you trust every client.
 
-Configuration for an MCP client that speaks Streamable HTTP, such as a project's `.mcp.json`:
+Configuration for an MCP client that speaks Streamable HTTP, such as a project's `.mcp.json`. Claude Code expands environment variables in `.mcp.json`, so the file names `COASTERWORKS_MCP_TOKEN` and should not hold a literal token (it is usually committed):
 
 ```json
 {
@@ -57,7 +57,7 @@ Configuration for an MCP client that speaks Streamable HTTP, such as a project's
     "coasterworks": {
       "type": "http",
       "url": "http://127.0.0.1:7788/mcp",
-      "headers": { "Authorization": "Bearer <a-secret-you-choose>" }
+      "headers": { "Authorization": "Bearer ${COASTERWORKS_MCP_TOKEN}" }
     }
   }
 }

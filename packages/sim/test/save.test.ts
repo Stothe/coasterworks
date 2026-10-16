@@ -105,13 +105,19 @@ describe("save round trip", () => {
 
   it("keeps undoneBy and omits absent optional fields", () => {
     const sim = playedSim();
+    // `playedSim` steps the clock directly, which logs nothing; this logs a `sim_advance`.
+    expect(sim.execute("sim_advance", { days: 1 }).ok).toBe(true);
     const undone = sim.world.log.filter((entry) => entry.undoneBy !== undefined);
     expect(undone.length).toBeGreaterThan(0);
     const loaded = deserializeWorld(serializeWorld(sim.world));
     // toStrictEqual tells `{ undo: undefined }` from a missing key.
     expect(loaded.log).toStrictEqual(sim.world.log);
-    const plain = loaded.log.find((entry) => entry.name === "sim_advance");
-    if (plain) expect("undo" in plain).toBe(false);
+    // A loan returns no undo data, and time cannot be undone: neither entry gets an `undo` key.
+    for (const name of ["finance_take_loan", "sim_advance"]) {
+      const plain = loaded.log.find((entry) => entry.name === name);
+      expect(plain, name).toBeDefined();
+      expect("undo" in (plain as object), name).toBe(false);
+    }
   });
 
   it("round-trips log entries that have no input, a null undo, or an undoneBy", () => {
