@@ -193,13 +193,32 @@ A query is a named read: `park.status`, `ride.get`, `ride.list`, `guest.list`, `
 
 All mutations go through commands. The UI, the MCP server, the CLI, replay, and the assistant are all clients. The sim keeps an append-only command log with the issuing client (player, agent, replay) and a tick number, which gives undo, replay, determinism tests, and an in-game timeline of what the assistant did.
 
+Undo semantics **(call)**, since time keeps passing:
+
+- Every command carries the data for its inverse. Undo applies the inverse as a new logged command (`undo` with the target command id), so replay stays complete. Redo likewise.
+- The inverse is validated against the current state like any command. If something now depends on the original (a ride built on raised terrain, a path a queue joins), undo is rejected inline with a one-line reason ("Demolish Thunder Run first"). Guests standing on changed tiles are not a conflict; the sim relocates them.
+- Money inverses refund or recharge the exact original amount. Interest, wages, and income that accrued in between are separate transactions and stay.
+- `sim.advance`, speed changes, and saves are not commands in the undo stack and do not clear it.
+- Assistant messages get a checkpoint: before the first tool call of a message, the sim snapshots the world. "Undo this message" restores the snapshot, rewinding time, and is logged as `restore_checkpoint` for replay. A restore clears the player's undo stack.
+- The determinism test for undo is apply-then-undo with no ticks in between returns the same state hash.
+
 ### 5.4 Simulation loop
 
-Fixed tick rate, 40 ticks per second of game time at 1x, scaled by speed. Seeded PRNG, one stream per system to keep changes local. Systems run in a fixed order each tick: time and weather, finances (monthly), research, ride operation and vehicles, guest decisions and movement, staff, park rating, notifications. The worker sends the renderer a compact snapshot each frame (typed arrays for guest and vehicle transforms, dirty lists for tiles and entities) so a 5,000-guest park does not serialize 5,000 objects per frame.
+Fixed tick rate, 40 ticks per second of game time at 1x, scaled by speed. Seeded PRNG, one stream per system to keep changes local. State-affecting math is integer or fixed-point (positions, speeds, money, ratings) with lookup tables for trig, never `Math.sin`, `Math.random`, or floating-point accumulation, so JavaScriptCore in the app and V8 in the CLI produce identical hashes. Floats are fine in the renderer. Systems run in a fixed order each tick: time and weather, finances (monthly), research, ride operation and vehicles, guest decisions and movement, staff, park rating, notifications. The worker sends the renderer a compact snapshot each frame (typed arrays for guest and vehicle transforms, dirty lists for tiles and entities) so a 5,000-guest park does not serialize 5,000 objects per frame.
 
 Save format: a single JSON document, gzipped, extension `.park`, with a schema version and migrations. Scenarios are `.scenario` (a park plus objectives and starting conditions). Track designs are `.track`. All three are plain data a human or agent can read.
 
-### 5.5 Rendering
+### 5.5 Processes
+
+Process topology **(call)**, because a webview cannot listen on a socket and the app contains no Node by default:
+
+- Desktop app: three processes. The Tauri shell (Rust, thin). A bundled Node sidecar that owns the authoritative sim, the MCP server, the assistant providers, and autosave. The webview, which is renderer plus UI and talks to the sidecar over a local WebSocket with a per-launch token. The sidecar is the same code as the CLI; the app is the CLI with a window.
+- Web demo: no sidecar. The sim runs in a Web Worker in the page, behind the same client interface (`SimHost` with `worker` and `socket` implementations). No MCP, no assistant, no headless in the browser.
+- Snapshots from sim to renderer are binary frames (typed arrays for guest and vehicle transforms, dirty lists for tiles and entities) sent at tick rate and interpolated by the renderer. At 5,000 guests that is well under 100 KB per tick over localhost.
+- `view.screenshot` in the app is served by the sidecar asking the webview for a canvas capture.
+- Packaging: the sidecar is a single-file Node binary built per platform and signed with the app. Phase 0 includes this, which is the main reason phase 0 is not small.
+
+### 5.6 Rendering
 
 Terrain is chunked meshes rebuilt per chunk on edit. Paths, queues, and scenery are instanced per type. Guests and vehicles are instanced with per-instance color and a small set of animation poses. Coaster track is generated geometry per family: a rail profile swept along the curve, ties at intervals, supports dropped to terrain. Picking uses a GPU id buffer so clicking a guest in a crowd works. Lighting: one shadowed directional light following the time of day, a hemisphere light, tone mapping, fog. Target: 60 fps on an M1 Air at 1440x900 with a mid-size park.
 
@@ -207,11 +226,11 @@ Terrain is chunked meshes rebuilt per chunk on edit. Paths, queues, and scenery 
 
 ### 6.1 Server
 
-The game process runs an MCP server whenever a park is open. Transport: Streamable HTTP on `127.0.0.1` with a per-session token shown in Settings, plus a one-click "copy config for Claude Desktop / Claude Code" button. The CLI runs the same server over stdio against a save file with no renderer. Local only; the sim makes no network calls.
+The sidecar runs an MCP server whenever a park is open. Transport: Streamable HTTP on `127.0.0.1` with a per-session token shown in Settings, plus a one-click "copy config for Claude Desktop / Claude Code" button. For clients that only launch stdio servers, `coasterworks mcp --attach` is a stdio proxy to the running app. `coasterworks mcp --save park.park` runs the same server over stdio against a save file with no renderer. Local only; the sim makes no network calls.
 
 Tools are generated from the registry: every command and every query becomes a tool with the same name, description, and schema. Agent-issued commands are attributed in the command log and appear in the in-game timeline; they are undoable like the player's.
 
-Extra tools for agents: `sim.advance(days)` (runs headless-fast, even in the app, with the renderer paused), `sim.set_speed`, `view.screenshot` (PNG of the current viewport, or a given camera in headless mode), `view.focus(entity)`, `save.write`, `save.load`, `coaster.build_from_points` (the draw-mode builder as one call), `coaster.evaluate` (ratings without building). Resources: `park://status`, `park://rides`, `park://guests/summary`, and the docs. Prompts: "design a coaster for this plot," "why are guests unhappy," "plan a year."
+Extra tools for agents: `sim.advance(days)` (runs headless-fast, even in the app, with the renderer paused), `sim.set_speed`, `view.screenshot` (PNG of the current viewport; app only), `view.overview` (a top-down PNG map of an area drawn in pure Node, plus a structured text summary of what is on it; works headless, so an agent without a window can still see the park), `view.focus(entity)`, `save.write`, `save.load`, `coaster.build_from_points` (the draw-mode builder as one call), `coaster.evaluate` (ratings without building). Rendered 3D screenshots in headless mode are deferred to phase 3 **(call)**; they would need a headless Chromium in the CLI and CI. Resources: `park://status`, `park://rides`, `park://guests/summary`, and the docs. Prompts: "design a coaster for this plot," "why are guests unhappy," "plan a year."
 
 ### 6.2 Headless mode
 
@@ -255,7 +274,7 @@ Phase 4, platforms: Windows and Linux builds through Tauri, code signing and not
 ## 9. Testing
 
 - Sim: unit tests per system; golden replays (seed plus command log produces a known state hash) that run in CI on every push and on every platform in the matrix.
-- Protocol: every command has a schema test and a validator test; every command must be undoable and the test proves apply-undo returns the same hash.
+- Protocol: every command has a schema test and a validator test; every command must be undoable and the test proves apply-undo with no ticks in between returns the same hash.
 - MCP: integration tests spin up the stdio server and drive it with the SDK client; the README demo script is a test.
 - Render and UI: Playwright smoke on the web build with a screenshot diff of a fixed park at a fixed camera; a manual checklist for the Mac app per release.
 - Performance: a benchmark park with 5,000 guests, tick time and frame time tracked in CI with a failing threshold.
@@ -278,6 +297,11 @@ For Steve to check while reading. Each is overridable.
 12. MIT code, CC BY 4.0 assets.
 13. Phasing in section 8, with Steve's afternoon as phase 1.
 14. Non-goals: multiplayer, RCT file import, mobile.
+15. Desktop app is a Node sidecar that owns the sim, plus a webview client; the web demo runs the sim in a worker (5.5).
+16. Undo is inverse commands with inline conflict rejection; assistant messages get a time-rewinding checkpoint (5.3).
+17. Headless agents get a top-down map and text overview; rendered 3D screenshots are app-only until phase 3 (6.1).
+18. Integer and fixed-point sim math for cross-engine determinism (5.4).
+19. A stdio attach proxy for MCP clients that cannot use HTTP (6.1).
 
 ## 11. Left to the builder
 
