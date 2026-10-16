@@ -6,7 +6,7 @@ import type { Registry } from "./registry.js";
 export type ExecResult = { ok: true; id: number; cost: number } | { ok: false; error: string };
 
 /** Formats integer cents as dollars with two decimals and no separators, such as `-$3.50`. */
-function formatMoney(cents: number): string {
+export function formatMoney(cents: number): string {
   const abs = Math.abs(cents);
   const dollars = Math.trunc(abs / 100);
   const rest = String(abs % 100).padStart(2, "0");

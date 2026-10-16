@@ -76,13 +76,15 @@ export function parseInput<I>(schema: z.ZodType<I>, raw: unknown): ParseResult<I
   return { ok: false, error };
 }
 
+export type QueryResult = { ok: true; result: unknown } | { ok: false; error: string };
+
 /** Parses the input and runs the named query. */
 export function runQuery(
   world: World,
   registry: Registry,
   name: string,
   rawInput: unknown,
-): { ok: true; result: unknown } | { ok: false; error: string } {
+): QueryResult {
   const def = registry.query(name);
   if (!def) return { ok: false, error: `Unknown query: ${name}` };
   const parsed = parseInput(def.input, rawInput);

@@ -27,7 +27,7 @@ describe("createDefaultRegistry", () => {
   it("registers the six terrain commands as undoable terrain commands", () => {
     const entries = createDefaultRegistry()
       .catalog()
-      .filter((e) => e.kind === "command");
+      .filter((e) => e.kind === "command" && e.category === "terrain");
     expect(entries.map((e) => e.name)).toEqual([
       "terrain_raise",
       "terrain_lower",

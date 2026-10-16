@@ -1,4 +1,6 @@
+import { financeRepayLoan, financeTakeLoan } from "./commands/finance.js";
 import { Registry } from "./commands/registry.js";
+import { simAdvance } from "./commands/sim.js";
 import {
   terrainLevel,
   terrainLower,
@@ -17,5 +19,8 @@ export function createDefaultRegistry(): Registry {
   registry.register(terrainSmooth);
   registry.register(terrainSetSurface);
   registry.register(terrainSetWater);
+  registry.register(simAdvance);
+  registry.register(financeTakeLoan);
+  registry.register(financeRepayLoan);
   return registry;
 }
