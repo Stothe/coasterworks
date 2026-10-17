@@ -180,6 +180,18 @@ describe("TileInspector: the five actions", () => {
     expect(buttons()).toEqual(["Raise here", "Lower here", "Level here", "Set water", "Drain"]);
   });
 
+  it("says how high Set water fills, and only that one carries a hint", () => {
+    setup();
+    const group = within(screen.getByRole("group", { name: "Tile actions" }));
+    const water = group.getByRole("button", { name: "Set water" });
+    expect(water.getAttribute("title")).toBe("2 steps above the lowest corner");
+    // The hint is a tooltip: the button is still named for its label.
+    expect(water.textContent).toBe("Set water");
+    for (const name of ["Raise here", "Lower here", "Level here", "Drain"]) {
+      expect(group.getByRole("button", { name }).hasAttribute("title"), name).toBe(false);
+    }
+  });
+
   it("is a row of full-size targets, each a plain button with its own name", () => {
     setup();
     for (const b of within(screen.getByRole("group", { name: "Tile actions" })).getAllByRole(

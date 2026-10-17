@@ -69,6 +69,7 @@ export function TileInspector({ terrain, x, y, execute, notify }: TileInspectorP
           <button
             key={action.id}
             type="button"
+            {...(action.hint !== undefined && { title: action.hint })}
             onClick={() => void runTileAction(action.id, terrain, x, y, execute, notify)}
             className="hud-button rounded-lg bg-white/5 px-3 text-sm font-medium"
           >

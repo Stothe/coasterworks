@@ -13,6 +13,8 @@ export interface TileAction {
   label: string;
   /** What is said when it worked: `Raised`, shown with the tile and the charge. */
   done: string;
+  /** A line that says what the label leaves out, shown as the control's tooltip. */
+  hint?: string;
 }
 
 /** The five, in the order both places list them. */
@@ -20,7 +22,12 @@ export const TILE_ACTIONS: readonly TileAction[] = [
   { id: "raise", label: "Raise here", done: "Raised" },
   { id: "lower", label: "Lower here", done: "Lowered" },
   { id: "level", label: "Level here", done: "Leveled" },
-  { id: "water", label: "Set water", done: "Water set on" },
+  {
+    id: "water",
+    label: "Set water",
+    done: "Water set on",
+    hint: `${WATER_ABOVE.default} steps above the lowest corner`,
+  },
   { id: "drain", label: "Drain", done: "Drained" },
 ];
 

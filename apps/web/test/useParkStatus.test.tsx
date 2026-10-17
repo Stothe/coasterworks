@@ -1,7 +1,12 @@
 import type { SimClient } from "@coasterworks/protocol";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useParkStatus, type ParkStatus } from "../src/state/useParkStatus";
+import {
+  EVENT_DEBOUNCE_MS,
+  PARK_STATUS_MS,
+  useParkStatus,
+  type ParkStatus,
+} from "../src/state/useParkStatus";
 
 const park = (cash: number, over: Partial<ParkStatus> = {}): ParkStatus => ({
   name: "Queryland",
@@ -97,16 +102,51 @@ describe("useParkStatus", () => {
     expect(query).toHaveBeenCalledTimes(4);
   });
 
-  it("clears its timer when the component goes", async () => {
-    const { unmount } = renderHook(() => useParkStatus(client, { active: true }));
+  it("clears its timers when the component goes, the wait after an event too", async () => {
+    const { rerender, unmount } = renderHook(
+      ({ after }) => useParkStatus(client, { active: true, after }),
+      { initialProps: { after: 1 } },
+    );
     await settle();
+    rerender({ after: 2 });
+    // The interval, and the wait that the event began.
+    expect(vi.getTimerCount()).toBe(2);
     unmount();
+    expect(vi.getTimerCount()).toBe(0);
     await wait(5000);
     expect(query).toHaveBeenCalledTimes(1);
-    expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("asks once more when something happens, and starts the second over", async () => {
+  it("does not ask for an event once it has gone inactive", async () => {
+    const { rerender } = renderHook(
+      ({ active, after }) => useParkStatus(client, { active, after }),
+      { initialProps: { active: true, after: 1 } },
+    );
+    await settle();
+    rerender({ active: true, after: 2 });
+    rerender({ active: false, after: 2 });
+    expect(vi.getTimerCount()).toBe(0);
+    await wait(5000);
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not ask for an event that came while it was inactive, but asks at once when it is back", async () => {
+    const { rerender } = renderHook(
+      ({ active, after }) => useParkStatus(client, { active, after }),
+      { initialProps: { active: false, after: 1 } },
+    );
+    rerender({ active: false, after: 2 });
+    await wait(1000);
+    expect(query).not.toHaveBeenCalled();
+    rerender({ active: true, after: 2 });
+    await settle();
+    expect(query).toHaveBeenCalledTimes(1);
+    // That event is already answered by the question that came with being active.
+    await wait(EVENT_DEBOUNCE_MS + 50);
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks once more a moment after something happens, not at that instant", async () => {
     const { result, rerender } = renderHook(
       ({ after }) => useParkStatus(client, { active: true, after }),
       { initialProps: { after: 4 } },
@@ -114,23 +154,69 @@ describe("useParkStatus", () => {
     await settle();
     expect(query).toHaveBeenCalledTimes(1);
 
-    await wait(600);
+    await wait(300);
     query.mockResolvedValue({ ok: true, result: park(900_000) });
     rerender({ after: 5 });
     await settle();
+    expect(query).toHaveBeenCalledTimes(1);
+    await wait(EVENT_DEBOUNCE_MS - 1);
+    expect(query).toHaveBeenCalledTimes(1);
+    await wait(1);
     expect(query).toHaveBeenCalledTimes(2);
     expect(result.current.status?.cash).toBe(900_000);
 
-    // The interval began again with the event: nothing at 600 ms + 400 ms, the next at a second.
-    await wait(999);
+    // The second keeps its own beat: the interval began when the panel did, and the event did
+    // not move it.
+    await wait(PARK_STATUS_MS - 300 - EVENT_DEBOUNCE_MS - 1);
     expect(query).toHaveBeenCalledTimes(2);
     await wait(1);
     expect(query).toHaveBeenCalledTimes(3);
 
     // The same value again is not an event.
     rerender({ after: 5 });
-    await settle();
+    await wait(EVENT_DEBOUNCE_MS * 2);
     expect(query).toHaveBeenCalledTimes(3);
+  });
+
+  it("answers a burst of events with one question once it has paused, and shows the answer", async () => {
+    const { result, rerender } = renderHook(
+      ({ after }) => useParkStatus(client, { active: true, after }),
+      { initialProps: { after: 0 } },
+    );
+    await settle();
+    expect(query).toHaveBeenCalledTimes(1);
+    query.mockResolvedValue({ ok: true, result: park(640_000) });
+
+    // Ten events in 45 ms, each a new id.
+    for (let id = 1; id <= 10; id++) {
+      rerender({ after: id });
+      await wait(5);
+    }
+    // Nothing has gone out while the burst lasted, nor a moment after ...
+    expect(query).toHaveBeenCalledTimes(1);
+    await wait(EVENT_DEBOUNCE_MS - 6);
+    expect(query).toHaveBeenCalledTimes(1);
+    // ... and exactly one goes out once it has paused for the whole wait.
+    await wait(1);
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(result.current.status?.cash).toBe(640_000);
+    await wait(EVENT_DEBOUNCE_MS * 3);
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps waiting while events keep coming, so a long burst is still one question", async () => {
+    const { rerender } = renderHook(({ after }) => useParkStatus(client, { active: true, after }), {
+      initialProps: { after: 0 },
+    });
+    await settle();
+    // An event every 150 ms, which is inside the wait each time: 600 ms of them.
+    for (let id = 1; id <= 4; id++) {
+      await wait(150);
+      rerender({ after: id });
+    }
+    expect(query).toHaveBeenCalledTimes(1);
+    await wait(EVENT_DEBOUNCE_MS);
+    expect(query).toHaveBeenCalledTimes(2);
   });
 
   it("refresh() asks now, for a caller that has just changed the park", async () => {
@@ -174,25 +260,85 @@ describe("useParkStatus", () => {
     expect(result.current.status).toBeNull();
   });
 
-  it("does not let a slow old answer overwrite a newer one", async () => {
-    let finishOld: (answer: Answer) => void = () => {};
-    query.mockImplementationOnce(() => new Promise<Answer>((resolve) => (finishOld = resolve)));
+  it("has one question out at a time, and the one that comes back is shown, not thrown away", async () => {
+    let finishFirst: (answer: Answer) => void = () => {};
+    let finishSecond: (answer: Answer) => void = () => {};
+    query
+      .mockImplementationOnce(() => new Promise<Answer>((resolve) => (finishFirst = resolve)))
+      .mockImplementationOnce(() => new Promise<Answer>((resolve) => (finishSecond = resolve)));
     const { result } = renderHook(() => useParkStatus(client, { active: true }));
-    // The first answer is still on its way when the next query goes out and comes back.
-    query.mockResolvedValue({ ok: true, result: park(800_000) });
-    await wait(1000);
-    expect(result.current.status?.cash).toBe(800_000);
+    expect(query).toHaveBeenCalledTimes(1);
 
-    await act(async () => finishOld({ ok: true, result: park(1_000_000) }));
+    // The second's beat comes while the first is still out: it waits, it is not sent as well.
+    await wait(PARK_STATUS_MS);
+    expect(query).toHaveBeenCalledTimes(1);
+
+    // The first comes back and is shown; the question that was wanted meanwhile goes out.
+    await act(async () => finishFirst({ ok: true, result: park(800_000) }));
     expect(result.current.status?.cash).toBe(800_000);
+    expect(query).toHaveBeenCalledTimes(2);
+
+    await act(async () => finishSecond({ ok: true, result: park(700_000) }));
+    expect(result.current.status?.cash).toBe(700_000);
   });
 
-  it("ignores an answer that arrives after the component has gone", async () => {
+  it("makes any number of questions wanted while one is out into one more", async () => {
+    let finish: (answer: Answer) => void = () => {};
+    query.mockImplementationOnce(() => new Promise<Answer>((resolve) => (finish = resolve)));
+    const { result } = renderHook(() => useParkStatus(client, { active: true }));
+    for (let i = 0; i < 6; i++) act(() => result.current.refresh());
+    expect(query).toHaveBeenCalledTimes(1);
+
+    query.mockResolvedValue({ ok: true, result: park(555_000) });
+    await act(async () => finish({ ok: true, result: park(800_000) }));
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(result.current.status?.cash).toBe(555_000);
+    // And nothing more is owed.
+    await wait(PARK_STATUS_MS - 1);
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
+  it("goes on after a question that failed while others were wanted", async () => {
+    let fail: (error: Error) => void = () => {};
+    query.mockImplementationOnce(() => new Promise<Answer>((_, reject) => (fail = reject)));
+    const { result } = renderHook(() => useParkStatus(client, { active: true }));
+    act(() => result.current.refresh());
+    expect(query).toHaveBeenCalledTimes(1);
+    await act(async () => fail(new Error("closed")));
+    // The wanted one went out, and the one after that is not blocked.
+    expect(query).toHaveBeenCalledTimes(2);
+    await wait(PARK_STATUS_MS);
+    expect(query).toHaveBeenCalledTimes(3);
+  });
+
+  it("asks nothing more after the component has gone, even for a question that was wanted", async () => {
     let finish: (answer: Answer) => void = () => {};
     query.mockImplementationOnce(() => new Promise<Answer>((resolve) => (finish = resolve)));
     const { result, unmount } = renderHook(() => useParkStatus(client, { active: true }));
+    act(() => result.current.refresh());
+    expect(query).toHaveBeenCalledTimes(1);
+
     unmount();
     await act(async () => finish({ ok: true, result: park(1) }));
-    expect(result.current.status).toBeNull();
+    await wait(5000);
+    // The one that was wanted is not sent for nobody, and the interval is gone.
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
+  it("starts clean for another client, whatever the old one's question is doing", async () => {
+    // The first client's question never comes back, as when its connection has gone.
+    query.mockImplementationOnce(() => new Promise<Answer>(() => {}));
+    const other = vi.fn<(name: string, input: unknown) => Promise<Answer>>(async () => ({
+      ok: true,
+      result: park(123_000),
+    }));
+    const { result, rerender } = renderHook(
+      ({ client }) => useParkStatus(client, { active: true }),
+      { initialProps: { client } },
+    );
+    rerender({ client: { query: other } as unknown as SimClient });
+    await settle();
+    expect(other).toHaveBeenCalledTimes(1);
+    expect(result.current.status?.cash).toBe(123_000);
   });
 });

@@ -70,6 +70,16 @@ describe("TileContextMenu", () => {
     ]);
   });
 
+  it("says how high Set water fills there too", async () => {
+    const { open } = setup();
+    open();
+    const menu = within(await screen.findByRole("menu"));
+    expect(menu.getByRole("menuitem", { name: "Set water" }).getAttribute("title")).toBe(
+      "2 steps above the lowest corner",
+    );
+    expect(menu.getByRole("menuitem", { name: "Drain" }).hasAttribute("title")).toBe(false);
+  });
+
   it("says which tile it is for", async () => {
     const { open } = setup();
     open(5, 2);

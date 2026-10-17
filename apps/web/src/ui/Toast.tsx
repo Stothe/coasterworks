@@ -1,3 +1,5 @@
+import { EDGE_GAP_REM, TOAST_RIGHT_BESIDE_INSPECTOR_REM } from "./layout";
+
 export interface ToastItem {
   id: number;
   text: string;
@@ -15,10 +17,9 @@ export interface ToastProps {
 export function Toast({ toasts, onDismiss, besideInspector = false }: ToastProps) {
   return (
     <div
-      className={`pointer-events-none absolute top-16 flex w-72 flex-col gap-2 ${
-        // The inspector is 20rem wide at 0.875rem from the edge, and the stack keeps clear of it.
-        besideInspector ? "right-[21.5rem]" : "right-3.5"
-      }`}
+      className="pointer-events-none absolute top-16 flex w-72 flex-col gap-2"
+      // Clear of the inspector while it is open, and at the window's edge while it is not.
+      style={{ right: `${besideInspector ? TOAST_RIGHT_BESIDE_INSPECTOR_REM : EDGE_GAP_REM}rem` }}
     >
       {toasts.map((toast) => (
         <div

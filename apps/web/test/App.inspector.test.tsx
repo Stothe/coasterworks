@@ -7,6 +7,12 @@ import { App } from "../src/App";
 import { uiStore } from "../src/state/uiStore";
 import { useHost, type HostState } from "../src/state/useHost";
 import type { ParkStatus } from "../src/state/useParkStatus";
+import {
+  EDGE_GAP_REM,
+  INSPECTOR_GAP_REM,
+  INSPECTOR_WIDTH_REM,
+  TOAST_RIGHT_BESIDE_INSPECTOR_REM,
+} from "../src/ui/layout";
 import type { ViewportProps } from "../src/viewport/Viewport";
 
 vi.mock("../src/state/useHost", () => ({ useHost: vi.fn() }));
@@ -283,8 +289,24 @@ describe("a tile in the inspector follows the latest terrain (Review Focus 3)", 
     act(() => store().inspectTile(3, 3));
     fireEvent.click(screen.getByRole("button", { name: "Drain" }));
     const stack = (await screen.findByRole("alert")).parentElement as HTMLElement;
-    expect(stack.className).toContain("right-[21.5rem]");
-    expect(stack.className).not.toContain("right-3.5");
+    const panel = inspector() as HTMLElement;
+    // The stack's right edge is the inspector's left edge, and a gap: both come from one set of
+    // measures, so changing the inspector's width moves the toasts with it.
+    const panelWidth = Number.parseFloat(panel.style.width);
+    const panelRight = Number.parseFloat(panel.style.right);
+    expect(panel.style.width).toBe(`${INSPECTOR_WIDTH_REM}rem`);
+    expect(Number.parseFloat(stack.style.right)).toBe(panelRight + panelWidth + INSPECTOR_GAP_REM);
+    expect(stack.style.right).toBe(`${TOAST_RIGHT_BESIDE_INSPECTOR_REM}rem`);
+  });
+
+  it("the toast is back at the window's edge once the inspector is shut", async () => {
+    command.mockResolvedValue({ ok: false, error: "Not enough cash" });
+    await ready();
+    act(() => store().inspectTile(3, 3));
+    fireEvent.click(screen.getByRole("button", { name: "Drain" }));
+    const stack = (await screen.findByRole("alert")).parentElement as HTMLElement;
+    act(() => store().closeInspector());
+    expect(stack.style.right).toBe(`${EDGE_GAP_REM}rem`);
   });
 });
 

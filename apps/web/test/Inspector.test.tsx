@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildActions, type UiActionDeps } from "../src/actions/registry";
 import type { ActionContext } from "../src/actions/types";
 import { uiStore } from "../src/state/uiStore";
-import type { ParkStatus } from "../src/state/useParkStatus";
+import { EVENT_DEBOUNCE_MS, type ParkStatus } from "../src/state/useParkStatus";
 import { Inspector, type InspectorProps } from "../src/ui/Inspector";
 
 const noop = vi.fn();
@@ -304,13 +304,19 @@ describe("Inspector: the status it polls", () => {
     expect(query).toHaveBeenCalledTimes(1);
   });
 
-  it("asks once more after each new event", async () => {
+  it("asks once more after the events, a moment after the last", async () => {
     store().openInspector("overview");
     const { again } = renderInspector({ lastEventId: 3 });
     await act(async () => {});
     const before = query.mock.calls.length;
     again({ lastEventId: 4 });
+    again({ lastEventId: 5 });
     await act(async () => {});
+    // Not at once: an agent's burst of commands is one question.
+    expect(query.mock.calls.length).toBe(before);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(EVENT_DEBOUNCE_MS);
+    });
     expect(query.mock.calls.length).toBe(before + 1);
   });
 

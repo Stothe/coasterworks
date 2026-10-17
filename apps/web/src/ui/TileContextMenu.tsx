@@ -85,6 +85,7 @@ export function TileContextMenu({
                 <ContextMenu.Item
                   key={action.id}
                   className={ITEM}
+                  {...(action.hint !== undefined && { title: action.hint })}
                   onSelect={() =>
                     void runTileAction(action.id, terrain, tile.x, tile.y, execute, notify)
                   }

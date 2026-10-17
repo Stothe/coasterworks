@@ -9,6 +9,7 @@ import { ParkOverview } from "./inspector/ParkOverview";
 import { TileInspector } from "./inspector/TileInspector";
 import { tileInfo } from "./inspector/tileInfo";
 import { EmptyState, IconButton, Panel, Tabs } from "./kit";
+import { EDGE_GAP_REM, INSPECTOR_WIDTH_REM } from "./layout";
 
 export interface InspectorProps {
   /** The latest terrain, which the tile tab reads on every render. */
@@ -55,7 +56,8 @@ export function Inspector(props: InspectorProps) {
   return (
     <aside
       aria-label="Inspector"
-      className="pointer-events-auto absolute top-16 right-3.5 flex max-h-[calc(100%-9rem)] w-80 max-w-[calc(100vw-1.75rem)] flex-col"
+      className="pointer-events-auto absolute top-16 flex max-h-[calc(100%-9rem)] max-w-[calc(100vw-1.75rem)] flex-col"
+      style={{ width: `${INSPECTOR_WIDTH_REM}rem`, right: `${EDGE_GAP_REM}rem` }}
     >
       {selection?.kind === "tile" ? (
         <TilePanel {...props} x={selection.x} y={selection.y} />
