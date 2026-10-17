@@ -90,12 +90,15 @@ page out of the shell plugin.
 ## Checks
 
 ```sh
-pnpm --filter @coasterworks/desktop typecheck   # cargo check
-pnpm --filter @coasterworks/desktop test        # cargo test: the ready-line parser, the init script, the MCP config
+pnpm --filter @coasterworks/desktop cargo:check   # cargo check
+pnpm --filter @coasterworks/desktop cargo:test    # cargo test: the ready-line parser, the init script, the MCP config
+pnpm --filter @coasterworks/desktop cargo:build   # a debug build of the shell, no bundle
 ```
 
-`pnpm typecheck` at the root runs the first one too. `pnpm build` skips the app; building it is
-`tauri build`, which is Plan G.
+The package's own `typecheck`, `build` and `test` scripts do nothing, so the root `pnpm typecheck`
+and `pnpm build` stay free of Rust (on Linux `cargo` also needs webkit2gtk). CI runs the
+last two in the `desktop-build` job on macOS, after `pnpm build`, because `tauri.conf.json` takes
+its `frontendDist` from `apps/web/dist`. Making the app is `tauri build`, which is Plan G.
 
 ## CSP
 

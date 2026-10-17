@@ -9,8 +9,11 @@
     "dev": "tauri dev",
     "build": "echo skipped",
     "icon": "node scripts/make-icon.mjs && tauri icon assets/icon.png && rm -rf src-tauri/icons/android src-tauri/icons/ios",
-    "typecheck": "cargo check --manifest-path src-tauri/Cargo.toml",
-    "test": "cargo test --manifest-path src-tauri/Cargo.toml"
+    "typecheck": "echo 'desktop: cargo checks run in the desktop-build CI job'",
+    "test": "echo 'desktop: cargo tests run in the desktop-build CI job'",
+    "cargo:check": "cargo check --manifest-path src-tauri/Cargo.toml",
+    "cargo:test": "cargo test --manifest-path src-tauri/Cargo.toml",
+    "cargo:build": "cargo build --manifest-path src-tauri/Cargo.toml"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"

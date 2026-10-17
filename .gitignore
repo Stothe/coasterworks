@@ -11,3 +11,7 @@ coverage/
 # The desktop app's Rust build, and the capability schemas Tauri generates into it
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
+
+# Playwright's output from the browser smoke test (the committed screenshot is not in here)
+apps/web/test-results/
+apps/web/playwright-report/

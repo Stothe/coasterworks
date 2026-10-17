@@ -8,8 +8,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -b && tsc -p test/tsconfig.json",
-    "test": "vitest run"
+    "typecheck": "tsc -b && tsc -p test/tsconfig.json && tsc -p e2e/tsconfig.json",
+    "test": "vitest run",
+    "e2e": "playwright test"
   },
   "dependencies": {
     "@coasterworks/protocol": "workspace:*",
@@ -20,6 +21,7 @@
     "react-dom": "^19.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@tailwindcss/vite": "^4.3.3",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",

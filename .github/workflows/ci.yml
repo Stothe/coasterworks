@@ -32,6 +32,45 @@ jobs:
       - run: pnpm build
       - run: pnpm test
       - run: pnpm format:check
+      # The browser smoke test drives the `apps/web/dist` that `pnpm build` just made, in headless
+      # Chromium. One system is enough: what it checks does not differ between Linux and macOS.
+      # `playwright` is a dependency of apps/web, so it is found from there and not from the root.
+      - name: Install Chromium for the smoke test
+        if: matrix.os == 'ubuntu-latest'
+        run: pnpm --filter @coasterworks/web exec playwright install --with-deps chromium
+      - name: Browser smoke test
+        if: matrix.os == 'ubuntu-latest'
+        run: pnpm e2e
+      - name: Keep the smoke test's traces and screenshot
+        if: failure() && matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-output
+          path: |
+            apps/web/test-results
+            apps/web/e2e/__screenshots__
+          if-no-files-found: ignore
+
+  # The Mac app's Rust side: its unit tests, then a debug build (no bundle, no signing). Its
+  # `frontendDist` is `apps/web/dist`, so the web app is built first. The shell's tests start
+  # `node`, which `setup-node` puts on the PATH.
+  desktop-build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm --filter @coasterworks/desktop cargo:test
+      - run: pnpm --filter @coasterworks/desktop cargo:build
 
   # The same golden scenario on JavaScriptCore (Bun) instead of V8 (Node). Re-recording the hash
   # there must change nothing: a difference means the sim depends on an engine detail.

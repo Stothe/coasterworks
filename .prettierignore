@@ -2,3 +2,5 @@ dist
 pnpm-lock.yaml
 .superpowers
 docs/superpowers/plans
+test-results
+playwright-report

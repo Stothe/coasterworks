@@ -13,6 +13,7 @@
     "dev:desktop": "pnpm --filter @coasterworks/desktop dev",
     "test": "vitest run",
     "test:watch": "vitest",
+    "e2e": "pnpm --filter @coasterworks/web e2e",
     "build": "pnpm -r build",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

@@ -10,6 +10,8 @@ pnpm test
 
 Tests run against the TypeScript in each package's `src`, so a change to `packages/sim` is tested without a rebuild. The few tests that spawn the built `coasterworks` bin (in `apps/cli`) need `dist`: they skip themselves, with a message, until `pnpm build` has run.
 
+The browser smoke test (Playwright, in `apps/web/e2e`) drives the built web app, so it runs with `pnpm e2e` after `pnpm build`; install its browser once with `pnpm --filter @coasterworks/web exec playwright install chromium`. It rewrites the README's screenshot, `apps/web/e2e/__screenshots__/park.png`, each time it runs, so commit that file only when the picture is meant to change. The desktop app's Rust checks run with `pnpm --filter @coasterworks/desktop cargo:test` (and `cargo:check`, `cargo:build`); the root `pnpm typecheck`, `pnpm build` and `pnpm test` do not run them, and CI runs them in the `desktop-build` job.
+
 ## Commits
 
 Use [conventional commits](https://www.conventionalcommits.org/), for example `feat(sim): add path placement command` or `chore: bump vitest`.

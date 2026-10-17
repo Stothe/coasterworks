@@ -2,7 +2,44 @@
 
 Coasterworks is an open-source theme-park builder in the spirit of RollerCoaster Tycoon: the depth of the original with a UI built for 2026, playable without any original game files, and MCP native so Claude or any agent can build and run a park through the same commands the player uses. Mac first; other platforms later.
 
-Status: pre-alpha, not playable yet.
+Status: pre-alpha. You can fly around a park and shape terrain in the browser (`pnpm dev:web`) or the Mac app (`pnpm dev:desktop`). Rides, guests and money arrive in the next plans.
+
+![Coasterworks in the browser: a 64 by 64 tile park with a hill and a sandy pond, the cash, date and speed controls at the top left, and the terrain tools at the bottom](apps/web/e2e/__screenshots__/park.png)
+
+## Run it in the browser
+
+You need Node 22 or newer and pnpm 10 or newer.
+
+```bash
+pnpm install
+pnpm dev:web
+```
+
+Open `http://localhost:5173`. The page runs a sample park, "Leafy Lake", in a worker of its own. Raise, Lower, Level and Water shape the land (keys `R`, `L`, `V`, `W`; `[` and `]` change the brush), Space pauses, `+` and `-` change the speed, and Cmd+Z undoes.
+
+## Run the Mac app (dev)
+
+The Mac app is a Tauri 2 window around the same page, with the park kept on disk and an MCP endpoint that agents can use while you play. It needs:
+
+- Rust, installed with [`rustup`](https://rustup.rs)
+- Node 22 or newer
+- pnpm 10 or newer
+
+```bash
+pnpm install && pnpm build && pnpm dev:desktop
+```
+
+The first compile takes a few minutes; after that it is seconds. The app stores its park at `~/Library/Application Support/com.coasterworks.app/parks/current.park` and stops its sidecar when you close the window. See [apps/desktop/README.md](apps/desktop/README.md) for how it works.
+
+## Connect Claude to the running app
+
+The running Mac app serves MCP on a port and with a token that change on every launch. Choose **File > Copy MCP Config**, then paste what it copied into your project's `.mcp.json`. The token in it is a secret, so keep that file out of version control. Or take the `url` and the token from the same config and register them with Claude Code:
+
+```bash
+claude mcp add --transport http coasterworks <mcpUrl> --header "Authorization: Bearer <token>"
+```
+
+Whatever Claude builds shows up in the window as it happens.
 
 ## Try it headless
 
@@ -83,16 +120,15 @@ It prints one line of JSON once it is listening, `{"wsUrl":"ws://127.0.0.1:<port
 
 To point the web app at the sidecar, start it with `pnpm dev:web` and open `http://localhost:5173/?ws=<wsUrl>&token=<token>`.
 
-### Run the Mac app (dev mode)
-
-`pnpm build && pnpm dev:desktop` opens the Coasterworks window: a Tauri 2 shell that starts the sidecar on a free port, keeps your park in `~/Library/Application Support/com.coasterworks.app/parks/current.park`, and stops the sidecar when you close the window. **File > Copy MCP Config** puts the agent config for the running sidecar on the clipboard. It needs Rust, and the first build takes several minutes. See [apps/desktop/README.md](apps/desktop/README.md).
-
 ## What's here
 
 - `packages/sim`: the deterministic simulation core: world, commands, queries, undo, and the save format (`@coasterworks/sim`)
 - `packages/mcp`: the MCP server that exposes sim commands to agents over stdio and HTTP (`@coasterworks/mcp`)
 - `packages/protocol`: the wire between a running sim and its clients: messages, binary snapshots, `SimHostServer` and `SimClient` (`@coasterworks/protocol`)
+- `packages/render`: the three.js terrain renderer, camera and picking, with no React in it (`@coasterworks/render`)
 - `apps/cli`: the `coasterworks` command line app: `new`, `run`, `inspect`, `exec`, `query`, `undo`, `redo`, `mcp`, and `serve`
+- `apps/web`: the browser client, built with Vite and React: the park view, status pills, speed control and terrain tools (`@coasterworks/web`)
+- `apps/desktop`: the Mac app, a Tauri 2 shell that starts the `serve` sidecar and opens the web client (`@coasterworks/desktop`)
 
 ## Determinism
 
@@ -106,7 +142,10 @@ pnpm typecheck
 pnpm build
 pnpm test
 pnpm format:check
+pnpm e2e
 ```
+
+`pnpm e2e` is the browser smoke test (Playwright, headless Chromium): it opens the built web app, shapes terrain, undoes it, and pauses. Run `pnpm build` first, and `pnpm --filter @coasterworks/web exec playwright install chromium` once. The Mac app's Rust checks run with `pnpm --filter @coasterworks/desktop cargo:test`.
 
 See `CONTRIBUTING.md` before changing the simulation or adding a command.
 
