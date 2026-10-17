@@ -43,7 +43,7 @@ Whatever Claude builds shows up in the window as it happens.
 
 ## Try it headless
 
-There is no UI yet, but the simulation already runs from the command line. You need Node 22 or newer and pnpm 10 or newer.
+The simulation also runs without a window, from the command line, which is how scripts, tests and agents drive it. You need Node 22 or newer and pnpm 10 or newer.
 
 ```bash
 pnpm install
@@ -145,7 +145,7 @@ pnpm format:check
 pnpm e2e
 ```
 
-`pnpm e2e` is the browser smoke test (Playwright, headless Chromium): it opens the built web app, shapes terrain, undoes it, and pauses. Run `pnpm build` first, and `pnpm --filter @coasterworks/web exec playwright install chromium` once. The Mac app's Rust checks run with `pnpm --filter @coasterworks/desktop cargo:test`.
+`pnpm e2e` is the browser smoke test (Playwright, headless Chromium): it opens the built web app, shapes terrain, undoes it, pauses, and checks that the canvas draws. Run `pnpm build` first, and `pnpm --filter @coasterworks/web exec playwright install chromium` once. The Mac app's Rust checks run with `pnpm --filter @coasterworks/desktop cargo:test`.
 
 See `CONTRIBUTING.md` before changing the simulation or adding a command.
 

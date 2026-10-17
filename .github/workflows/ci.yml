@@ -18,6 +18,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       # No `version:` here: the action reads the exact pnpm from "packageManager" in package.json,
@@ -46,9 +47,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: e2e-output
-          path: |
-            apps/web/test-results
-            apps/web/e2e/__screenshots__
+          path: apps/web/test-results
           if-no-files-found: ignore
 
   # The Mac app's Rust side: its unit tests, then a debug build (no bundle, no signing). Its
@@ -56,6 +55,7 @@ jobs:
   # `node`, which `setup-node` puts on the PATH.
   desktop-build:
     runs-on: macos-latest
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -76,6 +76,7 @@ jobs:
   # there must change nothing: a difference means the sim depends on an engine detail.
   golden-jsc:
     runs-on: macos-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
