@@ -51,7 +51,7 @@ export function TileInspector({ terrain, x, y, execute, notify }: TileInspectorP
           {CORNERS.map(([name, key]) => (
             <div
               key={key}
-              className="flex items-baseline justify-between rounded-lg bg-white/5 px-2.5 py-1.5"
+              className="flex items-baseline justify-between rounded-lg bg-fill px-2.5 py-1.5"
             >
               <span className="text-xs text-muted">{name}</span>
               <b className="text-sm tabular-nums">{info.corners[key]}</b>
@@ -71,7 +71,7 @@ export function TileInspector({ terrain, x, y, execute, notify }: TileInspectorP
             type="button"
             {...(action.hint !== undefined && { title: action.hint })}
             onClick={() => void runTileAction(action.id, terrain, x, y, execute, notify)}
-            className="hud-button rounded-lg bg-white/5 px-3 text-sm font-medium"
+            className="hud-button rounded-lg bg-fill px-3 text-sm font-medium"
           >
             {action.label}
           </button>

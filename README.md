@@ -2,9 +2,9 @@
 
 Coasterworks is an open-source theme-park builder in the spirit of RollerCoaster Tycoon: the depth of the original with a UI built for 2026, playable without any original game files, and MCP native so Claude or any agent can build and run a park through the same commands the player uses. Mac first; other platforms later.
 
-Status: pre-alpha. You can fly around a park and shape terrain in the browser (`pnpm dev:web`) or the Mac app (`pnpm dev:desktop`). Rides, guests and money arrive in the next plans.
+Status: pre-alpha. You can fly around a park, shape terrain, borrow money, and drive it all from a labeled dock, a ⌘K command bar or an MCP agent, in the browser (`pnpm dev:web`) or the Mac app (`pnpm dev:desktop`). Paths, rides and guests are next.
 
-![Coasterworks in the browser: a 64 by 64 tile park with a hill and a sandy pond, the cash, date and speed controls at the top left, and the terrain tools at the bottom](apps/web/e2e/__screenshots__/park.png)
+![Coasterworks in the browser: a 64 by 64 tile park with a hill and a sandy pond, the cash, date and speed controls at the top left, the dock and the terrain tray at the bottom, and the inspector open on the park finances at the right](apps/web/e2e/__screenshots__/park.png)
 
 ## Run it in the browser
 
@@ -15,7 +15,7 @@ pnpm install
 pnpm dev:web
 ```
 
-Open `http://localhost:5173`. The page runs a sample park, "Leafy Lake", in a worker of its own. The dock along the bottom has seven tools (keys `1` to `7`), and Terrain's tray shapes the land: Raise, Lower, Level, Smooth, Water and Surface (keys `R`, `L`, `V`, `M`, `W`, `U`; `[` and `]` change the brush). `Esc` puts the tool down, Space pauses, `+` and `-` change the speed, and Cmd+Z undoes.
+Open `http://localhost:5173`. The page runs a sample park, "Leafy Lake", in a worker of its own. The dock along the bottom has seven tools (keys `1` to `7`), and Terrain's tray shapes the land: Raise, Lower, Level, Smooth, Water and Surface (keys `R`, `L`, `V`, `M`, `W`, `U`; `[` and `]` change the brush). `Esc` puts the tool down, Space pauses, `+` and `-` change the speed, and Cmd+Z undoes. Cmd+K opens the command bar, where every action is a search away, and `?` lists every key.
 
 ## Run the Mac app (dev)
 

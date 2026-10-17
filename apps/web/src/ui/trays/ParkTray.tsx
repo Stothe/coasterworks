@@ -17,7 +17,7 @@ export function ParkTray({ disabled = false }: { disabled?: boolean }) {
           type="button"
           disabled={disabled}
           onClick={() => uiStore.getState().openInspector(tab)}
-          className="hud-button rounded-lg bg-white/5 px-4 text-sm font-medium text-muted hover:text-ink"
+          className="hud-button rounded-lg bg-fill px-4 text-sm font-medium text-muted hover:text-ink"
         >
           {label}
         </button>

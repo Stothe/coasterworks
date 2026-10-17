@@ -35,6 +35,12 @@ describe("TopRight: the buttons", () => {
     ]);
   });
 
+  it("names the cluster, so that a screen reader and a test can find it", () => {
+    mount();
+    const group = screen.getByRole("group", { name: "Quick actions" });
+    expect(within(group).getAllByRole("button")).toHaveLength(4);
+  });
+
   it("has an Assistant that is disabled, and says it is coming soon", async () => {
     mount();
     const assistant = screen.getByRole("button", { name: "Assistant" }) as HTMLButtonElement;

@@ -72,7 +72,7 @@ function BellIcon({ unread }: { unread: number }) {
         <span
           data-testid="unread-count"
           aria-hidden="true"
-          className="absolute -top-2 -right-2.5 grid min-w-4 place-items-center rounded-full bg-accent px-1 text-[10px] leading-4 font-semibold text-white"
+          className="absolute -top-2 -right-2.5 grid min-w-4 place-items-center rounded-full bg-accent-strong px-1 text-[10px] leading-4 font-semibold text-on-accent"
         >
           {unread > BADGE_MAX ? `${BADGE_MAX}+` : unread}
         </span>
@@ -145,7 +145,7 @@ function Settings() {
             e.preventDefault();
             anchor.current?.querySelector("button")?.focus();
           }}
-          className="glass z-50 w-60 p-3 text-ink"
+          className="glass z-50 w-60 animate-enter p-3 text-ink"
         >
           <SettingsPanel />
         </Popover.Content>
@@ -165,7 +165,11 @@ export function TopRight({
   disabled = false,
 }: TopRightProps) {
   return (
-    <div className="glass flex items-center gap-0.5 p-[3px]">
+    <div
+      role="group"
+      aria-label="Quick actions"
+      className="glass flex items-center gap-0.5 p-[3px]"
+    >
       <IconButton
         label="Assistant"
         tooltip="Coming soon"

@@ -1,10 +1,10 @@
-import type { EventMessage, SimClient } from "@coasterworks/protocol";
+import type { SimClient } from "@coasterworks/protocol";
 import type { TerrainData } from "@coasterworks/render";
 import type { ExecResult } from "@coasterworks/sim";
 import type { Action, ActionContext, InspectorTab } from "../actions/types";
 import { uiStore, useUiStore } from "../state/uiStore";
 import { useParkStatus } from "../state/useParkStatus";
-import type { TileRect } from "../state/useTimeline";
+import type { TileRect, TimelineEntry } from "../state/useTimeline";
 import { ParkFinances } from "./inspector/ParkFinances";
 import { ParkOverview } from "./inspector/ParkOverview";
 import { TileInspector } from "./inspector/TileInspector";
@@ -26,13 +26,13 @@ export interface InspectorProps {
   notify(text: string, options?: { kind?: "info" | "error" }): void;
   /** The id of the newest event the host has reported: the park's status is asked for again after it. */
   lastEventId?: number;
-  /** The host's log events, which the timeline tab lists. */
-  events?: readonly EventMessage[];
+  /** The park's timeline, newest first, which its tab lists. */
+  timeline?: readonly TimelineEntry[];
   /** Looks at an area of the map: what a timeline entry with an area does when clicked. */
   focusTile?(rect: TileRect): void;
 }
 
-const NO_EVENTS: readonly EventMessage[] = [];
+const NO_ENTRIES: readonly TimelineEntry[] = [];
 const NOWHERE = () => {};
 
 /** The park's tabs, which are the inspector's tabs but for the tile. */
@@ -65,7 +65,7 @@ export function Inspector(props: InspectorProps) {
   return (
     <aside
       aria-label="Inspector"
-      className="pointer-events-auto absolute top-16 flex max-h-[calc(100%-9rem)] max-w-[calc(100vw-1.75rem)] flex-col"
+      className="pointer-events-auto absolute top-16 flex max-h-[calc(100%-9rem)] max-w-[calc(100vw-1.75rem)] animate-enter flex-col"
       style={{ width: `${INSPECTOR_WIDTH_REM}rem`, right: `${EDGE_GAP_REM}rem` }}
     >
       {selection?.kind === "tile" ? (
@@ -100,7 +100,7 @@ function ParkPanel({
   execute,
   notify,
   lastEventId,
-  events = NO_EVENTS,
+  timeline = NO_ENTRIES,
   focusTile = NOWHERE,
 }: InspectorProps) {
   const tab = useUiStore((state) => state.inspector.tab);
@@ -136,7 +136,7 @@ function ParkPanel({
           {
             id: "timeline",
             label: "Timeline",
-            content: <Timeline events={events} onFocus={focusTile} />,
+            content: <Timeline entries={timeline} onFocus={focusTile} />,
           },
         ]}
       />

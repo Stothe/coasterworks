@@ -23,7 +23,7 @@ export function Row({
     tone === "good"
       ? "text-success"
       : tone === "bad"
-        ? "text-[#ffb4b4]"
+        ? "text-danger"
         : tone === "muted"
           ? "text-muted"
           : "";

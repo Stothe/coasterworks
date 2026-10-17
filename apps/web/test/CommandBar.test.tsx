@@ -177,6 +177,46 @@ describe("CommandBar: the list", () => {
     expect(option(/Speed up/)).toBeTruthy();
   });
 
+  it("ranks a search that starts a word of the title above letters found in order", () => {
+    setup();
+    open();
+    // The l, o, a, n of Lower terrain are there in order, but Take loan is what `loan` means.
+    search("loan");
+    const options = screen.getAllByRole("option");
+    expect(options.map((o) => o.textContent?.match(/^(Take|Repay) loan/)?.[0])).toEqual([
+      "Take loan",
+      "Repay loan",
+    ]);
+    expect(options[0]?.getAttribute("aria-selected")).toBe("true");
+    expect(queryOption(/Lower terrain/)).toBeNull();
+    // Only the group of what matched is listed.
+    expect(screen.getByText("Finance")).toBeTruthy();
+    expect(screen.queryByText("Terrain")).toBeNull();
+    // Several words work, and the first of the results is the best.
+    search("raise terrain");
+    expect(screen.getAllByRole("option")[0]?.textContent).toMatch(/^Raise terrain/);
+    // With no word to start, letters in order are all there is, and they are enough.
+    search("lwr");
+    expect(screen.getAllByRole("option")[0]?.textContent).toMatch(/^Lower terrain/);
+    // A search with characters that mean something to a pattern is only text.
+    search("(+");
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+  });
+
+  it("lists the group of the best match first, even when it comes later in the order of groups", () => {
+    // The Time group is after Finance in the list, but `finance` is a word of this title and only
+    // a keyword of the loans.
+    setup([entry("sim_finance_audit", { type: "object", properties: {} }, "sim")]);
+    open();
+    search("finance");
+    const titles = screen.getAllByRole("option").map((o) => o.textContent ?? "");
+    expect(titles).toHaveLength(3);
+    expect(titles[0]).toMatch(/^Sim finance audit/);
+    expect(titles[1]).toMatch(/^Take loan/);
+    expect(titles[2]).toMatch(/^Repay loan/);
+    expect(screen.getAllByRole("option")[0]?.getAttribute("aria-selected")).toBe("true");
+  });
+
   it("says when nothing matches", () => {
     setup();
     open();

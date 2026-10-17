@@ -100,7 +100,7 @@ function hintOf(field: FormField): string | undefined {
 }
 
 const CONTROL =
-  "min-h-8 w-full rounded-lg border border-white/15 bg-white/5 px-2.5 text-sm text-ink outline-none focus-visible:border-accent aria-[invalid=true]:border-[#ffb4b4]";
+  "min-h-8 w-full rounded-lg border border-line-strong bg-fill px-2.5 text-sm text-ink aria-[invalid=true]:border-danger";
 const BUTTON = "hud-button rounded-lg px-3 text-sm font-medium";
 
 /**
@@ -222,7 +222,7 @@ export function ActionForm({
               type="checkbox"
               checked={draft === true}
               onChange={(e) => edit(field.name, e.target.checked)}
-              className="size-4 self-start accent-accent"
+              className="size-8 self-start accent-accent"
             />
           );
         } else if (field.kind === "enum") {
@@ -280,7 +280,7 @@ export function ActionForm({
         );
       })}
       {failure !== null && (
-        <p role="alert" className="text-sm text-[#ffb4b4]">
+        <p role="alert" className="text-sm text-danger">
           {failure}
         </p>
       )}
@@ -293,7 +293,7 @@ export function ActionForm({
         <button
           type="submit"
           disabled={busy || !available}
-          className={`${BUTTON} bg-accent text-white`}
+          className={`${BUTTON} bg-accent-strong text-on-accent`}
         >
           {action.title}
         </button>

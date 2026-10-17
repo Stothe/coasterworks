@@ -12,8 +12,7 @@ export interface StepperProps {
   disabled?: boolean;
 }
 
-const button =
-  "hud-button min-w-8 rounded-md text-base font-medium text-muted hover:text-ink aria-pressed:bg-white/15";
+const button = "hud-button min-w-8 rounded-md text-base font-medium text-muted hover:text-ink";
 
 /**
  * A whole number to step with two buttons or type, held to `min` to `max`. What is typed is only
@@ -65,7 +64,7 @@ export function Stepper({
           }
         }}
         onBlur={() => setDraft(null)}
-        className="min-h-8 w-11 rounded-md border border-white/15 bg-white/10 text-center text-sm text-ink tabular-nums outline-none focus-visible:border-accent aria-invalid:border-red-400 disabled:opacity-40"
+        className="min-h-8 w-11 rounded-lg border border-line-strong bg-fill-strong text-center text-sm text-ink tabular-nums aria-invalid:border-danger disabled:opacity-40"
       />
       <button
         type="button"

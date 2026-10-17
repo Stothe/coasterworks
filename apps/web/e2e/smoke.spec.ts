@@ -117,6 +117,17 @@ test("opens a park, shapes terrain, undoes it, pauses, and draws", async ({ page
       }),
   );
 
+  // The picture is the interface at work: the dock with Terrain in hand and its tray, the inspector
+  // on the park's Finances, and the brush over the pond's edge. Nothing below this line is checked
+  // by the test; it only sets the scene.
+  await page.getByRole("button", { name: /^Open finances/ }).click();
+  await page.keyboard.press("1");
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(page.getByRole("complementary", { name: "Inspector" })).toContainText("This month");
+  await expect(page.getByRole("region", { name: "Terrain tray" })).toBeVisible();
+  // Wait for everything that eases in to be in place.
+  await page.evaluate(() => Promise.allSettled(document.getAnimations().map((a) => a.finished)));
+
   // Keep the picture with the test's output, whatever happens next.
   const picture = await page.screenshot({ path: testInfo.outputPath("park.png") });
 

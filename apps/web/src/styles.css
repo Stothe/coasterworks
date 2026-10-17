@@ -1,15 +1,56 @@
 @import "tailwindcss";
 
-/* Colors and font as Tailwind theme values: `text-ink`, `text-muted`, `bg-accent`, `text-success`. */
+/*
+ * The interface's colors and font, as Tailwind theme values (`text-ink`, `bg-fill`, `border-line`)
+ * and so as CSS variables (`var(--color-ink)`). Nothing under `src/ui` spells a color of its own.
+ */
 @theme static {
+  /* Text: primary, secondary, and what sits on a filled accent button. */
   --color-ink: #f2f4f7;
   --color-muted: #9aa4b2;
+  --color-on-accent: #fff;
+
+  /* Meaning. The accent rings and marks things on the dark glass; `accent-strong` is its fill
+     under white text (white on `accent` is 3.7:1, on `accent-strong` 5.2:1). */
   --color-accent: #3b82f6;
+  --color-accent-strong: #2563eb;
+  --color-accent-soft: #a9c9ff;
   --color-success: #7ee2a0;
+  --color-danger: #ffb4b4;
+
+  /* Surfaces. `canvas` is the page behind the 3D view; `scrim` dims the map under a dialog. */
+  --color-canvas: #0d1117;
+  --color-scrim: rgb(0 0 0 / 0.35);
+
+  /* White at a few strengths, over the glass: wells and cards at rest, a hovered control, a
+     highlighted item, a pressed or selected one; and the lines that divide and outline. */
+  --color-fill: rgb(255 255 255 / 0.05);
+  --color-fill-hover: rgb(255 255 255 / 0.08);
+  --color-fill-strong: rgb(255 255 255 / 0.1);
+  --color-fill-active: rgb(255 255 255 / 0.15);
+  --color-line: rgb(255 255 255 / 0.1);
+  --color-line-strong: rgb(255 255 255 / 0.15);
+
   --font-sans: system-ui, -apple-system, sans-serif;
+
+  /* Something that appears (a tray, the inspector, a message) eases up into place: `animate-enter`. */
+  --animate-enter: enter 140ms ease-out;
+  @keyframes enter {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+  }
 }
 
-/* The dark glass the panels float on over the 3D view. */
+/*
+ * The dark glass the panels float on over the 3D view.
+ *
+ * Radii: a panel is 12px (`--glass-radius`, the `glass` class). A control or chip on it is 8px
+ * (`rounded-lg`). The buttons inside a segmented control or tab list sit 3px in from an 8px frame
+ * and are 6px (`rounded-md`), which keeps their corners concentric with it. A key cap or a badge
+ * is 4px (`rounded`).
+ */
 :root {
   color-scheme: dark;
   --glass-bg: rgb(18 22 28 / 0.74);
@@ -29,9 +70,21 @@ body,
 }
 
 body {
-  background: #0d1117;
+  background: var(--color-canvas);
   color: var(--color-ink);
   font-family: var(--font-sans);
+}
+
+@layer base {
+  /*
+   * Every control that takes the keyboard shows it the same way: a 2px accent ring, 2px off the
+   * edge. It follows the keyboard and not the mouse (`:focus-visible`), and nothing in `src/ui`
+   * turns it off without putting a ring of its own in its place.
+   */
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+  }
 }
 
 .glass {
@@ -54,15 +107,28 @@ body {
     transition: background-color 120ms;
 
     &:hover:not(:disabled, [aria-pressed="true"], [data-state="active"]) {
-      background: rgb(255 255 255 / 0.08);
-    }
-    &:focus-visible {
-      outline: 2px solid var(--color-accent);
-      outline-offset: 1px;
+      background: var(--color-fill-hover);
     }
     &:disabled {
       cursor: not-allowed;
       opacity: 0.4;
     }
+  }
+}
+
+/*
+ * For a player whose system asks for less motion: nothing eases, slides or fades. The time is not
+ * quite zero so that anything waiting on an `animationend` or `transitionend` still hears it.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    animation-delay: 0s !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
+    scroll-behavior: auto !important;
   }
 }

@@ -29,7 +29,7 @@ export function IconButton({
       aria-pressed={pressed}
       disabled={disabled}
       onClick={onClick}
-      className="hud-button min-w-8 rounded-lg px-1.5 text-muted hover:text-ink disabled:pointer-events-none aria-pressed:bg-white/15 aria-pressed:text-ink"
+      className="hud-button min-w-8 rounded-lg px-1.5 text-muted hover:text-ink disabled:pointer-events-none aria-pressed:bg-fill-active aria-pressed:text-ink"
     >
       {icon}
     </button>

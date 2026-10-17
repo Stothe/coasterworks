@@ -1,6 +1,7 @@
 import type { EventMessage, LogEntryPublic } from "@coasterworks/protocol";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { buildTimeline, type TileRect } from "../src/state/useTimeline";
 import { Timeline } from "../src/ui/Timeline";
 
 afterEach(cleanup);
@@ -21,18 +22,29 @@ function event(id: number, over: Partial<LogEntryPublic> = {}): EventMessage {
   };
 }
 
+/** The panel with the timeline of some log events, as the app builds it and hands it over. */
+function TimelineOf({
+  events,
+  onFocus,
+}: {
+  events: readonly EventMessage[];
+  onFocus(rect: TileRect): void;
+}) {
+  return <Timeline entries={buildTimeline(events)} onFocus={onFocus} />;
+}
+
 const rows = () => screen.getAllByRole("listitem");
 
 describe("Timeline", () => {
   it("says so when nothing has happened", () => {
-    render(<Timeline events={[]} onFocus={() => {}} />);
+    render(<TimelineOf events={[]} onFocus={() => {}} />);
     expect(screen.getByText("Nothing has happened yet.")).toBeTruthy();
     expect(screen.queryByRole("list")).toBeNull();
   });
 
   it("lists the newest entry first", () => {
     render(
-      <Timeline
+      <TimelineOf
         events={[
           event(1, { name: "terrain_lower" }),
           event(2, { name: "terrain_raise" }),
@@ -49,13 +61,15 @@ describe("Timeline", () => {
   });
 
   it("shows each entry once, though an event arrived twice", () => {
-    render(<Timeline events={[event(1), event(1, { cost: 500 }), event(2)]} onFocus={() => {}} />);
+    render(
+      <TimelineOf events={[event(1), event(1, { cost: 500 }), event(2)]} onFocus={() => {}} />,
+    );
     expect(rows()).toHaveLength(2);
   });
 
   it("shows the title, who did it, and the date of its tick", () => {
     // 0 is the park's first day; a day is 1,440 ticks.
-    render(<Timeline events={[event(1, { tick: 0 })]} onFocus={() => {}} />);
+    render(<TimelineOf events={[event(1, { tick: 0 })]} onFocus={() => {}} />);
     const row = rows()[0] as HTMLElement;
     expect(within(row).getByText("Raise terrain")).toBeTruthy();
     expect(within(row).getByText("You")).toBeTruthy();
@@ -63,13 +77,13 @@ describe("Timeline", () => {
   });
 
   it("badges an agent's entry as the Agent", () => {
-    render(<Timeline events={[event(1, { client: "agent" })]} onFocus={() => {}} />);
+    render(<TimelineOf events={[event(1, { client: "agent" })]} onFocus={() => {}} />);
     expect(within(rows()[0] as HTMLElement).getByText("Agent")).toBeTruthy();
   });
 
   it("says what a command charged, and what an undo refunded", () => {
     render(
-      <Timeline
+      <TimelineOf
         events={[
           event(1, { cost: 1250 }),
           event(2, { name: "undo", input: { target: 1 }, cost: -1250 }),
@@ -86,7 +100,7 @@ describe("Timeline", () => {
 
   it("strikes through an undone entry, and not the undo that undid it", () => {
     render(
-      <Timeline
+      <TimelineOf
         events={[event(1), event(2, { name: "undo", input: { target: 1 }, cost: -200 })]}
         onFocus={() => {}}
       />,
@@ -101,7 +115,7 @@ describe("Timeline", () => {
 
   it("takes the strike-through away when a redo brings the entry back", () => {
     render(
-      <Timeline
+      <TimelineOf
         events={[
           event(1),
           event(2, { name: "undo", input: { target: 1 }, cost: -200 }),
@@ -117,7 +131,7 @@ describe("Timeline", () => {
   it("focuses the camera on the area of an entry that has one", () => {
     const onFocus = vi.fn();
     render(
-      <Timeline events={[event(1, { input: { x: 4, y: 5, w: 2, h: 3 } })]} onFocus={onFocus} />,
+      <TimelineOf events={[event(1, { input: { x: 4, y: 5, w: 2, h: 3 } })]} onFocus={onFocus} />,
     );
     fireEvent.click(screen.getByRole("button", { name: /Raise terrain/ }));
     expect(onFocus).toHaveBeenCalledTimes(1);
@@ -127,7 +141,7 @@ describe("Timeline", () => {
   it("is no button for an entry without an area", () => {
     const onFocus = vi.fn();
     render(
-      <Timeline
+      <TimelineOf
         events={[event(1, { name: "finance_take_loan", input: { amount: 1 } })]}
         onFocus={onFocus}
       />,

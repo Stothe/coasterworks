@@ -7,6 +7,7 @@ import { buildActions, type UiActionDeps } from "../src/actions/registry";
 import type { ActionContext } from "../src/actions/types";
 import { uiStore } from "../src/state/uiStore";
 import { EVENT_DEBOUNCE_MS, type ParkStatus } from "../src/state/useParkStatus";
+import { buildTimeline } from "../src/state/useTimeline";
 import { Inspector, type InspectorProps } from "../src/ui/Inspector";
 
 const noop = vi.fn();
@@ -180,7 +181,7 @@ describe("Inspector: the park", () => {
     store().openInspector("timeline");
     const focusTile = vi.fn();
     renderInspector({
-      events: [
+      timeline: buildTimeline([
         {
           t: "event",
           kind: "log",
@@ -193,7 +194,7 @@ describe("Inspector: the park", () => {
             cost: 400,
           },
         },
-      ],
+      ]),
       focusTile,
     });
     expect(within(inspector()).getByText("Agent")).toBeTruthy();

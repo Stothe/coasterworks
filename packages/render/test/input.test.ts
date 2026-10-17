@@ -95,6 +95,47 @@ describe("attachControls: keys", () => {
     expect(rig.yaw).toBeCloseTo(start, 10);
   });
 
+  it("snaps a quarter turn at once, with no frames, when the system asks for reduced motion", () => {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query === "(prefers-reduced-motion: reduce)",
+    }));
+    const { rig, press } = setup();
+    const start = rig.yaw;
+    expect(press("e")).toBe(true);
+    expect(rig.yaw).toBeCloseTo(start + Math.PI / 2, 10);
+    expect(frames).toHaveLength(0);
+    // Pressed again, it adds another quarter; and q takes one back.
+    press("e");
+    expect(rig.yaw).toBeCloseTo(start + Math.PI, 10);
+    press("q");
+    expect(rig.yaw).toBeCloseTo(start + Math.PI / 2, 10);
+    expect(frames).toHaveLength(0);
+  });
+
+  it("settles a turn in progress where it is headed when motion is reduced mid-turn", () => {
+    const { rig, press } = setup();
+    const start = rig.yaw;
+    press("e");
+    frame(100);
+    vi.stubGlobal("matchMedia", () => ({ matches: true }));
+    press("e");
+    frame(100);
+    expect(rig.yaw).toBeCloseTo(start + Math.PI, 10);
+    frame(600);
+    expect(rig.yaw).toBeCloseTo(start + Math.PI, 10);
+  });
+
+  it("still animates when the system does not ask for reduced motion", () => {
+    vi.stubGlobal("matchMedia", () => ({ matches: false }));
+    const { rig, press } = setup();
+    const start = rig.yaw;
+    press("e");
+    expect(rig.yaw).toBe(start);
+    frame(125);
+    expect(rig.yaw).toBeGreaterThan(start);
+    expect(rig.yaw).toBeLessThan(start + Math.PI / 2);
+  });
+
   it("continues from where the last turn is headed when pressed again mid-turn", () => {
     const { rig, press } = setup();
     const start = rig.yaw;

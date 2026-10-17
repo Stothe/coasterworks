@@ -26,11 +26,7 @@ export function Segmented<T extends string = string>({
   disabled = false,
 }: SegmentedProps<T>) {
   return (
-    <div
-      role="group"
-      aria-label={label}
-      className="inline-flex gap-0.5 rounded-lg bg-white/5 p-[3px]"
-    >
+    <div role="group" aria-label={label} className="inline-flex gap-0.5 rounded-lg bg-fill p-[3px]">
       {options.map((option) => (
         <button
           key={option.id}
@@ -41,7 +37,7 @@ export function Segmented<T extends string = string>({
           aria-keyshortcuts={option.shortcut}
           disabled={disabled}
           onClick={() => onChange(option.id)}
-          className="hud-button min-w-8 gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted aria-pressed:bg-white/15 aria-pressed:text-ink"
+          className="hud-button min-w-8 gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted aria-pressed:bg-fill-active aria-pressed:text-ink"
         >
           {option.label}
           {option.shortcut !== undefined && <Kbd>{option.shortcut}</Kbd>}

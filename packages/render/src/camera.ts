@@ -17,6 +17,8 @@ const TARGET_EASE = 0.2;
 const TARGET_SNAP = 1e-3;
 /** The pitch search steps this far at a time, then narrows to the first pose that clears. */
 const PITCH_STEP = 0.02;
+/** The most the pitch moves back toward the player's own each frame, when the eye allows it. */
+const PITCH_RELAX = 0.02;
 const PITCH_REFINEMENTS = 14;
 /** How many times the distance fix repeats, as the ground under a moving eye changes. */
 const DISTANCE_PASSES = 8;
@@ -30,7 +32,14 @@ export class CameraRig {
   target: V3 = { x: 0, y: 0, z: 0 };
   distance = 40;
   yaw = Math.PI / 4;
+  /** What the camera is at this frame: the player's pitch, or higher if the land asked for it. */
   pitch = 0.6;
+  /**
+   * The pitch the player asked for, by dragging (`orbit`) or by a classic angle (`setClassic`).
+   * `settle()` raises `pitch` above it to keep the eye out of the hills and lets it down again
+   * once the eye is clear.
+   */
+  userPitch = 0.6;
   /** Vertical field of view in radians. The scene's camera follows it, and `pan` is scaled by it. */
   fovY = (35 * Math.PI) / 180;
   readonly limits = {
@@ -44,10 +53,16 @@ export class CameraRig {
    */
   heightAt: ((x: number, z: number) => number) | undefined;
 
-  /** Turns the camera by the given radians; pitch is clamped to the limits, yaw is free. */
+  /**
+   * Turns the camera by the given radians; pitch is clamped to the limits, yaw is free. The pitch
+   * the player asked for moves by the same amount as the pitch on show, so a view the hills had
+   * tipped up still follows the drag.
+   */
   orbit(dYaw: number, dPitch: number): void {
+    const [lowest, highest] = this.limits.pitch;
     this.yaw += dYaw;
-    this.pitch = clamp(this.pitch + dPitch, this.limits.pitch[0], this.limits.pitch[1]);
+    this.userPitch = clamp(this.userPitch + dPitch, lowest, highest);
+    this.pitch = clamp(this.pitch + dPitch, lowest, highest);
   }
 
   /** Multiplies the distance by `factor` (below 1 zooms in), clamped to the limits. */
@@ -73,6 +88,7 @@ export class CameraRig {
   /** Snaps to one of RCT's four classic angles: 45 degrees plus index quarter turns, ~35 degrees up. */
   setClassic(index: 0 | 1 | 2 | 3): void {
     this.yaw = Math.PI / 4 + (index * Math.PI) / 2;
+    this.userPitch = 0.615;
     this.pitch = 0.615;
   }
 
@@ -86,10 +102,17 @@ export class CameraRig {
    * Keeps the view out of the hills; the scene calls it once a frame, before `applyTo`.
    *
    * The target's height eases toward the ground under it, so the view follows the land as the
-   * player pans over hills or reshapes them. Then, if the eye is less than `CAMERA_CLEARANCE`
-   * above the ground under it, the pitch is raised, by as little as does it, to lift the eye. Only
-   * when the pitch is at its limit does the distance grow instead. The eye is never left below the
-   * ground, and the pose that results stays: panning away does not put the old pitch back.
+   * player pans over hills or reshapes them. Everything after that is measured against that eased
+   * height, which is where the eye really is: the ground under the target first, then the eye.
+   *
+   * If the eye is then less than `CAMERA_CLEARANCE` above the ground under it, the pitch is
+   * raised, by as little as does it, to lift the eye. Only when the pitch is at its limit does the
+   * distance grow instead. The eye is never left below the ground.
+   *
+   * A raised pitch does not stay: each frame it moves back toward `userPitch`, by at most
+   * `PITCH_RELAX`, for as long as the eye still clears the ground at the pitch it would have. A
+   * raise that only the easing's lag called for (a fast pan up a slope, where the target is still
+   * below the ground it stands on) is undone as the target catches up.
    */
   settle(): void {
     const ground = this.heightAt;
@@ -100,10 +123,22 @@ export class CameraRig {
     this.target.y =
       Math.abs(gap) <= TARGET_SNAP ? groundAtTarget : this.target.y + gap * TARGET_EASE;
 
+    this.relaxPitch(ground);
     if (this.clearance(ground) >= 0) return;
     this.raisePitch(ground);
     if (this.clearance(ground) >= 0) return;
     this.raiseDistance(ground);
+  }
+
+  /** Moves the pitch a step back toward the player's, if the eye still clears the ground there. */
+  private relaxPitch(ground: (x: number, z: number) => number): void {
+    if (this.pitch === this.userPitch) return;
+    const held = this.pitch;
+    const gap = this.userPitch - held;
+    // The last step lands on the player's pitch exactly, not a rounding error away from it.
+    this.pitch =
+      Math.abs(gap) <= PITCH_RELAX ? this.userPitch : held + Math.sign(gap) * PITCH_RELAX;
+    if (this.clearance(ground) < 0) this.pitch = held;
   }
 
   /** How far the eye is above the least height it may have: negative when it is too low. */

@@ -15,16 +15,30 @@ function memoryStorage(): Storage {
   };
 }
 
+/**
+ * True when the global `localStorage` is a real `Storage`, which is what jsdom provides. Node 25
+ * and later put a `localStorage` of their own on the global that gives `undefined` (and warns, the
+ * first time it is read) unless it is started with `--localstorage-file`, and that hides jsdom's.
+ * The warning is held back while this reads it, so the tests' output stays clean.
+ */
+function hasStorage(): boolean {
+  const { emitWarning } = process;
+  process.emitWarning = () => {};
+  try {
+    return globalThis.localStorage instanceof Storage;
+  } catch {
+    return false;
+  } finally {
+    process.emitWarning = emitWarning;
+  }
+}
+
 // What the browser has and jsdom does not, for the components that need it: Radix and cmdk watch
 // sizes with a ResizeObserver, a media query asks `matchMedia`, and cmdk scrolls the highlighted
 // item into view. Tests that opt out of jsdom (`@vitest-environment node`) have no window at all.
 if (typeof window !== "undefined") {
-  // Newer Node versions put a `localStorage` of their own on the global: it is a getter that warns
-  // when it is read and gives nothing without `--localstorage-file`, and it hides jsdom's. The
-  // descriptor is looked at without reading it.
-  if (typeof Object.getOwnPropertyDescriptor(globalThis, "localStorage")?.get === "function") {
-    vi.stubGlobal("localStorage", memoryStorage());
-  }
+  // Only where there is no working one: a `localStorage` that jsdom provides is left as it is.
+  if (!hasStorage()) vi.stubGlobal("localStorage", memoryStorage());
 
   vi.stubGlobal(
     "ResizeObserver",

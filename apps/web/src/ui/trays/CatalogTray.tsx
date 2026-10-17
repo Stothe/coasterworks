@@ -56,7 +56,7 @@ export function CatalogTray({ tool, actions, ctx, onError, disabled = false }: C
   };
 
   return (
-    <ul className="m-0 flex list-none gap-2 overflow-x-auto p-0">
+    <ul className="m-0 flex list-none gap-2 overflow-x-auto p-1">
       {cards.map((action) => {
         const cost = costHintOf(action);
         return (
@@ -65,7 +65,7 @@ export function CatalogTray({ tool, actions, ctx, onError, disabled = false }: C
               type="button"
               disabled={disabled || ctx === null || action.enabled?.(ctx) === false}
               onClick={() => run(action)}
-              className="hud-button w-52 flex-col items-start gap-0.5 rounded-lg bg-white/5 p-2.5 text-left"
+              className="hud-button w-52 flex-col items-start gap-0.5 rounded-lg bg-fill p-2.5 text-left"
             >
               <span className="text-sm font-medium">{action.title}</span>
               <span className="text-xs text-muted">{action.description}</span>

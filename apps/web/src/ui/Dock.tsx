@@ -54,7 +54,7 @@ export function Dock({ tool, onSelect, disabled = false }: DockProps) {
             aria-keyshortcuts={String(index + 1)}
             disabled={disabled}
             onClick={() => onSelect(active ? "select" : item.tool)}
-            className="hud-button relative min-w-[4.5rem] flex-col gap-0.5 rounded-lg px-2 pt-1.5 pb-1 text-muted aria-pressed:bg-accent aria-pressed:text-white"
+            className="hud-button relative min-w-[4.5rem] flex-col gap-0.5 rounded-lg px-2 pt-1.5 pb-1 text-muted aria-pressed:bg-accent-strong aria-pressed:text-on-accent"
           >
             {item.icon}
             <span className="text-xs font-medium">{item.label}</span>

@@ -27,14 +27,14 @@ export function Toast({ toasts, onDismiss, besideInspector = false }: ToastProps
         <div
           key={toast.id}
           role={toast.kind === "error" ? "alert" : "status"}
-          className="glass pointer-events-auto flex items-start gap-2 py-1.5 pr-1.5 pl-3 text-sm"
+          className="glass pointer-events-auto flex animate-enter items-start gap-2 py-1.5 pr-1.5 pl-3 text-sm"
         >
           {toast.action ? (
             <JumpButton action={toast.action} onDone={() => onDismiss(toast.id)}>
               {toast.text}
             </JumpButton>
           ) : (
-            <span className={`flex-1 py-1 ${toast.kind === "error" ? "text-[#ffb4b4]" : ""}`}>
+            <span className={`flex-1 py-1 ${toast.kind === "error" ? "text-danger" : ""}`}>
               {toast.text}
             </span>
           )}

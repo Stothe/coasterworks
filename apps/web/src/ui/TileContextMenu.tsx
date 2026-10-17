@@ -24,7 +24,7 @@ export interface TileContextMenuProps {
 }
 
 const ITEM =
-  "hud-button justify-start rounded-md px-2.5 text-sm text-ink outline-none select-none data-[highlighted]:bg-white/10";
+  "hud-button justify-start rounded-lg px-2.5 text-sm text-ink select-none data-[highlighted]:bg-fill-strong";
 
 /**
  * The menu of a tile: Inspect, and the five things the inspector does to a tile. It is Radix's
@@ -67,7 +67,7 @@ export function TileContextMenu({
       <ContextMenu.Portal>
         <ContextMenu.Content
           aria-label={tile ? `Tile (${tile.x}, ${tile.y}) actions` : "Tile actions"}
-          className="glass z-50 flex min-w-44 flex-col p-1"
+          className="glass z-50 flex min-w-44 animate-enter flex-col p-1"
         >
           {tile && (
             <>
@@ -80,7 +80,7 @@ export function TileContextMenu({
               >
                 Inspect
               </ContextMenu.Item>
-              <ContextMenu.Separator className="my-1 h-px bg-white/10" />
+              <ContextMenu.Separator className="my-1 h-px bg-line" />
               {TILE_ACTIONS.map((action) => (
                 <ContextMenu.Item
                   key={action.id}

@@ -48,6 +48,11 @@ interface Turn {
 
 const easeInOut = (k: number) => k * k * (3 - 2 * k);
 
+/** True when the player has asked their system for less motion: the turn then snaps. */
+function prefersReducedMotion(): boolean {
+  return typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
 /** True when a key press is aimed at a text field, which keeps its keys. */
 function isTyping(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
@@ -66,8 +71,9 @@ function isTyping(target: EventTarget | null): boolean {
  * - Left click picks a tile; left drag past 4 px pans the view instead.
  * - Right drag (or ctrl + left drag, the Mac right click) orbits.
  * - The wheel zooms by `1.1 ** (deltaY / 100)`.
- * - `q` / `e` turn the view a quarter turn over 250 ms. The number keys and `Home` are not here:
- *   the app owns them (the dock tools, and the classic angles through `rig.setClassic`).
+ * - `q` / `e` turn the view a quarter turn over 250 ms, or at once for a player whose system asks
+ *   for reduced motion. The number keys and `Home` are not here: the app owns them (the dock
+ *   tools, and the classic angles through `rig.setClassic`).
  *
  * A turn gives way to any other change to the rig's yaw, such as the app snapping to a classic
  * angle while it runs.
@@ -115,6 +121,12 @@ export function attachControls(
   const startTurn = (delta: number) => {
     // A quarter turn pressed mid-turn continues from where the last one is headed.
     const base = turn ? turn.to : rig.yaw;
+    if (prefersReducedMotion()) {
+      // No turning to watch: the view is simply there.
+      stopTurn();
+      rig.yaw = base + delta;
+      return;
+    }
     if (frame) cancelAnimationFrame(frame);
     turn = { from: rig.yaw, to: base + delta, startedAt: performance.now(), written: rig.yaw };
     frame = requestAnimationFrame(stepTurn);

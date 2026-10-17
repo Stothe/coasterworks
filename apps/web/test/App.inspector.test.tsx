@@ -8,6 +8,7 @@ import { uiStore } from "../src/state/uiStore";
 import { useHost, type HostState } from "../src/state/useHost";
 import type { ParkStatus } from "../src/state/useParkStatus";
 import {
+  CLEAR_OF_INSPECTOR_REM,
   EDGE_GAP_REM,
   INSPECTOR_GAP_REM,
   INSPECTOR_WIDTH_REM,
@@ -119,6 +120,44 @@ const inspector = () => screen.queryByRole("complementary", { name: "Inspector" 
 const cashPill = () => screen.getByRole("button", { name: /^Open finances/ });
 const datePill = () => screen.getByRole("button", { name: /^Open park overview/ });
 const props = () => viewport.props as ViewportProps;
+
+describe("the tray and the dock keep clear of the inspector", () => {
+  /** The box the tray and the dock are centered in: the whole window, less the inspector's side. */
+  const room = () =>
+    screen.getByRole("group", { name: "Tools" }).parentElement?.parentElement as HTMLElement;
+
+  it("have the whole width while it is shut, and the space left of it while it is open", async () => {
+    await ready();
+    expect(room().style.right).toBe("0px");
+    act(() => store().openInspector("finances"));
+    expect(room().style.right).toBe(`${CLEAR_OF_INSPECTOR_REM}rem`);
+    act(() => store().closeInspector());
+    expect(room().style.right).toBe("0px");
+  });
+
+  it("keep that space from the same measures as the inspector and the toasts", async () => {
+    await ready();
+    act(() => store().openInspector("overview"));
+    const panel = inspector() as HTMLElement;
+    expect(Number.parseFloat(room().style.right)).toBe(
+      Number.parseFloat(panel.style.right) +
+        Number.parseFloat(panel.style.width) +
+        INSPECTOR_GAP_REM,
+    );
+  });
+});
+
+describe("the page's hook for tests", () => {
+  it("says what the player has in hand, from the interface's own store", async () => {
+    await ready();
+    const hook = window.__coasterworks;
+    expect(hook?.ready).toBe(true);
+    expect(hook?.uiState().tool).toBe("terrain");
+    expect(hook?.uiState().placement?.command).toBe("terrain_raise");
+    act(() => press("Escape"));
+    expect(hook?.uiState()).toEqual({ tool: "select", placement: null });
+  });
+});
 
 describe("the status pills open the inspector", () => {
   it("the cash pill opens Finances on the park", async () => {

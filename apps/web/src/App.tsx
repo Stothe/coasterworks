@@ -15,6 +15,7 @@ import { CommandBar } from "./ui/CommandBar";
 import { Dock } from "./ui/Dock";
 import { HelpOverlay } from "./ui/HelpOverlay";
 import { Inspector } from "./ui/Inspector";
+import { CLEAR_OF_INSPECTOR_REM } from "./ui/layout";
 import { StatusPills } from "./ui/StatusPills";
 import { TileContextMenu, type TileMenuHandle } from "./ui/TileContextMenu";
 import { Toast } from "./ui/Toast";
@@ -270,14 +271,21 @@ export function App() {
   // Tells the smoke test, and anyone with a console, that the page has a sim to talk to.
   useEffect(() => {
     if (host.status !== "ready" || !client) return;
-    window.__coasterworks = { ready: true, client };
+    window.__coasterworks = {
+      ready: true,
+      client,
+      uiState: () => {
+        const { tool, placement } = uiStore.getState();
+        return { tool, placement };
+      },
+    };
     return () => {
       delete window.__coasterworks;
     };
   }, [host.status, client]);
 
   return (
-    <div className="fixed inset-0 overflow-hidden bg-[#0d1117] font-sans text-ink select-none">
+    <div className="fixed inset-0 overflow-hidden bg-canvas font-sans text-ink select-none">
       <TileContextMenu
         ref={tileMenu}
         terrain={host.terrain}
@@ -308,21 +316,30 @@ export function App() {
             />
           )}
         </div>
-        {/* Only the tray and the dock take the pointer; the space beside the narrower is the map's. */}
-        <div className="pointer-events-none absolute bottom-4 left-1/2 flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-col items-center gap-2">
-          <Tray
-            tool={uiTool}
-            actions={actions}
-            ctx={ctx}
-            lastCharge={lastCharge}
-            onError={(message) => push(message, { kind: "error" })}
-            disabled={disconnected}
-          />
-          <Dock
-            tool={uiTool}
-            onSelect={(next) => uiStore.getState().setTool(next)}
-            disabled={disconnected}
-          />
+        {/*
+          The tray and the dock sit in the middle of the space the inspector leaves, and move left
+          to keep out of its way while it is open. Only they take the pointer; the space beside the
+          narrower is the map's.
+        */}
+        <div
+          className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center px-4 transition-[right]"
+          style={{ right: inspectorOpen ? `${CLEAR_OF_INSPECTOR_REM}rem` : 0 }}
+        >
+          <div className="pointer-events-none flex w-max max-w-full flex-col items-center gap-2">
+            <Tray
+              tool={uiTool}
+              actions={actions}
+              ctx={ctx}
+              lastCharge={lastCharge}
+              onError={(message) => push(message, { kind: "error" })}
+              disabled={disconnected}
+            />
+            <Dock
+              tool={uiTool}
+              onSelect={(next) => uiStore.getState().setTool(next)}
+              disabled={disconnected}
+            />
+          </div>
         </div>
         <div className="pointer-events-none absolute inset-x-4 top-16 flex justify-center">
           {disconnected ? (
@@ -351,7 +368,7 @@ export function App() {
           ctx={ctx}
           execute={execute}
           notify={push}
-          events={host.events}
+          timeline={timeline}
           focusTile={focusRect}
           {...(lastEventId !== undefined && { lastEventId })}
         />

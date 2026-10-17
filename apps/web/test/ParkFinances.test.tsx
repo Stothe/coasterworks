@@ -101,7 +101,7 @@ describe("ParkFinances: the numbers", () => {
     setup(park({ cash: 993_750, monthStartCash: 1_000_000 }));
     expect(fact("This month").textContent).toBe("-$62.50");
     expect(fact("This month").className).not.toContain("text-success");
-    expect(fact("This month").className).toContain("text-[#ffb4b4]");
+    expect(fact("This month").className).toContain("text-danger");
   });
 
   it("shows no change as $0.00, in green: not a loss", () => {

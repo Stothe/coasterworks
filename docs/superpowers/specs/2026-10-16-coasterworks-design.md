@@ -183,6 +183,8 @@ docs/
   superpowers/plans/   implementation plans
 ```
 
+`packages/ui` is deferred: for now the components live in `apps/web/src/ui`, with their kit in `apps/web/src/ui/kit`, and move into a package when a second app needs them.
+
 ### 5.3 Command and query layer
 
 The heart of the design, because it is what "one action list" and "MCP native" both mean.

@@ -89,14 +89,14 @@ export function HelpOverlay({ byId }: HelpOverlayProps) {
         // Only a click on the backdrop itself is a click outside the map.
         if (e.target === e.currentTarget) uiStore.getState().toggleHelp();
       }}
-      className="pointer-events-auto absolute inset-0 z-40 grid place-items-center bg-black/35 p-4"
+      className="pointer-events-auto absolute inset-0 z-40 grid place-items-center bg-scrim p-4"
     >
       <section
         role="dialog"
         aria-label="Keyboard shortcuts"
-        className="glass flex max-h-full w-[44rem] max-w-full flex-col"
+        className="glass flex max-h-full w-[44rem] max-w-full animate-enter flex-col"
       >
-        <header className="flex min-h-10 items-center gap-2 border-b border-white/10 py-1 pr-1.5 pl-3">
+        <header className="flex min-h-10 items-center gap-2 border-b border-line py-1 pr-1.5 pl-3">
           <h2 className="flex-1 text-sm font-semibold">Keyboard shortcuts</h2>
           <span className="text-xs text-muted">Esc or ? to close</span>
           <IconButton

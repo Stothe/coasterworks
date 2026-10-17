@@ -257,7 +257,7 @@ export function Viewport(props: ViewportProps) {
         // A readout for the player's eye: not announced, and it never takes the pointer.
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute bottom-3.5 left-3.5 rounded-md bg-black/50 px-2 py-0.5 text-[11px] tabular-nums text-muted"
+          className="pointer-events-none absolute bottom-3.5 left-3.5 rounded-lg bg-(--glass-bg) px-2 py-0.5 text-[11px] tabular-nums text-muted"
         >
           {fps ?? "…"} FPS
         </div>

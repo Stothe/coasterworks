@@ -1,17 +1,11 @@
-import type { EventMessage } from "@coasterworks/protocol";
 import { dateOf, formatDate } from "@coasterworks/sim";
-import {
-  useTimeline,
-  type ClientLabel,
-  type TileRect,
-  type TimelineEntry,
-} from "../state/useTimeline";
+import type { ClientLabel, TileRect, TimelineEntry } from "../state/useTimeline";
 import { formatCents } from "./format";
 import { EmptyState } from "./kit";
 
 export interface TimelineProps {
-  /** The host's log events, which the timeline lists. */
-  events: readonly EventMessage[];
+  /** The park's entries, newest first, as `useTimeline` builds them from the host's log events. */
+  entries: readonly TimelineEntry[];
   /** An entry with an area was clicked: look at it. */
   onFocus(rect: TileRect): void;
 }
@@ -28,7 +22,7 @@ function Badge({ client }: { client: ClientLabel }) {
   return (
     <span
       className={`rounded px-1.5 text-[11px] leading-5 font-medium ${
-        client === "Agent" ? "bg-accent/25 text-[#a9c9ff]" : "bg-white/10 text-muted"
+        client === "Agent" ? "bg-accent/25 text-accent-soft" : "bg-fill-strong text-muted"
       }`}
     >
       {client}
@@ -61,8 +55,7 @@ const ROW = "flex w-full flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left";
  * Everything that has happened in the park, newest first, whoever did it: the player, an agent
  * through MCP, or the system. An entry that worked on an area is a button that looks at it.
  */
-export function Timeline({ events, onFocus }: TimelineProps) {
-  const entries = useTimeline(events);
+export function Timeline({ entries, onFocus }: TimelineProps) {
   if (entries.length === 0) {
     return (
       <EmptyState

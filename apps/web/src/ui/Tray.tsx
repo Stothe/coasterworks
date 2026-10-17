@@ -26,7 +26,7 @@ export function Tray({ tool, actions, ctx, lastCharge, onError, disabled = false
   return (
     <section
       aria-label={`${label} tray`}
-      className="glass pointer-events-auto max-w-[calc(100vw-2rem)] p-2.5"
+      className="glass pointer-events-auto max-w-full animate-enter p-2.5"
     >
       {tool === "terrain" ? (
         <TerrainTray lastCharge={lastCharge} disabled={disabled} />

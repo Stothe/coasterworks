@@ -64,6 +64,21 @@ describe("CameraRig", () => {
     expect(rig.distance).toBe(200);
   });
 
+  it("remembers the pitch the player asked for, from a drag and from a classic angle", () => {
+    const rig = new CameraRig();
+    expect(rig.userPitch).toBe(0.6);
+    rig.orbit(0, 0.2);
+    expect(rig.userPitch).toBeCloseTo(0.8, 12);
+    expect(rig.pitch).toBeCloseTo(0.8, 12);
+    rig.orbit(0, 10);
+    expect(rig.userPitch).toBe(1.4);
+    rig.orbit(0, -10);
+    expect(rig.userPitch).toBe(0.26);
+    rig.setClassic(2);
+    expect(rig.userPitch).toBeCloseTo(0.615, 12);
+    expect(rig.pitch).toBeCloseTo(0.615, 12);
+  });
+
   it("snaps to the four classic angles, keeping the distance", () => {
     const rig = new CameraRig();
     rig.distance = 33;
@@ -306,6 +321,8 @@ describe("CameraRig height awareness", () => {
       for (const pitch of [0.26, 0.6, 1.0, 1.4]) {
         for (let k = 0; k < 8; k++) {
           rig.distance = distance;
+          // The player asked for this pitch, so the rig has no reason to take it down.
+          rig.userPitch = pitch;
           rig.pitch = pitch;
           rig.yaw = (k * Math.PI) / 4;
           rig.target = { x: 3 + k * 1.7, y: ground(3 + k * 1.7, 9), z: 9 };
@@ -316,5 +333,125 @@ describe("CameraRig height awareness", () => {
         }
       }
     }
+  });
+});
+
+describe("CameraRig pitch relaxation", () => {
+  /** A rig on flat ground that has been tipped up by `raise` radians, as a hill does. */
+  function raised(raise: number) {
+    const rig = new CameraRig();
+    rig.heightAt = () => 0;
+    rig.target = { x: 0, y: 0, z: 0 };
+    rig.pitch = rig.userPitch + raise;
+    return rig;
+  }
+
+  it("lets a raised pitch back down toward the player's, at most 0.02 radians a frame", () => {
+    const rig = raised(0.1);
+    const seen: number[] = [rig.pitch];
+    for (let frame = 0; frame < 8; frame++) {
+      rig.settle();
+      seen.push(rig.pitch);
+    }
+    for (let i = 1; i < seen.length; i++) {
+      const before = seen[i - 1] ?? 0;
+      const after = seen[i] ?? 0;
+      expect(before - after).toBeLessThanOrEqual(0.02 + 1e-12);
+      expect(after).toBeGreaterThanOrEqual(0.6);
+    }
+    // Five frames of 0.02 is the whole 0.1, and it lands on the player's pitch exactly.
+    expect(seen[5]).toBeCloseTo(0.6, 12);
+    expect(seen[8]).toBe(0.6);
+  });
+
+  it("keeps the pitch it has while the player's would put the eye in the ground", () => {
+    const rig = new CameraRig();
+    // The ridge between the eye and the target that the pitch had to clear.
+    const ground = hill(0, 3.3, 3, 4);
+    rig.heightAt = ground;
+    rig.target = { x: 0, y: 0, z: 0 };
+    rig.yaw = 0;
+    rig.distance = 4;
+    rig.settle();
+    const lifted = rig.pitch;
+    expect(lifted).toBeGreaterThan(rig.userPitch);
+
+    for (let frame = 0; frame < 50; frame++) {
+      rig.settle();
+      expect(clearanceOf(rig, ground)).toBeGreaterThanOrEqual(-1e-9);
+    }
+    // Still tipped up, to within one relaxation step of the least pitch that clears.
+    expect(rig.pitch).toBeGreaterThan(rig.userPitch);
+    expect(rig.pitch).toBeLessThanOrEqual(lifted + 1e-12);
+    expect(clearanceOf(rig, ground)).toBeLessThan(0.1);
+  });
+
+  it("follows the player's pitch when they drag, not the one it started with", () => {
+    const rig = raised(0.1);
+    rig.orbit(0, 0.3);
+    for (let frame = 0; frame < 30; frame++) rig.settle();
+    expect(rig.userPitch).toBeCloseTo(0.9, 12);
+    expect(rig.pitch).toBeCloseTo(0.9, 12);
+  });
+
+  it("is back at the player's pitch within 200 frames of a pan over a hill and back to flat ground", () => {
+    const rig = new CameraRig();
+    // A steep hill in the middle of flat ground, with the eye ahead of the pan: it has to look
+    // over the slope it is climbing toward.
+    const ground = hill(30, 10, 8, 9);
+    rig.heightAt = ground;
+    rig.target = { x: 0, y: 0, z: 10 };
+    rig.yaw = Math.PI / 2;
+    rig.distance = 6;
+    rig.pitch = rig.userPitch = 0.4;
+    const asked = rig.userPitch;
+
+    let highest = asked;
+    let lowestClearance = Infinity;
+    const frame = () => {
+      rig.settle();
+      lowestClearance = Math.min(lowestClearance, clearanceOf(rig, ground));
+      highest = Math.max(highest, rig.pitch);
+    };
+    // Fast: a unit and a half a frame, so the target's easing falls well behind the slope.
+    for (let x = 0; x <= 60; x += 1.5) {
+      rig.target.x = x;
+      frame();
+    }
+    // The hill did tip the view up on the way over.
+    expect(highest).toBeGreaterThan(asked + 0.05);
+
+    // Out on flat ground again, the pitch comes back to what the player asked for.
+    let frames = 0;
+    while (rig.pitch !== asked && frames < 200) {
+      frame();
+      frames++;
+    }
+    expect(frames).toBeLessThan(200);
+    expect(rig.pitch).toBe(asked);
+    // And the eye was never in the ground at any frame of the whole sweep.
+    expect(lowestClearance).toBeGreaterThanOrEqual(-1e-9);
+  });
+
+  it("keeps the eye clear on the way back across the hill as well", () => {
+    const rig = new CameraRig();
+    const ground = hill(30, 10, 8, 9);
+    rig.heightAt = ground;
+    rig.target = { x: 0, y: 0, z: 10 };
+    rig.yaw = Math.PI / 2;
+    rig.distance = 5;
+    rig.pitch = rig.userPitch = 0.3;
+    for (const [from, to, by] of [
+      [0, 60, 1],
+      [60, 0, -1],
+    ] as const) {
+      for (let x = from; by > 0 ? x <= to : x >= to; x += by) {
+        rig.target.x = x;
+        rig.settle();
+        expect(clearanceOf(rig, ground)).toBeGreaterThanOrEqual(-1e-9);
+      }
+    }
+    for (let frame = 0; frame < 200; frame++) rig.settle();
+    expect(rig.pitch).toBe(0.3);
   });
 });

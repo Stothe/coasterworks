@@ -27,7 +27,7 @@ export function SpeedControl({ speed, onChange, disabled = false }: SpeedControl
           aria-pressed={speed === option.speed}
           disabled={disabled}
           onClick={() => onChange(option.speed)}
-          className="hud-button min-w-8 rounded-lg px-2 text-xs font-medium text-muted aria-pressed:bg-white/15 aria-pressed:text-ink"
+          className="hud-button min-w-8 rounded-lg px-2 text-xs font-medium text-muted aria-pressed:bg-fill-active aria-pressed:text-ink"
         >
           {option.text}
         </button>

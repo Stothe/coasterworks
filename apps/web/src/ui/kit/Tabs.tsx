@@ -24,12 +24,12 @@ export function Tabs({ tabs, value, onValueChange, label, className }: TabsProps
       onValueChange={onValueChange}
       className={`flex min-h-0 flex-col ${className ?? ""}`.trim()}
     >
-      <RadixTabs.List aria-label={label} className="flex gap-0.5 rounded-lg bg-white/5 p-[3px]">
+      <RadixTabs.List aria-label={label} className="flex gap-0.5 rounded-lg bg-fill p-[3px]">
         {tabs.map((tab) => (
           <RadixTabs.Trigger
             key={tab.id}
             value={tab.id}
-            className="hud-button flex-1 rounded-md px-3 text-xs font-medium text-muted data-[state=active]:bg-white/15 data-[state=active]:text-ink"
+            className="hud-button flex-1 rounded-md px-3 text-xs font-medium text-muted data-[state=active]:bg-fill-active data-[state=active]:text-ink"
           >
             {tab.label}
           </RadixTabs.Trigger>
@@ -39,7 +39,9 @@ export function Tabs({ tabs, value, onValueChange, label, className }: TabsProps
         <RadixTabs.Content
           key={tab.id}
           value={tab.id}
-          className="min-h-0 flex-1 overflow-auto pt-3 focus-visible:outline-2 focus-visible:outline-accent"
+          // The padding, and the margin that takes it back, leave room inside the scrolling box for
+          // the focus ring of a control at its edge: a ring is 4px out and would be cut off.
+          className="-mx-1 min-h-0 flex-1 overflow-auto px-1 pt-3 pb-1"
         >
           {tab.content}
         </RadixTabs.Content>
