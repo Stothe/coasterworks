@@ -1,4 +1,6 @@
+import { GUEST_ARRAYS } from "../guests/types.js";
 import { createParkState } from "../park/types.js";
+import { Rng } from "../rng.js";
 import { MAX_MAP, SCHEMA_VERSION } from "../world/types.js";
 import { toBase64 } from "./base64.js";
 import { CORRUPT_MESSAGE, SaveError } from "./error.js";
@@ -37,11 +39,32 @@ const migrateV1ToV2: Migration = (doc) => {
 };
 
 /**
+ * Schema 2 to 3: parks gained guests. The store starts empty, with the first guest to come
+ * numbered 1, and the guests get a random stream of their own, forked off the root generator the
+ * way `createWorld` forks it, so a migrated park draws the same guests a new one would. A document
+ * with no usable root generator is refused as corrupt.
+ */
+const migrateV2ToV3: Migration = (doc) => {
+  if (!isRecord(doc)) throw new SaveError(CORRUPT_MESSAGE);
+  let guestStream: number[];
+  try {
+    guestStream = [
+      ...Rng.fromState(doc.rng as [number, number, number, number]).fork("guests").state,
+    ];
+  } catch (error) {
+    throw new SaveError(CORRUPT_MESSAGE, { cause: error });
+  }
+  const guests: Record<string, unknown> = { count: 0, nextGuestId: 1 };
+  for (const [name, kind] of GUEST_ARRAYS) guests[name] = { $t: kind, $b64: "" };
+  return { ...doc, guests, rngStreams: { guests: guestStream } };
+};
+
+/**
  * Migrations keyed by the schema version they upgrade FROM, so `MIGRATIONS[1]` turns a schema 1
  * document into a schema 2 one. When `SCHEMA_VERSION` goes up, add the entry for the version it
  * left behind.
  */
-export const MIGRATIONS: Record<number, Migration> = { 1: migrateV1ToV2 };
+export const MIGRATIONS: Record<number, Migration> = { 1: migrateV1ToV2, 2: migrateV2ToV3 };
 
 /** The document's schema version. Throws `SaveError` if it has none. */
 export function schemaVersionOf(doc: unknown): number {

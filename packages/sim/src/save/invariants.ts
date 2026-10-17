@@ -1,3 +1,12 @@
+import { THOUGHTS } from "../guests/thoughts.js";
+import {
+  DEST_TURNED_AWAY,
+  GUEST_CAP,
+  GUEST_COLORS,
+  MAX_GUEST_STATE,
+  NAME_COUNT,
+  NO_TILE,
+} from "../guests/types.js";
 import { MAX_ENTRY_FEE, MAX_RATING } from "../park/types.js";
 import { PATH_QUEUE, edgeSide } from "../paths/paths.js";
 import { inBounds } from "../terrain/terrain.js";
@@ -15,6 +24,10 @@ const MAX_SURFACE = 4;
  *   - the park's entrance, if it has one, is on the map and on its edge; the entry fee is 0 to
  *     $100.00, the rating 0 to 999, and the guest, admission, income, and expense counters are not
  *     negative
+ *   - every live guest has an id that is above 0, below `nextGuestId`, and used by no other guest;
+ *     a state 0 to 5, a colour 0 to 8, a name and a thought that exist, cash and idle times that are
+ *     not negative; a position and a target tile on the map or one tile outside it (the entrance
+ *     lane); and a destination that is a tile on the map or one of the two "walking out" markers
  *   - log ids start above 0, strictly increase, and are all below `nextId`
  *   - every id on the undo and redo stacks names a log entry, and no id is on the stacks twice,
  *     which covers an id on both
@@ -48,6 +61,9 @@ export function validateWorldInvariants(world: World): string | null {
 
   const problem = parkProblem(world);
   if (problem !== null) return problem;
+
+  const guestIssue = guestProblem(world);
+  if (guestIssue !== null) return guestIssue;
 
   const ids = new Set<number>();
   let previous = 0;
@@ -104,5 +120,64 @@ function parkProblem(world: World): string | null {
   for (const [label, value] of counters) {
     if (value < 0) return `${label} is ${value}, which is below 0`;
   }
+  return null;
+}
+
+/** The first thing wrong with the guests, as a sentence, or null. */
+function guestProblem(world: World): string | null {
+  const g = world.guests;
+  const { width, height } = world.terrain;
+  if (g.count < 0 || g.count > GUEST_CAP)
+    return `guest count ${g.count} is outside 0 to ${GUEST_CAP}`;
+  if (g.nextGuestId < 1) return `nextGuestId ${g.nextGuestId} is below 1`;
+
+  const tiles = width * height;
+  const seen = new Set<number>();
+  let live = 0;
+  for (let slot = 0; slot < GUEST_CAP; slot++) {
+    if (g.live[slot] !== 1) continue;
+    live++;
+    const id = g.id[slot] as number;
+    if (id < 1) return `guest id ${id} is not above 0`;
+    if (id >= g.nextGuestId) return `guest id ${id} is not below nextGuestId ${g.nextGuestId}`;
+    if (seen.has(id)) return `guest id ${id} is used by two guests`;
+    seen.add(id);
+
+    const label = `guest ${id}`;
+    const state = g.state[slot] as number;
+    if (state > MAX_GUEST_STATE)
+      return `${label} has state ${state}, outside 0 to ${MAX_GUEST_STATE}`;
+    const color = g.color[slot] as number;
+    if (color >= GUEST_COLORS)
+      return `${label} has color ${color}, outside 0 to ${GUEST_COLORS - 1}`;
+    const name = g.name[slot] as number;
+    if (name >= NAME_COUNT) return `${label} has name ${name}, outside 0 to ${NAME_COUNT - 1}`;
+    const thought = g.thought[slot] as number;
+    if (thought >= THOUGHTS.length) return `${label} has thought ${thought}, which does not exist`;
+    if ((g.cash[slot] as number) < 0) return `${label} has cash ${g.cash[slot]}, which is below 0`;
+    if ((g.sinceAction[slot] as number) < 0) {
+      return `${label} has sinceAction ${g.sinceAction[slot]}, which is below 0`;
+    }
+    if ((g.thoughtTick[slot] as number) < 0) {
+      return `${label} has thoughtTick ${g.thoughtTick[slot]}, which is below 0`;
+    }
+
+    // A guest is on the map or one tile outside it, where the entrance lane is.
+    const tileX = (g.x[slot] as number) >> 5;
+    const tileY = (g.y[slot] as number) >> 5;
+    if (tileX < -1 || tileX > width || tileY < -1 || tileY > height) {
+      return `${label} has position (${g.x[slot]}, ${g.y[slot]}), too far off the ${width}x${height} map`;
+    }
+    const tx = g.tx[slot] as number;
+    const ty = g.ty[slot] as number;
+    if (!(tx === NO_TILE && ty === NO_TILE) && (tx < -1 || tx > width || ty < -1 || ty > height)) {
+      return `${label} has target (${tx}, ${ty}), too far off the ${width}x${height} map`;
+    }
+    const dest = g.dest[slot] as number;
+    if (dest < DEST_TURNED_AWAY || dest >= tiles) {
+      return `${label} has destination ${dest}, which is not a tile of the ${width}x${height} map`;
+    }
+  }
+  if (live !== g.count) return `guest count ${g.count} does not match the ${live} live guests`;
   return null;
 }

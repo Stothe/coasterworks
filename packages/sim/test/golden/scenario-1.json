@@ -25,6 +25,8 @@
     { "exec": ["path_build", { "x": 17, "y": 25, "w": 2, "h": 1, "kind": "foot" }] },
     { "undo": true },
     { "redo": true },
+    { "exec": ["park_set_entry_fee", { "cents": 300 }] },
+    { "tick": 2400 },
     { "exec": ["park_close", {}] },
     { "tick": 400 }
   ]

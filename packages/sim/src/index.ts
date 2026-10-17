@@ -15,6 +15,11 @@ export { ENTRANCE_COST } from "./commands/park.js";
 export { PATH_COST } from "./commands/path.js";
 export { MAX_ADVANCE_DAYS } from "./commands/sim.js";
 export { redoLast, undoLast } from "./commands/undo.js";
+export { guestName } from "./guests/names.js";
+export { THOUGHT, THOUGHTS, thoughtText } from "./guests/thoughts.js";
+export type { Mood, Thought } from "./guests/thoughts.js";
+export { GUEST_CAP, GuestState } from "./guests/types.js";
+export type { GuestStore, Waypoints } from "./guests/types.js";
 export { fnv1a64, hashString, hexHash } from "./hash.js";
 export {
   DEFAULT_ENTRY_FEE,
@@ -46,6 +51,7 @@ export type { Migration } from "./save/migrate.js";
 export { SAMPLE_SIZE, createSamplePark } from "./sample-park.js";
 export { Sim } from "./sim.js";
 export { LOAN_MAX, financeSystem } from "./systems/finance.js";
+export { guestSystem } from "./systems/guests.js";
 export type { System } from "./systems/types.js";
 export {
   cornerIndex,

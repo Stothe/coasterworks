@@ -22,7 +22,7 @@ function setup(opts: { width?: number; height?: number } = {}) {
 }
 
 describe("default registry", () => {
-  it("registers the six queries, after the commands, with their categories", () => {
+  it("registers the nine queries, after the commands, with their categories", () => {
     const queries = createDefaultRegistry()
       .catalog()
       .filter((e) => e.kind === "query");
@@ -32,6 +32,9 @@ describe("default registry", () => {
       ["terrain_get", "terrain", false],
       ["log_recent", "sim", false],
       ["undo_state", "sim", false],
+      ["guest_list", "park", false],
+      ["guest_get", "park", false],
+      ["guest_thoughts", "park", false],
       ["catalog_list", "sim", false],
     ]);
   });

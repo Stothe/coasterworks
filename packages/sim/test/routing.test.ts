@@ -104,6 +104,22 @@ describe("RouteCache distance fields", () => {
     expect(field[at(world, 1, 1)]).toBe(UNREACHABLE);
   });
 
+  it("does not wrap from the start of one row to the end of the one before", () => {
+    const world = open(4, 3);
+    // The same map read from the other end: (0, 1) is index 4 and (3, 0) is index 3, so a flood
+    // that stepped west off the left edge would carry on into (3, 0).
+    lay(world, [
+      [2, 0],
+      [3, 0],
+      [0, 1],
+      [1, 1],
+    ]);
+    const field = new RouteCache(world.terrain).distanceField(at(world, 1, 1));
+    expect(field[at(world, 0, 1)]).toBe(1);
+    expect(field[at(world, 3, 0)]).toBe(UNREACHABLE);
+    expect(field[at(world, 2, 0)]).toBe(UNREACHABLE);
+  });
+
   it("walks queues as well as footpaths", () => {
     const world = open(6, 1);
     lay(world, row(0, 0, 2));
@@ -188,6 +204,40 @@ describe("RouteCache.nextStep", () => {
     expect(cache.nextStep(12 * 3, target)).toBe(-1);
     // A target that is not on a path leads nowhere.
     expect(cache.nextStep(at(world, 1, 1), at(world, 2, 2))).toBe(-1);
+  });
+
+  it("never steps west off the left edge onto the end of the row above", () => {
+    const world = open(4, 3);
+    // From (0, 1) the flat neighbour to the west is index 3, which is (3, 0), and the target.
+    // On the map the only way there is the long way round, by (1, 1), (2, 1) and (2, 0).
+    lay(world, [
+      [3, 0],
+      [2, 0],
+      [2, 1],
+      [1, 1],
+      [0, 1],
+    ]);
+    const cache = new RouteCache(world.terrain);
+    const from = at(world, 0, 1);
+    const target = at(world, 3, 0);
+    expect(cache.distanceField(target)[from]).toBe(4);
+    expect(cache.nextStep(from, target)).toBe(at(world, 1, 1));
+    expect(cache.nextStep(from, target)).not.toBe(3);
+
+    // And with the target out of reach nothing wraps in to rescue it.
+    const apart = open(4, 3);
+    lay(apart, [
+      [2, 0],
+      [3, 0],
+      [0, 1],
+      [1, 1],
+    ]);
+    const split = new RouteCache(apart.terrain);
+    for (const t of [at(apart, 3, 0), at(apart, 2, 0), at(apart, 1, 1)]) {
+      expect(split.nextStep(at(apart, 0, 1), t)).not.toBe(3);
+    }
+    expect(split.nextStep(at(apart, 0, 1), at(apart, 3, 0))).toBe(-1);
+    expect(split.nextStep(at(apart, 0, 1), at(apart, 1, 1))).toBe(at(apart, 1, 1));
   });
 
   it("breaks ties in the order north, east, south, west", () => {

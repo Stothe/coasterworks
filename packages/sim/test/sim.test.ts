@@ -9,6 +9,7 @@ import {
   createDefaultRegistry,
   createWorld,
   financeSystem,
+  guestSystem,
   getCorner,
   hashWorld,
   type System,
@@ -43,12 +44,12 @@ describe("Sim construction", () => {
     expect(sim.world.tick).toBe(0);
   });
 
-  it("starts with the finance system and gives each sim its own systems list", () => {
+  it("starts with the finance and guest systems, in that order, and gives each sim its own list", () => {
     const a = setup().sim;
     const b = setup().sim;
-    expect(a.systems).toEqual([financeSystem]);
+    expect(a.systems).toEqual([financeSystem, guestSystem]);
     a.systems.push({ name: "extra", tick: () => {} });
-    expect(b.systems).toEqual([financeSystem]);
+    expect(b.systems).toEqual([financeSystem, guestSystem]);
   });
 });
 

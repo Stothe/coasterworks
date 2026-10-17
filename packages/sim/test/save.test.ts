@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { gunzipSync, gzipSync, strFromU8, strToU8 } from "fflate";
 import { describe, expect, it } from "vitest";
 import {
+  GUEST_CAP,
+  GuestState,
   MAX_HEIGHT,
   MIGRATIONS,
   Rng,
@@ -16,8 +18,11 @@ import {
   type Migration,
   type World,
 } from "../src/index.js";
+import { compactGuests, removeGuest, spawnGuest } from "../src/guests/guests.js";
+import { GUEST_ARRAYS } from "../src/guests/types.js";
 import { fromBase64, toBase64 } from "../src/save/base64.js";
 import { validateWorldInvariants } from "../src/save/invariants.js";
+import { at, makePark, placeGuest } from "./helpers/guests.js";
 
 const CREATED = "2026-10-16T12:00:00.000Z";
 
@@ -289,7 +294,9 @@ describe("save format", () => {
       "terrain",
       "finance",
       "park",
+      "guests",
       "rng",
+      "rngStreams",
       "log",
       "undoStack",
       "redoStack",
@@ -380,12 +387,12 @@ describe("deserializeWorld errors", () => {
     }
   });
 
-  it("throws the exact newer-version message for schema 3", () => {
+  it("throws the exact newer-version message for schema 4", () => {
     const doc = readDoc(serializeWorld(freshWorld()));
-    doc.schemaVersion = 3;
+    doc.schemaVersion = 4;
     expect(() => deserializeWorld(writeDoc(doc))).toThrow(SaveError);
     expect(() => deserializeWorld(writeDoc(doc))).toThrow(
-      "Save is from a newer version (schema 3, this build reads 2)",
+      "Save is from a newer version (schema 4, this build reads 3)",
     );
     let caught: unknown;
     try {
@@ -394,7 +401,7 @@ describe("deserializeWorld errors", () => {
       caught = error;
     }
     expect((caught as Error).message).toBe(
-      "Save is from a newer version (schema 3, this build reads 2)",
+      "Save is from a newer version (schema 4, this build reads 3)",
     );
     expect((caught as Error).name).toBe("SaveError");
   });
@@ -402,7 +409,7 @@ describe("deserializeWorld errors", () => {
   it("interpolates the versions into the newer-version message", () => {
     expectSaveError(
       () => deserializeWorld(writeDoc({ schemaVersion: 41 })),
-      /^Save is from a newer version \(schema 41, this build reads 2\)$/,
+      /^Save is from a newer version \(schema 41, this build reads 3\)$/,
     );
   });
 
@@ -678,9 +685,12 @@ function oldSave(
 ): Uint8Array {
   const doc = readDoc(serializeWorld(world));
   doc.schemaVersion = 0;
-  // Schema 0 comes before the path layer and the park state; schema 1 to 2 adds them back.
+  // Schema 0 comes before the path layer and the park state, and before guests and their stream;
+  // the migrations from 1 and from 2 add them back.
   delete (doc.terrain as Record<string, unknown>).path;
   delete doc.park;
+  delete doc.guests;
+  delete doc.rngStreams;
   edit(doc);
   return writeDoc(doc);
 }
@@ -893,8 +903,8 @@ describe("migrate", () => {
   });
 
   it("has a migration for each schema before the current one, and none after", () => {
-    expect(Object.keys(MIGRATIONS).map(Number)).toEqual([1]);
-    expect(SCHEMA_VERSION).toBe(2);
+    expect(Object.keys(MIGRATIONS).map(Number)).toEqual([1, 2]);
+    expect(SCHEMA_VERSION).toBe(3);
   });
 
   it("runs the migration for the document's version and stamps the new schema version", () => {
@@ -904,6 +914,7 @@ describe("migrate", () => {
         return { schemaVersion: old.schemaVersion, name: old.title };
       },
       1: (doc: unknown) => doc,
+      2: (doc: unknown) => doc,
     };
     const input = { schemaVersion: 0, title: "Old Park" };
     const out = migrate(input, migrations);
@@ -916,6 +927,7 @@ describe("migrate", () => {
     const migrations = {
       0: (doc: unknown) => ({ ...(doc as object), ranZero: true }),
       1: (doc: unknown) => doc,
+      2: (doc: unknown) => doc,
       [SCHEMA_VERSION]: (doc: unknown) => ({ ...(doc as object), ranCurrent: true }),
     };
     const out = migrate({ schemaVersion: 0 }, migrations) as Record<string, unknown>;
@@ -1001,7 +1013,7 @@ const V1_FIXTURE = fromBase64(
 );
 
 /** The `hashWorld` of the schema 1 fixture, as the current build computes it once it is loaded. */
-const V1_FIXTURE_LOADED_HASH = "a65c95950f62c2bc";
+const V1_FIXTURE_LOADED_HASH = "9ddd3cf4bd21555d";
 
 describe("schema 1 saves", () => {
   it("has a fixture that really is a schema 1 document, without paths or a park", () => {
@@ -1013,7 +1025,7 @@ describe("schema 1 saves", () => {
     expect(doc.hash).toBe("6346222bbd77599f");
   });
 
-  it("loads as schema 2 with an empty path layer and a default, closed park", () => {
+  it("loads as the current schema with an empty path layer and a default, closed park", () => {
     const world = deserializeWorld(V1_FIXTURE);
     expect(world.meta.schemaVersion).toBe(SCHEMA_VERSION);
     expect(world.meta.name).toBe("Leafy Lake");
@@ -1035,6 +1047,10 @@ describe("schema 1 saves", () => {
       monthly: { entry: 0, rides: 0, shops: 0, running: 0, wages: 0 },
     });
     expect(world.pathVersion).toBe(0);
+    // And it came through the schema 2 to 3 step as well: no guests, and a stream for them.
+    expect(world.guests.count).toBe(0);
+    expect(world.guests.nextGuestId).toBe(1);
+    expect(world.rngStreams.guests.state).toEqual(new Rng(world.meta.seed).fork("guests").state);
   });
 
   it("keeps everything else it had: the terrain, the money, and the log", () => {
@@ -1082,6 +1098,7 @@ describe("MIGRATIONS[1]", () => {
     schemaVersion: 1,
     meta: { name: "Old Park", seed: 3, created: "" },
     terrain: { width: 3, height: 2, corners: { $t: "Int16Array", $b64: "" } },
+    rng: [1, 2, 3, 4],
   });
 
   it("adds a path layer of zeros the size of the map, and a default park named after the world", () => {
@@ -1117,10 +1134,12 @@ describe("MIGRATIONS[1]", () => {
     expect(doc).toEqual(v1Doc());
   });
 
-  it("is run by migrate, which stamps schema 2", () => {
+  it("is run by migrate, which carries on through the later steps to the current schema", () => {
     const out = migrate(v1Doc()) as Record<string, unknown>;
-    expect(out.schemaVersion).toBe(2);
+    expect(out.schemaVersion).toBe(SCHEMA_VERSION);
     expect(out).toHaveProperty("park");
+    expect(out).toHaveProperty("guests");
+    expect(out).toHaveProperty("rngStreams");
   });
 
   it("gives a map with unusable dimensions no path layer, so the schema check says why", () => {
@@ -1139,6 +1158,426 @@ describe("MIGRATIONS[1]", () => {
     }
     expect(() => step({ meta: {}, terrain: 3 })).toThrow(SaveError);
   });
+});
+
+const V2_FIXTURE = fromBase64(
+  readFileSync(new URL("./fixtures/sample-v2.park.b64", import.meta.url), "utf8").trim(),
+);
+
+/** The `hashWorld` of the schema 2 fixture, as the current build computes it once it is loaded. */
+const V2_FIXTURE_LOADED_HASH = "30b12b374ee71f9e";
+
+describe("schema 2 saves", () => {
+  it("has a fixture that really is a schema 2 document, with a park but no guests", () => {
+    const doc = readDoc(V2_FIXTURE);
+    expect(doc.schemaVersion).toBe(2);
+    expect(doc).toHaveProperty("park");
+    expect(doc).not.toHaveProperty("guests");
+    expect(doc).not.toHaveProperty("rngStreams");
+    // The hash it carries is the one the schema 2 build computed, which is not ours.
+    expect(doc.hash).toBe("9fa382566ef94c23");
+  });
+
+  it("loads as the current schema with an empty guest store and a stream of its own", () => {
+    const world = deserializeWorld(V2_FIXTURE);
+    expect(world.meta.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(world.guests.count).toBe(0);
+    expect(world.guests.nextGuestId).toBe(1);
+    expect(world.guests.fragmented).toBe(false);
+    expect(world.guests.freeCount).toBe(GUEST_CAP);
+    for (const [name] of GUEST_ARRAYS) {
+      expect(world.guests[name], name).toHaveLength(GUEST_CAP);
+    }
+    // The stream is what a world created from this seed would have had.
+    expect(world.rngStreams.guests.state).toEqual(new Rng(7).fork("guests").state);
+    expect(world.rngStreams.guests.state).toEqual(world.rng.fork("guests").state);
+  });
+
+  it("keeps the park it had: the entrance, the fee, the paths, the log, and the clock", () => {
+    const world = deserializeWorld(V2_FIXTURE);
+    expect(world.tick).toBe(300);
+    expect(world.park).toMatchObject({
+      name: "Leafy Lake",
+      open: true,
+      entryFee: 12_00,
+      entrance: { x: 40, y: 63, side: 2 },
+      rating: 500,
+      guestsInPark: 0,
+      totalAdmissions: 0,
+    });
+    expect(world.terrain.path.filter((v) => v === 1)).toHaveLength(13 + 7);
+    expect(world.log).toHaveLength(24);
+  });
+
+  it("loads without comparing the schema 2 hash, and hashes to a pinned value", () => {
+    const world = deserializeWorld(V2_FIXTURE);
+    expect(hashWorld(world)).not.toBe("9fa382566ef94c23");
+    expect(hashWorld(world)).toBe(V2_FIXTURE_LOADED_HASH);
+    expect(hashWorld(deserializeWorld(V2_FIXTURE))).toBe(V2_FIXTURE_LOADED_HASH);
+  });
+
+  it("saves again as the current schema and reloads to the same world", () => {
+    const world = deserializeWorld(V2_FIXTURE);
+    const resaved = serializeWorld(world);
+    const doc = readDoc(resaved);
+    expect(doc.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(doc.hash).toBe(V2_FIXTURE_LOADED_HASH);
+    expect(hashWorld(deserializeWorld(resaved))).toBe(V2_FIXTURE_LOADED_HASH);
+  });
+
+  it("is a park the guests can come to: it is open, so they arrive and pay", () => {
+    const sim = new Sim(deserializeWorld(V2_FIXTURE));
+    sim.step(2500);
+    expect(sim.world.guests.nextGuestId).toBeGreaterThan(1);
+    expect(sim.world.park.totalAdmissions).toBeGreaterThan(0);
+    expect(sim.world.park.income.entry).toBe(sim.world.park.totalAdmissions * 12_00);
+    expect(sim.world.park.guestsInPark).toBeGreaterThan(0);
+  });
+});
+
+describe("MIGRATIONS[2]", () => {
+  const v2Doc = () => ({ schemaVersion: 2, rng: [1, 2, 3, 4], other: { kept: true } });
+
+  it("adds an empty guest store: no guests, ids from 1, and an empty array for each field", () => {
+    const out = (MIGRATIONS[2] as Migration)(v2Doc()) as {
+      guests: Record<string, unknown>;
+      other: unknown;
+    };
+    expect(out.other).toEqual({ kept: true });
+    expect(Object.keys(out.guests)).toEqual([
+      "count",
+      "nextGuestId",
+      ...GUEST_ARRAYS.map(([name]) => name),
+    ]);
+    expect(out.guests.count).toBe(0);
+    expect(out.guests.nextGuestId).toBe(1);
+    for (const [name, kind] of GUEST_ARRAYS) {
+      expect(out.guests[name], name).toEqual({ $t: kind, $b64: "" });
+    }
+  });
+
+  it("gives the guests the stream forked off the root generator, as createWorld does", () => {
+    const out = (MIGRATIONS[2] as Migration)(v2Doc()) as { rngStreams: { guests: number[] } };
+    expect(out.rngStreams.guests).toEqual([...Rng.fromState([1, 2, 3, 4]).fork("guests").state]);
+    // The root itself is left alone.
+    expect((out as unknown as { rng: number[] }).rng).toEqual([1, 2, 3, 4]);
+  });
+
+  it("leaves the document it was given as it was", () => {
+    const doc = v2Doc();
+    (MIGRATIONS[2] as Migration)(doc);
+    expect(doc).toEqual(v2Doc());
+  });
+
+  it("is run by migrate, which stamps schema 3", () => {
+    const out = migrate(v2Doc()) as Record<string, unknown>;
+    expect(out.schemaVersion).toBe(3);
+    expect(out).toHaveProperty("guests");
+    expect(out).toHaveProperty("rngStreams");
+  });
+
+  it("refuses a document with no usable root generator as corrupt", () => {
+    const step = MIGRATIONS[2] as Migration;
+    for (const doc of [
+      null,
+      5,
+      [],
+      { schemaVersion: 2 },
+      { schemaVersion: 2, rng: "abc" },
+      { schemaVersion: 2, rng: [1, 2, 3] },
+      { schemaVersion: 2, rng: [0, 0, 0, 0] },
+      { schemaVersion: 2, rng: [1, 2, 3, 2 ** 32] },
+    ]) {
+      expectSaveError(() => migrate(doc), "Save file is corrupt");
+    }
+    expect(() => step(null)).toThrow(SaveError);
+  });
+});
+
+/** Puts `n` guests in the world, with an entrance for them to come from. */
+function addGuests(world: World, n: number): void {
+  world.park.entrance ??= { x: 5, y: 0, side: 0 };
+  for (let i = 0; i < n; i++) spawnGuest(world, world.rngStreams.guests);
+}
+
+/** A park with 40 guests who have been walking about for a while, some of whom have left. */
+function busyPark(): Sim {
+  const sim = makePark({ rating: 500, fee: 1_00 });
+  for (let y = 5; y <= 21; y++) placeGuest(sim.world, { x: 8, y }, GuestState.WANDERING, {});
+  for (let slot = 0; slot < 17; slot += 4) sim.world.guests.happiness[slot] = 10;
+  sim.step(700);
+  return sim;
+}
+
+describe("guests in a save", () => {
+  it("round-trips every guest array, the counters, the stream, and the hash", () => {
+    const sim = busyPark();
+    const { world } = sim;
+    expect(world.guests.count).toBeGreaterThan(10);
+    expect(world.guests.nextGuestId - 1).toBeGreaterThan(world.guests.count);
+    const loaded = deserializeWorld(serializeWorld(world));
+    const g = world.guests;
+    const l = loaded.guests;
+    expect(l.count).toBe(g.count);
+    expect(l.nextGuestId).toBe(g.nextGuestId);
+    for (const [name] of GUEST_ARRAYS) {
+      expect(l[name], name).toHaveLength(GUEST_CAP);
+      expect(l[name].subarray(0, g.count), name).toEqual(g[name].subarray(0, g.count));
+    }
+    expect(loaded.rngStreams.guests.state).toEqual(world.rngStreams.guests.state);
+    expect(hashWorld(loaded)).toBe(hashWorld(world));
+    expect(loaded.park).toStrictEqual(world.park);
+    // The loaded store is ready for more arrivals and for leavers.
+    expect(l.fragmented).toBe(false);
+    expect(l.freeCount).toBe(GUEST_CAP - g.count);
+    expect(Array.from(l.live.subarray(0, g.count)).every((v) => v === 1)).toBe(true);
+    expect(l.live.subarray(g.count).every((v) => v === 0)).toBe(true);
+    expect(spawnGuest(loaded, loaded.rngStreams.guests)).toBe(g.count);
+  });
+
+  it("writes only the live guests, packed, in a fixed key order", () => {
+    const { world } = busyPark();
+    const doc = readDoc(serializeWorld(world));
+    const guests = doc.guests as Record<string, unknown>;
+    expect(Object.keys(guests)).toEqual([
+      "count",
+      "nextGuestId",
+      ...GUEST_ARRAYS.map(([name]) => name),
+    ]);
+    expect(guests.count).toBe(world.guests.count);
+    expect(guests.nextGuestId).toBe(world.guests.nextGuestId);
+    const width = { Int32Array: 4, Uint16Array: 2, Uint8Array: 1 } as const;
+    for (const [name, kind] of GUEST_ARRAYS) {
+      const encoded = guests[name] as { $t: string; $b64: string };
+      expect(encoded.$t, name).toBe(kind);
+      expect(fromBase64(encoded.$b64), name).toHaveLength(world.guests.count * width[kind]);
+    }
+    expect(doc.rngStreams).toEqual({ guests: [...world.rngStreams.guests.state] });
+  });
+
+  it("writes an empty store as empty arrays", () => {
+    const doc = readDoc(serializeWorld(freshWorld()));
+    const guests = doc.guests as Record<string, { $b64?: string } | number>;
+    expect(guests.count).toBe(0);
+    expect(guests.nextGuestId).toBe(1);
+    for (const [name] of GUEST_ARRAYS)
+      expect((guests[name] as { $b64: string }).$b64, name).toBe("");
+    expect(deserializeWorld(serializeWorld(freshWorld())).guests.count).toBe(0);
+  });
+
+  it("writes 32-bit and 16-bit values little-endian whatever the host", () => {
+    const world = freshWorld(10, 10);
+    addGuests(world, 1);
+    world.guests.cash[0] = -2;
+    world.guests.id[0] = 0x01020304;
+    world.guests.name[0] = 0x0102;
+    world.guests.nextGuestId = 0x01020305;
+    const guests = readDoc(serializeWorld(world)).guests as Record<string, { $b64: string }>;
+    expect(Array.from(fromBase64((guests.cash as { $b64: string }).$b64))).toEqual([
+      0xfe, 0xff, 0xff, 0xff,
+    ]);
+    expect(Array.from(fromBase64((guests.id as { $b64: string }).$b64))).toEqual([4, 3, 2, 1]);
+    expect(Array.from(fromBase64((guests.name as { $b64: string }).$b64))).toEqual([2, 1]);
+  });
+
+  it("keeps negative values: a guest in the lane north of the map and one with a negative target", () => {
+    const world = freshWorld(10, 10);
+    addGuests(world, 1);
+    expect(world.guests.y[0]).toBe(-16);
+    world.guests.dest[0] = -2;
+    const loaded = deserializeWorld(serializeWorld(world));
+    expect(loaded.guests.y[0]).toBe(-16);
+    expect(loaded.guests.dest[0]).toBe(-2);
+    expect(hashWorld(loaded)).toBe(hashWorld(world));
+  });
+
+  it("packs a store with holes into slot order, and loads it into slots 0..count-1", () => {
+    const world = freshWorld(10, 10);
+    addGuests(world, 6);
+    removeGuest(world, 1);
+    removeGuest(world, 4);
+    expect(world.guests.fragmented).toBe(true);
+    const bytesFragmented = serializeWorld(world);
+
+    const compact = freshWorld(10, 10);
+    addGuests(compact, 6);
+    removeGuest(compact, 1);
+    removeGuest(compact, 4);
+    compactGuests(compact);
+    // The same guests, packed or not, make the same save.
+    expect(Array.from(serializeWorld(compact))).toEqual(Array.from(bytesFragmented));
+
+    const loaded = deserializeWorld(bytesFragmented);
+    expect(loaded.guests.count).toBe(4);
+    expect(Array.from(loaded.guests.id.subarray(0, 5))).toEqual([1, 3, 4, 6, 0]);
+    // Saving did not change the world it saved.
+    expect(world.guests.fragmented).toBe(true);
+    expect(at(world.guests.live, 1)).toBe(0);
+  });
+
+  it("keeps the guest stream in step: the draws after a load are the draws that would have come", () => {
+    const sim = busyPark();
+    const loaded = deserializeWorld(serializeWorld(sim.world));
+    const a = Array.from({ length: 5 }, () => sim.world.rngStreams.guests.next());
+    const b = Array.from({ length: 5 }, () => loaded.rngStreams.guests.next());
+    expect(b).toEqual(a);
+  });
+
+  it("is deterministic: the same world gives the same bytes, and a loaded one re-saves identically", () => {
+    const { world } = busyPark();
+    const a = serializeWorld(world);
+    expect(Array.from(serializeWorld(world))).toEqual(Array.from(a));
+    expect(Array.from(serializeWorld(deserializeWorld(a)))).toEqual(Array.from(a));
+  });
+
+  it("compresses: 2,000 guests save in well under a megabyte", () => {
+    const world = freshWorld(64, 64);
+    world.park.entrance = { x: 5, y: 0, side: 0 };
+    for (let i = 0; i < GUEST_CAP; i++) spawnGuest(world, world.rngStreams.guests);
+    const bytes = serializeWorld(world);
+    expect(bytes.length).toBeLessThan(500 * 1024);
+    expect(hashWorld(deserializeWorld(bytes))).toBe(hashWorld(world));
+  });
+
+  it("refuses a guest section that is damaged, missing, or does not add up", () => {
+    const good = readDoc(serializeWorld(busyPark().world));
+    const guests = (doc: Record<string, unknown>) => doc.guests as Record<string, unknown>;
+    const invalid: Record<string, (doc: Record<string, unknown>) => void> = {
+      "missing guests": (doc) => delete doc.guests,
+      "guests that is not an object": (doc) => (doc.guests = []),
+      "no count": (doc) => delete guests(doc).count,
+      "fractional count": (doc) => (guests(doc).count = 1.5),
+      "negative count": (doc) => (guests(doc).count = -1),
+      "count above the cap": (doc) => (guests(doc).count = GUEST_CAP + 1),
+      "no id counter": (doc) => delete guests(doc).nextGuestId,
+      "id counter of zero": (doc) => (guests(doc).nextGuestId = 0),
+      "missing array": (doc) => delete guests(doc).hunger,
+      "array with the wrong tag": (doc) => (guests(doc).cash = { $t: "Uint8Array", $b64: "AAAA" }),
+      "array without bytes": (doc) => (guests(doc).x = { $t: "Int32Array" }),
+      "missing stream block": (doc) => delete doc.rngStreams,
+      "missing guest stream": (doc) => (doc.rngStreams = {}),
+      "short guest stream": (doc) => (doc.rngStreams = { guests: [1, 2, 3] }),
+      "guest stream word out of range": (doc) => (doc.rngStreams = { guests: [1, 2, 3, 2 ** 32] }),
+    };
+    for (const [label, damage] of Object.entries(invalid)) {
+      const doc = structuredClone(good);
+      damage(doc);
+      expect(() => deserializeWorld(writeDoc(doc)), label).toThrow(/^Save file is invalid: /);
+    }
+
+    const corrupt: Record<string, (doc: Record<string, unknown>) => void> = {
+      "an array a guest short": (doc) => {
+        const encoded = guests(doc).id as { $b64: string };
+        encoded.$b64 = toBase64(fromBase64(encoded.$b64).subarray(4));
+      },
+      "an array a guest long": (doc) => {
+        const encoded = guests(doc).happiness as { $b64: string };
+        encoded.$b64 = toBase64(new Uint8Array([...fromBase64(encoded.$b64), 7]));
+      },
+      "a guest stream that is all zero": (doc) => (doc.rngStreams = { guests: [0, 0, 0, 0] }),
+    };
+    for (const damage of Object.values(corrupt)) {
+      const doc = structuredClone(good);
+      damage(doc);
+      expectSaveError(() => deserializeWorld(writeDoc(doc)), /^Save file is corrupt$/);
+    }
+  });
+
+  it("refuses a save whose guests were edited by hand, though the gzip is intact", () => {
+    const doc = readDoc(serializeWorld(busyPark().world));
+    const encoded = (doc.guests as Record<string, { $b64: string }>).cash as { $b64: string };
+    const bytes = fromBase64(encoded.$b64);
+    bytes[0] = (bytes[0] as number) ^ 1;
+    encoded.$b64 = toBase64(bytes);
+    expectSaveError(() => deserializeWorld(writeDoc(doc)), /^Save file is corrupt$/);
+  });
+});
+
+/** Ways to break a world with two guests in it, as `validateWorldInvariants` sees them. */
+const GUEST_VIOLATIONS: Array<[string, (world: World) => void, RegExp]> = [
+  ["a guest id used twice", (w) => (w.guests.id[1] = at(w.guests.id, 0)), /guest id/],
+  ["a guest id of zero", (w) => (w.guests.id[0] = 0), /guest id/],
+  ["a guest id that is not below the counter", (w) => (w.guests.nextGuestId = 2), /nextGuestId/],
+  ["a guest state above 5", (w) => (w.guests.state[1] = 6), /state/],
+  ["a guest colour above 8", (w) => (w.guests.color[1] = 9), /colo/],
+  ["a guest name outside the table", (w) => (w.guests.name[0] = 64 * 32), /name/],
+  ["a guest thought that does not exist", (w) => (w.guests.thought[1] = 200), /thought/],
+  ["negative guest cash", (w) => (w.guests.cash[0] = -1), /cash/],
+  ["a guest far east of the map", (w) => (w.guests.x[0] = 12 * 32), /position/],
+  ["a guest far south of the map", (w) => (w.guests.y[1] = 14 * 32 + 5), /position/],
+  ["a guest far to the west", (w) => (w.guests.x[0] = -33), /position/],
+  ["a guest target off the map", (w) => (w.guests.tx[0] = 11), /target/],
+  ["a guest target half-set", (w) => ((w.guests.tx[0] = -1), (w.guests.ty[0] = 99)), /target/],
+  ["a guest destination off the map", (w) => (w.guests.dest[0] = 10 * 10), /destination/],
+  ["a guest destination below the sentinels", (w) => (w.guests.dest[1] = -3), /destination/],
+  ["a negative idle time", (w) => (w.guests.sinceAction[0] = -1), /sinceAction/],
+  ["a negative thought time", (w) => (w.guests.thoughtTick[1] = -1), /thoughtTick/],
+];
+
+describe("guest invariants", () => {
+  function twoGuests(): World {
+    const world = freshWorld(10, 10);
+    addGuests(world, 2);
+    return world;
+  }
+
+  it("accept a world with guests, in the lane or inside, with or without a target", () => {
+    const world = twoGuests();
+    expect(validateWorldInvariants(world)).toBeNull();
+    world.guests.tx[1] = -1;
+    world.guests.ty[1] = -1;
+    world.guests.dest[1] = -2;
+    expect(validateWorldInvariants(world)).toBeNull();
+    // One tile outside the map on any side is the entrance lane, and legal.
+    for (const [x, y] of [
+      [-16, 5 * 32],
+      [10 * 32 + 16, 5 * 32],
+      [5 * 32, -16],
+      [5 * 32, 10 * 32 + 16],
+      [-32, 5 * 32],
+    ]) {
+      world.guests.x[0] = x as number;
+      world.guests.y[0] = y as number;
+      expect(validateWorldInvariants(world), `${x}, ${y}`).toBeNull();
+    }
+    // The extreme values.
+    world.guests.state[0] = 5;
+    world.guests.color[0] = 8;
+    world.guests.name[0] = 64 * 32 - 1;
+    world.guests.thought[0] = 11;
+    world.guests.dest[0] = 10 * 10 - 1;
+    expect(validateWorldInvariants(world)).toBeNull();
+  });
+
+  it("accept a full store", () => {
+    const world = freshWorld(10, 10);
+    addGuests(world, GUEST_CAP);
+    expect(world.guests.count).toBe(GUEST_CAP);
+    expect(validateWorldInvariants(world)).toBeNull();
+  });
+
+  it.each(GUEST_VIOLATIONS)("report %s", (_label, damage, reason) => {
+    const world = twoGuests();
+    damage(world);
+    expect(validateWorldInvariants(world)).toMatch(reason);
+  });
+
+  it.each(GUEST_VIOLATIONS)(
+    "refuse a save with %s, though its hash and gzip are intact",
+    (_label, damage, reason) => {
+      const world = twoGuests();
+      damage(world);
+      let caught: unknown;
+      try {
+        deserializeWorld(serializeWorld(world));
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(SaveError);
+      expect((caught as SaveError).message).toBe("Save file is corrupt");
+      expect(((caught as SaveError).cause as Error).message).toMatch(reason);
+    },
+  );
 });
 
 describe("base64", () => {

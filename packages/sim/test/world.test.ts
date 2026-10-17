@@ -131,6 +131,8 @@ describe("hashWorld", () => {
       ["loan", (w) => void (w.finance.loan = 100)],
       ["month-start cash", (w) => void (w.finance.monthStart.cash = 0)],
       ["rng state", (w) => void w.rng.next()],
+      ["the guest rng stream", (w) => void w.rngStreams.guests.next()],
+      ["the guest id counter", (w) => void (w.guests.nextGuestId = 2)],
       [
         "log length",
         (w) =>

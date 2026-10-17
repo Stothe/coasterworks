@@ -14,6 +14,12 @@ const scenario = () => parseScenario(JSON.parse(scenarioText));
  * The cross-platform determinism guard: CI runs this on Linux and macOS, and both must land on the
  * hash in scenario-1.hash. If a change to the sim is meant to alter its results, regenerate the
  * file with `pnpm --filter @coasterworks/sim golden:update` and say why in the commit.
+ *
+ * History of the recorded hash:
+ *  - Plan D1 Task 3 (guests): re-recorded. The scenario now sets the entry fee to $3.00 while the
+ *    park is open and runs 2,400 ticks, so guests arrive, pay, walk the path, and think; and
+ *    `hashWorld` now covers the guest store and the guests' rng stream. The final 400 ticks run
+ *    with the park closed and the guests still inside.
  */
 describe("golden scenario 1", () => {
   it("ends on the recorded hash", () => {
@@ -74,8 +80,8 @@ describe("runScenario", () => {
     const sim = runScenario(scenario());
     expect(sim.world.terrain.width).toBe(32);
     expect(sim.world.meta.name).toBe("golden");
-    // 120 ticks, then 70 days, then 400 ticks.
-    expect(sim.world.tick).toBe(120 + 70 * 400 + 400);
+    // 120 ticks, then 70 days, then 2,400 ticks with the park open, then 400 with it closed.
+    expect(sim.world.tick).toBe(120 + 70 * 400 + 2400 + 400);
     expect(sim.world.log.some((entry) => entry.name === "undo")).toBe(true);
   });
 
@@ -89,10 +95,34 @@ describe("runScenario", () => {
     expect(world.park).toMatchObject({
       name: "Golden Gardens",
       open: false,
-      entryFee: 500,
+      entryFee: 300,
       entrance: { x: 16, y: 31, side: 2 },
     });
     expect(world.pathVersion).toBeGreaterThan(0);
+  });
+
+  it("lets guests in, so the hash is guarding the guest system too", () => {
+    const sim = runScenario(scenario());
+    const status = sim.query("park_status", {});
+    if (!status.ok) throw new Error(status.error);
+    const park = status.result as {
+      guestsInPark: number;
+      guests: number;
+      totalAdmissions: number;
+      income: { entry: number };
+      open: boolean;
+    };
+    // The park was open for 2,400 ticks and shut for 400 after; guests who got in are still there.
+    expect(park.open).toBe(false);
+    expect(park.guestsInPark).toBeGreaterThan(0);
+    expect(park.guests).toBe(park.guestsInPark);
+    expect(park.totalAdmissions).toBeGreaterThanOrEqual(park.guestsInPark);
+    expect(park.income.entry).toBe(park.totalAdmissions * 300);
+    expect(sim.world.guests.count).toBeGreaterThanOrEqual(park.guestsInPark);
+    // They have been about: thinking, walking the five-tile path from the gate.
+    const g = sim.world.guests;
+    expect(Array.from(g.sinceAction.subarray(0, g.count)).some((v) => v > 0)).toBe(true);
+    expect(g.nextGuestId - 1).toBeGreaterThanOrEqual(park.totalAdmissions);
   });
 
   it("throws with the step number and the reason when a step fails", () => {
