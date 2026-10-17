@@ -35,6 +35,7 @@ export {
   neighborsOnPath,
   pathAt,
 } from "./paths/paths.js";
+export { RouteCache, UNREACHABLE } from "./paths/routing.js";
 export { createDefaultRegistry } from "./registry-default.js";
 export { Rng } from "./rng.js";
 export type { RngState } from "./rng.js";
