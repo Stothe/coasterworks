@@ -1,10 +1,11 @@
 // @vitest-environment node
 import { createDefaultRegistry, type CatalogEntry, type ExecResult } from "@coasterworks/sim";
 import type { SimClient } from "@coasterworks/protocol";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildActions, humanizeName, type UiActionDeps } from "../src/actions/registry";
 import { fieldsFor } from "../src/actions/schema";
 import type { Action, ActionContext, DockTool } from "../src/actions/types";
+import { KEYMAP, formatCombo } from "../src/state/keys";
 
 const catalog = createDefaultRegistry().catalog();
 
@@ -33,6 +34,14 @@ function makeDeps() {
   } satisfies UiActionDeps;
   return { deps, ui };
 }
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+/** The shortcuts are read from the keymap as the keyboard in use writes them. */
+const onMac = () => vi.stubGlobal("navigator", { platform: "MacIntel" });
+const onWindows = () => vi.stubGlobal("navigator", { platform: "Win32" });
 
 const ctx = {
   client: {} as SimClient,
@@ -246,7 +255,8 @@ describe("humanizeName", () => {
 });
 
 describe("buildActions: interface actions", () => {
-  it("lists them with their shortcuts", () => {
+  it("lists them with their shortcuts, as a Mac writes them", () => {
+    onMac();
     const { get } = setup([]);
     const shortcuts = [
       ["ui.pause", "Space"],
@@ -276,6 +286,37 @@ describe("buildActions: interface actions", () => {
     ]) {
       expect(get(id).kind, id).toBe("ui");
     }
+  });
+
+  it("writes them for the keyboard in use: Ctrl+Z, not ⌘Z, on a PC", () => {
+    onWindows();
+    const { get } = setup([]);
+    expect(get("ui.undo").shortcut).toBe("Ctrl+Z");
+    expect(get("ui.redo").shortcut).toBe("Ctrl+Shift+Z");
+    expect(get("ui.pause").shortcut).toBe("Space");
+    expect(get("ui.tool.ride").shortcut).toBe("3");
+  });
+
+  it("works each shortcut out when it is read, so the same action follows the keyboard", () => {
+    const { get } = setup([]);
+    onMac();
+    expect(get("ui.undo").shortcut).toBe("⌘Z");
+    onWindows();
+    expect(get("ui.undo").shortcut).toBe("Ctrl+Z");
+  });
+
+  it("takes every shortcut from the keymap: each is a binding's combo, none is typed in", () => {
+    onWindows();
+    const { actions } = setup([]);
+    for (const action of actions) {
+      const binding = KEYMAP.find((candidate) => candidate.actionId === action.id);
+      expect(action.shortcut, action.id).toBe(
+        binding ? formatCombo(binding.combo, false) : undefined,
+      );
+    }
+    // The ones with no key have none.
+    expect(setup([]).get("ui.speed.4").shortcut).toBeUndefined();
+    expect(setup([]).get("ui.inspector.park").shortcut).toBeUndefined();
   });
 
   it("steps the speed from + and -", () => {
@@ -338,9 +379,12 @@ describe("buildActions: interface actions", () => {
     expect(ui.brush.mock.calls).toEqual([[1], [-1]]);
   });
 
-  it("has no ⌘K action, because ⌘K is the bar itself", () => {
+  it("has no listed action for the bar's own key", () => {
+    onMac();
     const { actions } = setup();
-    expect(actions.some((a) => a.shortcut === "⌘K")).toBe(false);
+    // The bar's action exists for the key to run, and the bar does not list it.
+    expect(actions.filter((a) => !a.hidden).some((a) => a.shortcut === "⌘K")).toBe(false);
+    expect(actions.find((a) => a.id === "ui.commandBar")?.shortcut).toBe("⌘K");
   });
 
   it("gives each a title, a description and keywords", () => {

@@ -1,7 +1,14 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { buildActions, type UiActionDeps } from "../src/actions/registry";
-import { KEYMAP, bindingFor, formatCombo, matchCombo, type KeyLike } from "../src/state/keys";
+import {
+  KEYMAP,
+  bindingFor,
+  formatCombo,
+  matchCombo,
+  shortcutOf,
+  type KeyLike,
+} from "../src/state/keys";
 
 const key = (key: string, mods: Partial<Omit<KeyLike, "key">> = {}): KeyLike => ({
   key,
@@ -57,6 +64,22 @@ describe("matchCombo", () => {
     expect(matchCombo(key("+"), "+")).toBe(true);
     expect(matchCombo(key("-"), "-")).toBe(true);
     expect(matchCombo(key("="), "+")).toBe(false);
+  });
+});
+
+describe("shortcutOf", () => {
+  it("writes the first key of the map that runs the action, for the keyboard in use", () => {
+    expect(shortcutOf("ui.undo", true)).toBe("⌘Z");
+    expect(shortcutOf("ui.undo", false)).toBe("Ctrl+Z");
+    expect(shortcutOf("ui.redo", true)).toBe("⇧⌘Z");
+    expect(shortcutOf("ui.redo", false)).toBe("Ctrl+Shift+Z");
+    expect(shortcutOf("ui.cancel", false)).toBe("Esc");
+    expect(shortcutOf("ui.tool.ride", false)).toBe("3");
+  });
+
+  it("is nothing for an action no key runs", () => {
+    expect(shortcutOf("ui.speed.4")).toBeUndefined();
+    expect(shortcutOf("terrain_raise")).toBeUndefined();
   });
 });
 

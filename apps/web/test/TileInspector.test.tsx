@@ -3,10 +3,16 @@ import type { ExecResult } from "@coasterworks/sim";
 import { MAX_HEIGHT } from "@coasterworks/sim";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Action } from "../src/actions/types";
+import { uiStore } from "../src/state/uiStore";
 import { TileInspector } from "../src/ui/inspector/TileInspector";
 import { tileInfo } from "../src/ui/inspector/tileInfo";
+import { FAKE_RECT, registryActions } from "./actionsFixture";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  uiStore.setState(uiStore.getInitialState(), true);
+});
 
 const W = 8;
 const H = 8;
@@ -32,14 +38,31 @@ function terrain(over: { surface?: number; water?: number; corners?: number[] } 
 
 const OK: ExecResult = { ok: true, id: 1, cost: 1000 };
 
-function setup(map: TerrainData | null = terrain(), result: ExecResult = OK, x = 3, y = 3) {
+const ACTIONS = registryActions();
+
+function setup(
+  map: TerrainData | null = terrain(),
+  result: ExecResult = OK,
+  x = 3,
+  y = 3,
+  actions: readonly Action[] = ACTIONS,
+) {
   const execute = vi.fn<(name: string, input: unknown) => Promise<ExecResult>>(async () => result);
   const notify = vi.fn();
   const view = render(
-    <TileInspector terrain={map} x={x} y={y} execute={execute} notify={notify} />,
+    <TileInspector terrain={map} actions={actions} x={x} y={y} execute={execute} notify={notify} />,
   );
   const again = (next: TerrainData | null, nx = x, ny = y) =>
-    view.rerender(<TileInspector terrain={next} x={nx} y={ny} execute={execute} notify={notify} />);
+    view.rerender(
+      <TileInspector
+        terrain={next}
+        actions={actions}
+        x={nx}
+        y={ny}
+        execute={execute}
+        notify={notify}
+      />,
+    );
   return { execute, notify, again };
 }
 
@@ -162,22 +185,105 @@ describe("TileInspector: what it shows", () => {
   it("says so for a tile that is not on the map, and while there is no map", () => {
     const { again } = setup(terrain(), OK, W, 0);
     expect(screen.getByText("This tile is not on the map")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Raise here" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Raise terrain" })).toBeNull();
     again(null, 3, 3);
     expect(screen.getByText("Waiting for the map")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Raise here" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Raise terrain" })).toBeNull();
   });
 });
 
-describe("TileInspector: the five actions", () => {
+describe("TileInspector: the actions", () => {
   const buttons = () =>
     within(screen.getByRole("group", { name: "Tile actions" }))
       .getAllByRole("button")
       .map((b) => b.textContent);
 
-  it("has Raise here, Lower here, Level here, Set water and Drain, in that order", () => {
+  it("has the registry's placement actions in a fixed order, with Drain after Set water", () => {
     setup();
-    expect(buttons()).toEqual(["Raise here", "Lower here", "Level here", "Set water", "Drain"]);
+    expect(buttons()).toEqual([
+      "Raise terrain",
+      "Lower terrain",
+      "Level terrain",
+      "Smooth terrain",
+      "Set water",
+      "Drain",
+      "Set surface",
+    ]);
+  });
+
+  it("lists what the actions give it: one the sim adds appears, after the known ones", () => {
+    setup(terrain(), OK, 3, 3, registryActions([FAKE_RECT]));
+    expect(buttons().at(-1)).toBe("Terrain flatten fake");
+    expect(buttons()).toHaveLength(8);
+  });
+
+  it("lists in a fixed order whatever order the actions come in, and only placement actions", () => {
+    setup(terrain(), OK, 3, 3, [...registryActions([FAKE_RECT])].reverse());
+    expect(buttons()).toEqual([
+      "Raise terrain",
+      "Lower terrain",
+      "Level terrain",
+      "Smooth terrain",
+      "Set water",
+      "Drain",
+      "Set surface",
+      "Terrain flatten fake",
+    ]);
+  });
+
+  it("has no group at all when the actions have not arrived", () => {
+    setup(
+      terrain(),
+      OK,
+      3,
+      3,
+      registryActions().filter((a) => a.placement !== "rect"),
+    );
+    expect(screen.queryByRole("group", { name: "Tile actions" })).toBeNull();
+    // The facts of the tile are there all the same.
+    expect(fact("Lowest corner")).toBe("4");
+  });
+
+  it("does the made-up action to this tile as a click with a brush of one would", async () => {
+    const { execute } = setup(terrain(), OK, 5, 6, registryActions([FAKE_RECT]));
+    fireEvent.click(screen.getByRole("button", { name: "Terrain flatten fake" }));
+    await waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
+    expect(execute).toHaveBeenCalledWith("terrain_flatten_fake", { x: 5, y: 6, w: 1, h: 1 });
+  });
+
+  it("Smooth terrain sends terrain_smooth on this tile alone", async () => {
+    const { execute } = setup();
+    fireEvent.click(screen.getByRole("button", { name: "Smooth terrain" }));
+    await waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
+    expect(execute).toHaveBeenCalledWith("terrain_smooth", { x: 3, y: 3, w: 1, h: 1 });
+  });
+
+  it("Set surface puts grass on the tile, or the surface the Terrain tray has chosen", async () => {
+    const { execute } = setup();
+    fireEvent.click(screen.getByRole("button", { name: "Set surface" }));
+    await waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
+    expect(execute).toHaveBeenLastCalledWith("terrain_set_surface", {
+      x: 3,
+      y: 3,
+      w: 1,
+      h: 1,
+      surface: 0,
+    });
+    uiStore.getState().startTerrain("surface", {
+      waterAbove: 2,
+      surface: 4,
+      heightMode: "tile",
+      height: 8,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Set surface" }));
+    await waitFor(() => expect(execute).toHaveBeenCalledTimes(2));
+    expect(execute).toHaveBeenLastCalledWith("terrain_set_surface", {
+      x: 3,
+      y: 3,
+      w: 1,
+      h: 1,
+      surface: 4,
+    });
   });
 
   it("says how high Set water fills, and only that one carries a hint", () => {
@@ -187,7 +293,7 @@ describe("TileInspector: the five actions", () => {
     expect(water.getAttribute("title")).toBe("2 steps above the lowest corner");
     // The hint is a tooltip: the button is still named for its label.
     expect(water.textContent).toBe("Set water");
-    for (const name of ["Raise here", "Lower here", "Level here", "Drain"]) {
+    for (const name of ["Raise terrain", "Lower terrain", "Level terrain", "Drain"]) {
       expect(group.getByRole("button", { name }).hasAttribute("title"), name).toBe(false);
     }
   });
@@ -204,23 +310,23 @@ describe("TileInspector: the five actions", () => {
 
   const click = (name: string) => fireEvent.click(screen.getByRole("button", { name }));
 
-  it("Raise here sends terrain_raise on this tile alone", async () => {
+  it("Raise terrain sends terrain_raise on this tile alone", async () => {
     const { execute } = setup();
-    click("Raise here");
+    click("Raise terrain");
     await waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
     expect(execute).toHaveBeenCalledWith("terrain_raise", { x: 3, y: 3, w: 1, h: 1 });
   });
 
-  it("Lower here sends terrain_lower on this tile alone", async () => {
+  it("Lower terrain sends terrain_lower on this tile alone", async () => {
     const { execute } = setup();
-    click("Lower here");
+    click("Lower terrain");
     await waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
     expect(execute).toHaveBeenCalledWith("terrain_lower", { x: 3, y: 3, w: 1, h: 1 });
   });
 
-  it("Level here levels to the lowest corner", async () => {
+  it("Level terrain levels to the lowest corner", async () => {
     const { execute } = setup();
-    click("Level here");
+    click("Level terrain");
     await waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
     expect(execute).toHaveBeenCalledWith("terrain_level", { x: 3, y: 3, w: 1, h: 1, height: 4 });
   });
@@ -257,21 +363,21 @@ describe("TileInspector: the five actions", () => {
   it("works out the command from the terrain as it is now, not as it was when it appeared", async () => {
     const { execute, again } = setup(terrain());
     again(terrain({ corners: [8, 8, 8, 10] }));
-    click("Level here");
+    click("Level terrain");
     await waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
     expect(execute).toHaveBeenCalledWith("terrain_level", { x: 3, y: 3, w: 1, h: 1, height: 8 });
   });
 
   it("acts on the tile it is showing", async () => {
     const { execute } = setup(terrain(), OK, 6, 1);
-    click("Raise here");
+    click("Raise terrain");
     await waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
     expect(execute).toHaveBeenCalledWith("terrain_raise", { x: 6, y: 1, w: 1, h: 1 });
   });
 
   it("says what it did and what it cost, as a message", async () => {
     const { notify } = setup(terrain(), { ok: true, id: 2, cost: 2000 });
-    click("Raise here");
+    click("Raise terrain");
     await waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
     expect(notify).toHaveBeenCalledWith("Raised (3, 3): charged $20.00", {});
   });
@@ -284,7 +390,7 @@ describe("TileInspector: the five actions", () => {
     cleanup();
 
     const free = setup(terrain(), { ok: true, id: 3, cost: 0 });
-    click("Level here");
+    click("Level terrain");
     await waitFor(() => expect(free.notify).toHaveBeenCalledTimes(1));
     expect(free.notify).toHaveBeenCalledWith("Leveled (3, 3)", {});
   });
@@ -298,7 +404,7 @@ describe("TileInspector: the five actions", () => {
 
   it("sends nothing for a tile that is not there", () => {
     const { execute } = setup(terrain(), OK, W, 0);
-    expect(screen.queryByRole("button", { name: "Raise here" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Raise terrain" })).toBeNull();
     expect(execute).not.toHaveBeenCalled();
   });
 });

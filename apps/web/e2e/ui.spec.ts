@@ -117,7 +117,7 @@ test("the command bar takes a loan, and the inspector's Finances shows it", asyn
   await expect(loan).toContainText("$500.00");
 });
 
-test("a right click on a tile offers Raise here, and it is paid for", async ({ page }) => {
+test("a right click on a tile offers Raise terrain, and it is paid for", async ({ page }) => {
   await openPark(page);
   const before = cents(await cashOf(page).innerText());
 
@@ -125,7 +125,7 @@ test("a right click on a tile offers Raise here, and it is paid for", async ({ p
   await page.mouse.click(at.x, at.y, { button: "right" });
   const menu = page.getByRole("menu");
   await expect(menu).toBeVisible();
-  await menu.getByRole("menuitem", { name: "Raise here" }).click();
+  await menu.getByRole("menuitem", { name: "Raise terrain" }).click();
   await expect(menu).toHaveCount(0);
   await expect.poll(() => lastCommand(page)).toBe("terrain_raise");
   await expect.poll(async () => cents(await cashOf(page).innerText())).toBeLessThan(before);

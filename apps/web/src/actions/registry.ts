@@ -1,5 +1,6 @@
 import type { Speed } from "@coasterworks/protocol";
 import type { CatalogEntry, ExecResult } from "@coasterworks/sim";
+import { shortcutOf } from "../state/keys";
 import { TERRAIN_VERBS, type TerrainVerb } from "../viewport/terrainTools";
 import { RECT_KEYS, defaultsFromSchema, humanize, isRectSchema } from "./schema";
 import {
@@ -118,17 +119,33 @@ const TOOL_TITLES: Readonly<Record<DockTool, string>> = {
   park: "Park tools",
 };
 
+/** What an interface action says about itself besides its words. */
+interface UiOptions {
+  /** Left out of the command bar's list. */
+  hidden?: true;
+}
+
 function uiAction(
   id: string,
   title: string,
   description: string,
   keywords: string[],
   run: () => void,
-  shortcut?: string,
-  hidden = false,
+  { hidden }: UiOptions = {},
 ): Action {
-  const action: Action = { id, title, description, category: "ui", kind: "ui", keywords, run };
-  if (shortcut !== undefined) action.shortcut = shortcut;
+  const action: Action = {
+    id,
+    title,
+    description,
+    category: "ui",
+    kind: "ui",
+    keywords,
+    run,
+    // From the keymap each time it is read, in the writing of the keyboard in use.
+    get shortcut() {
+      return shortcutOf(id);
+    },
+  };
   if (hidden) action.hidden = true;
   return action;
 }
@@ -141,7 +158,6 @@ function uiActions({ ui }: UiActionDeps): Action[] {
       "Pause or resume the simulation.",
       ["pause", "resume", "stop", "play"],
       () => ui.pause(),
-      "Space",
     ),
     ...SPEEDS.map((speed) =>
       uiAction(
@@ -158,7 +174,6 @@ function uiActions({ ui }: UiActionDeps): Action[] {
       "Step the simulation one speed faster.",
       ["speed", "faster", "increase", "plus"],
       () => ui.stepSpeed(1),
-      "+",
     ),
     uiAction(
       "ui.speed.down",
@@ -166,23 +181,12 @@ function uiActions({ ui }: UiActionDeps): Action[] {
       "Step the simulation one speed slower.",
       ["speed", "slower", "decrease", "minus"],
       () => ui.stepSpeed(-1),
-      "-",
     ),
-    uiAction(
-      "ui.undo",
-      "Undo",
-      "Undo the last command.",
-      ["undo", "revert", "back"],
-      () => ui.undo(),
-      "⌘Z",
+    uiAction("ui.undo", "Undo", "Undo the last command.", ["undo", "revert", "back"], () =>
+      ui.undo(),
     ),
-    uiAction(
-      "ui.redo",
-      "Redo",
-      "Redo the command that was undone.",
-      ["redo", "again"],
-      () => ui.redo(),
-      "⇧⌘Z",
+    uiAction("ui.redo", "Redo", "Redo the command that was undone.", ["redo", "again"], () =>
+      ui.redo(),
     ),
     uiAction(
       "ui.classicView",
@@ -190,29 +194,26 @@ function uiActions({ ui }: UiActionDeps): Action[] {
       "Snap the camera to a classic isometric angle; again for the next of the four.",
       ["camera", "view", "reset", "home", "isometric"],
       () => ui.classicView(),
-      "Home",
     ),
-    ...DOCK_TOOLS.map((tool, index) =>
+    ...DOCK_TOOLS.map((tool) =>
       uiAction(
         `ui.tool.${tool}`,
         TOOL_TITLES[tool],
         `Switch to the ${tool} tools.`,
         ["tool", "tools", "dock", tool],
         () => ui.setTool(tool),
-        String(index + 1),
       ),
     ),
     // The keys of the terrain tray. The bar lists the sim's own terrain commands, which do the
     // same, so these are for the keyboard.
-    ...TERRAIN_VERBS.map(({ verb, label, key }) =>
+    ...TERRAIN_VERBS.map(({ verb, label }) =>
       uiAction(
         `ui.terrain.${verb}`,
         `${label} tool`,
         `Take up the ${label.toLowerCase()} terrain tool.`,
         ["terrain", "tool", verb],
         () => ui.terrain(verb),
-        key,
-        true,
+        { hidden: true },
       ),
     ),
     uiAction(
@@ -221,8 +222,7 @@ function uiActions({ ui }: UiActionDeps): Action[] {
       "Make the terrain brush one size smaller.",
       ["brush", "size", "smaller"],
       () => ui.brush(-1),
-      "[",
-      true,
+      { hidden: true },
     ),
     uiAction(
       "ui.brush.larger",
@@ -230,8 +230,7 @@ function uiActions({ ui }: UiActionDeps): Action[] {
       "Make the terrain brush one size larger.",
       ["brush", "size", "larger"],
       () => ui.brush(1),
-      "]",
-      true,
+      { hidden: true },
     ),
     uiAction(
       "ui.inspector.park",
@@ -246,7 +245,6 @@ function uiActions({ ui }: UiActionDeps): Action[] {
       "Show the keyboard shortcuts.",
       ["help", "keys", "keyboard", "shortcuts"],
       () => ui.help(),
-      "?",
     ),
     // The next two are for keys: the bar does not list them.
     uiAction(
@@ -255,8 +253,7 @@ function uiActions({ ui }: UiActionDeps): Action[] {
       "Open the command bar.",
       ["command", "bar", "search", "palette"],
       () => ui.commandBar(),
-      undefined,
-      true,
+      { hidden: true },
     ),
     uiAction(
       "ui.cancel",
@@ -264,8 +261,7 @@ function uiActions({ ui }: UiActionDeps): Action[] {
       "Close what is open, or put the tool down.",
       ["cancel", "escape", "close"],
       () => ui.cancel(),
-      "Esc",
-      true,
+      { hidden: true },
     ),
   ];
 }

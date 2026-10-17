@@ -301,7 +301,7 @@ describe("Inspector: a tile", () => {
   it("runs a tile action through execute and tells notify", async () => {
     store().inspectTile(3, 3);
     renderInspector();
-    fireEvent.click(within(inspector()).getByRole("button", { name: "Raise here" }));
+    fireEvent.click(within(inspector()).getByRole("button", { name: "Raise terrain" }));
     await waitFor(() =>
       expect(execute).toHaveBeenCalledWith("terrain_raise", { x: 3, y: 3, w: 1, h: 1 }),
     );

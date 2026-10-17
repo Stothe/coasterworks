@@ -20,7 +20,10 @@ export interface InspectorProps {
   source: SnapshotSource;
   /** The park's name, from the host's welcome. */
   parkName?: string | undefined;
-  /** Every action: the finances tab's loan forms are the ones that run the finance commands. */
+  /**
+   * Every action: the finances tab's loan forms are the ones that run the finance commands, and the
+   * tile tab's buttons are the ones that take an area of tiles.
+   */
   actions: readonly Action[];
   ctx: ActionContext | null;
   /** Runs a sim command. It resolves with the sim's answer; a refusal is a result, not a throw. */
@@ -82,14 +85,28 @@ function Status({ children }: { children: string }) {
   return <p className="mb-3 text-xs text-muted">{children}</p>;
 }
 
-function TilePanel({ terrain, x, y, execute, notify }: InspectorProps & { x: number; y: number }) {
+function TilePanel({
+  terrain,
+  actions,
+  x,
+  y,
+  execute,
+  notify,
+}: InspectorProps & { x: number; y: number }) {
   const info = tileInfo(terrain, x, y);
   return (
     <Panel title={`Tile (${x}, ${y})`} actions={closeButton}>
       {info && (
         <Status>{`${info.surface} · ${info.water === 0 ? "dry" : `water ${info.water}`}`}</Status>
       )}
-      <TileInspector terrain={terrain} x={x} y={y} execute={execute} notify={notify} />
+      <TileInspector
+        terrain={terrain}
+        actions={actions}
+        x={x}
+        y={y}
+        execute={execute}
+        notify={notify}
+      />
     </Panel>
   );
 }

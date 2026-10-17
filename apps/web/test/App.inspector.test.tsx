@@ -310,10 +310,10 @@ describe("a tile in the inspector follows the latest terrain (Review Focus 3)", 
     expect([corner("NW"), corner("NE"), corner("SE"), corner("SW")]).toEqual(["9", "9", "10", "8"]);
   });
 
-  it("Raise here sends terrain_raise for the tile, and a toast says what it cost", async () => {
+  it("Raise terrain sends terrain_raise for the tile, and a toast says what it cost", async () => {
     await ready();
     act(() => store().inspectTile(3, 3));
-    fireEvent.click(screen.getByRole("button", { name: "Raise here" }));
+    fireEvent.click(screen.getByRole("button", { name: "Raise terrain" }));
     await waitFor(() =>
       expect(command).toHaveBeenCalledWith("terrain_raise", { x: 3, y: 3, w: 1, h: 1 }),
     );
@@ -364,7 +364,7 @@ describe("the tile menu in the app", () => {
     expect(typeof props().onSecondaryClick).toBe("function");
   });
 
-  it("lists Inspect and the five actions for the tile that was right-clicked", async () => {
+  it("lists Inspect and the registry's placement actions for the tile that was right-clicked", async () => {
     await ready();
     openMenu(5, 6);
     const menu = await screen.findByRole("menu");
@@ -373,14 +373,23 @@ describe("the tile menu in the app", () => {
       within(menu)
         .getAllByRole("menuitem")
         .map((i) => i.textContent),
-    ).toEqual(["Inspect", "Raise here", "Lower here", "Level here", "Set water", "Drain"]);
+    ).toEqual([
+      "Inspect",
+      "Raise terrain",
+      "Lower terrain",
+      "Level terrain",
+      "Smooth terrain",
+      "Set water",
+      "Drain",
+      "Set surface",
+    ]);
   });
 
   it("an action runs on that tile and reports as a toast", async () => {
     await ready();
     openMenu(5, 6);
     fireEvent.click(
-      within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Lower here" }),
+      within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Lower terrain" }),
     );
     await waitFor(() =>
       expect(command).toHaveBeenCalledWith("terrain_lower", { x: 5, y: 6, w: 1, h: 1 }),
@@ -412,7 +421,7 @@ describe("the tile menu in the app", () => {
     act(() => store().setTool("terrain"));
     openMenu();
     const item = within(await screen.findByRole("menu")).getByRole("menuitem", {
-      name: "Raise here",
+      name: "Raise terrain",
     });
     press(" ", item);
     press("w", item);

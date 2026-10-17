@@ -150,6 +150,16 @@ export function formatCombo(combo: string, mac: boolean = isMac()): string {
   return [...words, name].join("+");
 }
 
+/**
+ * How a combo is written on key caps for the player's keyboard, for the first key of the map that
+ * runs `actionId`; undefined if none does. Hints in the command bar are this, so a hint and the key
+ * it names are one thing.
+ */
+export function shortcutOf(actionId: string, mac: boolean = isMac()): string | undefined {
+  const binding = KEYMAP.find((candidate) => candidate.actionId === actionId);
+  return binding ? formatCombo(binding.combo, mac) : undefined;
+}
+
 /** `Escape` is `escape`, a space is `space`, `Z` is `z`. */
 function keyName(key: string): string {
   return key === " " ? "space" : key.toLowerCase();

@@ -1,9 +1,10 @@
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import type { TerrainData } from "@coasterworks/render";
 import type { ExecResult } from "@coasterworks/sim";
-import { useImperativeHandle, useRef, useState, type ReactNode, type Ref } from "react";
+import { useImperativeHandle, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
+import type { Action } from "../actions/types";
 import { uiStore } from "../state/uiStore";
-import { TILE_ACTIONS, runTileAction } from "./inspector/tileActions";
+import { runTileEntry, tileEntries } from "./inspector/tileActions";
 
 /** What the viewport can ask of the menu. */
 export interface TileMenuHandle {
@@ -14,6 +15,8 @@ export interface TileMenuHandle {
 export interface TileContextMenuProps {
   /** The latest terrain, which the menu's actions work their commands out from. */
   terrain: TerrainData | null;
+  /** Every action: the menu lists the ones that take an area of tiles, and does them to the one tile. */
+  actions: readonly Action[];
   execute(name: string, input: unknown): Promise<ExecResult>;
   notify(text: string, options?: { kind?: "info" | "error" }): void;
   /** Keeps the menu shut, for a park that can no longer be edited. */
@@ -27,13 +30,15 @@ const ITEM =
   "hud-button justify-start rounded-lg px-2.5 text-sm text-ink select-none data-[highlighted]:bg-fill-strong";
 
 /**
- * The menu of a tile: Inspect, and the five things the inspector does to a tile. It is Radix's
+ * The menu of a tile: Inspect, and what the inspector does to a tile, which is every action of the
+ * registry that takes an area of tiles, done to this one tile. It is Radix's
  * context menu, but the viewport decides when it opens. A right press that turns into a drag is
  * an orbit and must not open it, and the browser's own `contextmenu` event comes before the drag
  * is known, so the viewport asks with `openAt` when a right click is over instead.
  */
 export function TileContextMenu({
   terrain,
+  actions,
   execute,
   notify,
   disabled = false,
@@ -42,6 +47,7 @@ export function TileContextMenu({
 }: TileContextMenuProps) {
   const trigger = useRef<HTMLSpanElement>(null);
   const [tile, setTile] = useState<{ x: number; y: number } | null>(null);
+  const entries = useMemo(() => tileEntries(actions), [actions]);
 
   useImperativeHandle(
     ref,
@@ -80,17 +86,17 @@ export function TileContextMenu({
               >
                 Inspect
               </ContextMenu.Item>
-              <ContextMenu.Separator className="my-1 h-px bg-line" />
-              {TILE_ACTIONS.map((action) => (
+              {entries.length > 0 && <ContextMenu.Separator className="my-1 h-px bg-line" />}
+              {entries.map((entry) => (
                 <ContextMenu.Item
-                  key={action.id}
+                  key={entry.id}
                   className={ITEM}
-                  {...(action.hint !== undefined && { title: action.hint })}
+                  {...(entry.hint !== undefined && { title: entry.hint })}
                   onSelect={() =>
-                    void runTileAction(action.id, terrain, tile.x, tile.y, execute, notify)
+                    void runTileEntry(entry, terrain, tile.x, tile.y, execute, notify)
                   }
                 >
-                  {action.label}
+                  {entry.label}
                 </ContextMenu.Item>
               ))}
             </>

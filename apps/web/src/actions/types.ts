@@ -30,10 +30,15 @@ export interface UiStore {
   readonly inspectorOpen: boolean;
 }
 
-/** What an action may use when it runs or when it is asked if it is enabled. */
+/**
+ * What an action may use when it runs or when it is asked if it is enabled. The context lasts as
+ * long as the connection and what the actions read of the interface do, not as long as a
+ * snapshot: the host sends one every 50 ms, so `snapshot` is read from the latest when asked.
+ */
 export interface ActionContext {
   client: SimClient;
-  snapshot: DecodedSnapshot | null;
+  /** The latest snapshot the host sent, or null before the first. Always the latest when read. */
+  readonly snapshot: DecodedSnapshot | null;
   ui: UiStore;
 }
 
@@ -64,8 +69,12 @@ export interface Action {
   kind: ActionKind;
   /** Extra words the command bar matches besides the title. */
   keywords: string[];
-  /** How the keyboard does it, as shown to the player: `⌘Z`, `Space`, `1`. */
-  shortcut?: string;
+  /**
+   * How the keyboard does it, as the player's own keyboard writes it: `⌘Z` on a Mac, `Ctrl+Z`
+   * elsewhere, `Space`, `1`. It is worked out from the keymap each time it is read, so it cannot
+   * disagree with the key that does the thing, and absent when no key does.
+   */
+  readonly shortcut?: string | undefined;
   /** The sim command a command-backed action runs: what a form sends. Absent for a UI action. */
   commandName?: string;
   /** True for an action that exists only for a key to run, and is not listed in the command bar. */

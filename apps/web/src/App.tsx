@@ -331,6 +331,7 @@ export function App() {
       <TileContextMenu
         ref={tileMenu}
         terrain={host.terrain}
+        actions={actions}
         execute={execute}
         notify={push}
         disabled={disconnected}

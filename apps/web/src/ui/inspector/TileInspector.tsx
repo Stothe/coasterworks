@@ -1,13 +1,17 @@
 import type { TerrainData } from "@coasterworks/render";
 import type { ExecResult } from "@coasterworks/sim";
+import { useMemo } from "react";
+import type { Action } from "../../actions/types";
 import { EmptyState } from "../kit";
 import { Row, Rows } from "./Rows";
-import { TILE_ACTIONS, runTileAction } from "./tileActions";
+import { runTileEntry, tileEntries } from "./tileActions";
 import { tileInfo } from "./tileInfo";
 
 export interface TileInspectorProps {
   /** The latest terrain. Nothing here is kept between renders: it is read again each time. */
   terrain: TerrainData | null;
+  /** Every action: the buttons are the ones that take an area of tiles, done to this one tile. */
+  actions: readonly Action[];
   x: number;
   y: number;
   /** Runs a sim command. It resolves with the sim's answer; a refusal is a result, not a throw. */
@@ -25,10 +29,11 @@ const CORNERS = [
 
 /**
  * The inspector's tile tab: the tile's four corner heights, its lowest corner, surface and water,
- * and five things to do to it. Everything shown is read from `terrain` on each render, so it
- * follows the map as the sim changes it.
+ * and the things to do to it, which are the registry's actions that take an area of tiles. Everything
+ * shown is read from `terrain` on each render, so it follows the map as the sim changes it.
  */
-export function TileInspector({ terrain, x, y, execute, notify }: TileInspectorProps) {
+export function TileInspector({ terrain, actions, x, y, execute, notify }: TileInspectorProps) {
+  const entries = useMemo(() => tileEntries(actions), [actions]);
   if (!terrain) {
     return (
       <EmptyState title="Waiting for the map" hint="The tile will show once the park has loaded." />
@@ -64,19 +69,21 @@ export function TileInspector({ terrain, x, y, execute, notify }: TileInspectorP
         <Row label="Surface">{info.surface}</Row>
         <Row label="Water level">{info.water === 0 ? "none" : info.water}</Row>
       </Rows>
-      <div role="group" aria-label="Tile actions" className="grid grid-cols-2 gap-1.5">
-        {TILE_ACTIONS.map((action) => (
-          <button
-            key={action.id}
-            type="button"
-            {...(action.hint !== undefined && { title: action.hint })}
-            onClick={() => void runTileAction(action.id, terrain, x, y, execute, notify)}
-            className="hud-button rounded-lg bg-fill px-3 text-sm font-medium"
-          >
-            {action.label}
-          </button>
-        ))}
-      </div>
+      {entries.length > 0 && (
+        <div role="group" aria-label="Tile actions" className="grid grid-cols-2 gap-1.5">
+          {entries.map((entry) => (
+            <button
+              key={entry.id}
+              type="button"
+              {...(entry.hint !== undefined && { title: entry.hint })}
+              onClick={() => void runTileEntry(entry, terrain, x, y, execute, notify)}
+              className="hud-button rounded-lg bg-fill px-3 text-sm font-medium"
+            >
+              {entry.label}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

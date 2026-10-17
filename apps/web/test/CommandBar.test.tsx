@@ -17,6 +17,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   uiStore.setState(uiStore.getInitialState(), true);
 });
 
@@ -145,6 +146,7 @@ describe("CommandBar: the list", () => {
   });
 
   it("shows the title, the description dimmed, and the shortcut as a key cap", () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
     setup();
     open();
     const undo = option(/Undo/);
@@ -152,6 +154,16 @@ describe("CommandBar: the list", () => {
     expect(within(undo).getByText("Undo the last command.").className).toContain("text-muted");
     expect(within(undo).getByText("⌘Z").tagName).toBe("KBD");
     expect(within(option(/Raise terrain/)).queryByText(/^⌘/)).toBeNull();
+  });
+
+  it("writes the shortcuts for the keyboard in use: Ctrl+Z on a PC", () => {
+    vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
+    setup();
+    open();
+    expect(within(option(/Undo/)).getByText("Ctrl+Z").tagName).toBe("KBD");
+    expect(within(option(/Redo/)).getByText("Ctrl+Shift+Z").tagName).toBe("KBD");
+    expect(within(option(/Pause/)).getByText("Space").tagName).toBe("KBD");
+    expect(screen.queryByText("⌘Z")).toBeNull();
   });
 
   it("leaves out the actions that exist only for a key", () => {

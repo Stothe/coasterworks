@@ -81,12 +81,21 @@ test("the inspector shows the park and a tile, and a right click on the map offe
   const menu = page.getByRole("menu");
   await page.mouse.click(centerX, centerY, { button: "right" });
   await expect(menu).toBeVisible();
-  for (const name of ["Inspect", "Raise here", "Lower here", "Level here", "Set water", "Drain"]) {
+  for (const name of [
+    "Inspect",
+    "Raise terrain",
+    "Lower terrain",
+    "Level terrain",
+    "Smooth terrain",
+    "Set water",
+    "Drain",
+    "Set surface",
+  ]) {
     await expect(menu.getByRole("menuitem", { name })).toBeVisible();
   }
 
   // ... whose action runs on the tile, and says what it did.
-  await menu.getByRole("menuitem", { name: "Raise here" }).click();
+  await menu.getByRole("menuitem", { name: "Raise terrain" }).click();
   await expect(menu).toHaveCount(0);
   await expect.poll(lastCommand).toBe("terrain_raise");
   await expect(page.getByText(/^Raised \(\d+, \d+\)/)).toBeVisible();

@@ -5,6 +5,8 @@ import { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { uiStore } from "../src/state/uiStore";
 import { TileContextMenu, type TileMenuHandle } from "../src/ui/TileContextMenu";
+import { FAKE_RECT, registryActions } from "./actionsFixture";
+import type { Action } from "../src/actions/types";
 
 beforeEach(() => {
   uiStore.setState(uiStore.getInitialState(), true);
@@ -22,7 +24,14 @@ function terrain(): TerrainData {
 
 const OK: ExecResult = { ok: true, id: 1, cost: 1000 };
 
-function setup(over: { disabled?: boolean; map?: TerrainData | null; result?: ExecResult } = {}) {
+function setup(
+  over: {
+    disabled?: boolean;
+    map?: TerrainData | null;
+    result?: ExecResult;
+    actions?: Action[];
+  } = {},
+) {
   const ref = createRef<TileMenuHandle>();
   const execute = vi.fn<(name: string, input: unknown) => Promise<ExecResult>>(
     async () => over.result ?? OK,
@@ -32,6 +41,7 @@ function setup(over: { disabled?: boolean; map?: TerrainData | null; result?: Ex
     <TileContextMenu
       ref={ref}
       terrain={over.map === undefined ? terrain() : over.map}
+      actions={over.actions ?? registryActions()}
       execute={execute}
       notify={notify}
       disabled={over.disabled ?? false}
@@ -57,17 +67,69 @@ describe("TileContextMenu", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  it("opens a menu of Inspect and the five tile actions", async () => {
+  it("opens a menu of Inspect and the registry's placement actions, then Drain after Set water", async () => {
     const { open } = setup();
     open();
     expect(await items()).toEqual([
       "Inspect",
-      "Raise here",
-      "Lower here",
-      "Level here",
+      "Raise terrain",
+      "Lower terrain",
+      "Level terrain",
+      "Smooth terrain",
       "Set water",
       "Drain",
+      "Set surface",
     ]);
+  });
+
+  it("lists what the actions give it: a placement action the sim adds appears, after the known ones", async () => {
+    const { open } = setup({ actions: registryActions([FAKE_RECT]) });
+    open();
+    expect(await items()).toEqual([
+      "Inspect",
+      "Raise terrain",
+      "Lower terrain",
+      "Level terrain",
+      "Smooth terrain",
+      "Set water",
+      "Drain",
+      "Set surface",
+      "Terrain flatten fake",
+    ]);
+  });
+
+  it("lists no more than it is given: no placement actions, only Inspect", async () => {
+    const { open } = setup({ actions: registryActions().filter((a) => a.placement !== "rect") });
+    open();
+    expect(await items()).toEqual(["Inspect"]);
+    expect(within(await menu()).queryByRole("separator")).toBeNull();
+  });
+
+  it("lists in a fixed order whatever order the actions come in", async () => {
+    const { open } = setup({ actions: [...registryActions([FAKE_RECT])].reverse() });
+    open();
+    expect(await items()).toEqual([
+      "Inspect",
+      "Raise terrain",
+      "Lower terrain",
+      "Level terrain",
+      "Smooth terrain",
+      "Set water",
+      "Drain",
+      "Set surface",
+      "Terrain flatten fake",
+    ]);
+  });
+
+  it("does the made-up action to the tile as it would be placed with a brush of one", async () => {
+    const { open, execute, notify } = setup({ actions: registryActions([FAKE_RECT]) });
+    open(2, 5);
+    fireEvent.click(within(await menu()).getByRole("menuitem", { name: "Terrain flatten fake" }));
+    await waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
+    expect(execute).toHaveBeenCalledWith("terrain_flatten_fake", { x: 2, y: 5, w: 1, h: 1 });
+    await waitFor(() =>
+      expect(notify).toHaveBeenCalledWith("Terrain flatten fake (2, 5): charged $10.00", {}),
+    );
   });
 
   it("says how high Set water fills there too", async () => {
@@ -78,6 +140,7 @@ describe("TileContextMenu", () => {
       "2 steps above the lowest corner",
     );
     expect(menu.getByRole("menuitem", { name: "Drain" }).hasAttribute("title")).toBe(false);
+    expect(menu.getByRole("menuitem", { name: "Raise terrain" }).hasAttribute("title")).toBe(false);
   });
 
   it("says which tile it is for", async () => {
@@ -99,7 +162,7 @@ describe("TileContextMenu", () => {
   it("runs an action on the tile it was opened for, and closes", async () => {
     const { open, execute, notify } = setup();
     open(6, 1);
-    fireEvent.click(within(await menu()).getByRole("menuitem", { name: "Raise here" }));
+    fireEvent.click(within(await menu()).getByRole("menuitem", { name: "Raise terrain" }));
     await waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
     expect(execute).toHaveBeenCalledWith("terrain_raise", { x: 6, y: 1, w: 1, h: 1 });
     await waitFor(() => expect(notify).toHaveBeenCalledWith("Raised (6, 1): charged $10.00", {}));
@@ -109,7 +172,7 @@ describe("TileContextMenu", () => {
   it("levels to the tile's lowest corner and sets water two above it, as the inspector does", async () => {
     const { open, execute } = setup();
     open(3, 3);
-    fireEvent.click(within(await menu()).getByRole("menuitem", { name: "Level here" }));
+    fireEvent.click(within(await menu()).getByRole("menuitem", { name: "Level terrain" }));
     await waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
     expect(execute).toHaveBeenLastCalledWith("terrain_level", {
       x: 3,
@@ -129,6 +192,53 @@ describe("TileContextMenu", () => {
       w: 1,
       h: 1,
       level: 6,
+    });
+  });
+
+  it("smooths the tile, drains it with the level 0, and sets grass when the tray has chosen nothing", async () => {
+    const { open, execute } = setup();
+    const choose = async (name: string) => {
+      open(3, 3);
+      fireEvent.click(within(await menu()).getByRole("menuitem", { name }));
+      await waitFor(() => expect(screen.queryByRole("menu")).toBeNull());
+    };
+    await choose("Smooth terrain");
+    expect(execute).toHaveBeenLastCalledWith("terrain_smooth", { x: 3, y: 3, w: 1, h: 1 });
+    await choose("Drain");
+    expect(execute).toHaveBeenLastCalledWith("terrain_set_water", {
+      x: 3,
+      y: 3,
+      w: 1,
+      h: 1,
+      level: 0,
+    });
+    await choose("Set surface");
+    expect(execute).toHaveBeenLastCalledWith("terrain_set_surface", {
+      x: 3,
+      y: 3,
+      w: 1,
+      h: 1,
+      surface: 0,
+    });
+  });
+
+  it("sets the surface the Terrain tray has chosen", async () => {
+    uiStore.getState().startTerrain("surface", {
+      waterAbove: 2,
+      surface: 3,
+      heightMode: "tile",
+      height: 8,
+    });
+    const { open, execute } = setup();
+    open(1, 2);
+    fireEvent.click(within(await menu()).getByRole("menuitem", { name: "Set surface" }));
+    await waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
+    expect(execute).toHaveBeenCalledWith("terrain_set_surface", {
+      x: 1,
+      y: 2,
+      w: 1,
+      h: 1,
+      surface: 3,
     });
   });
 
