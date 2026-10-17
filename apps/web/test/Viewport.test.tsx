@@ -92,10 +92,10 @@ const click = (x = 3, y = 4, mods = { shift: false, alt: false }) =>
   handlers().onTileClick(x, y, mods);
 
 describe("Viewport: a left click", () => {
-  it("under Select, with nothing in hand, selects the tile and opens the inspector on it", () => {
+  it("with nothing in hand, as the park opens, selects the tile and opens the inspector on it", () => {
     mount();
-    act(() => uiStore.getState().cancel());
     expect(uiStore.getState().tool).toBe("select");
+    expect(uiStore.getState().placement).toBeNull();
     click(3, 4);
     expect(uiStore.getState().selection).toEqual({ kind: "tile", x: 3, y: 4 });
     expect(uiStore.getState().inspector).toEqual({ open: true, tab: "tile" });
@@ -104,7 +104,6 @@ describe("Viewport: a left click", () => {
 
   it("selects another tile on the next click: the one inspector moves", () => {
     mount();
-    act(() => uiStore.getState().cancel());
     click(3, 4);
     click(6, 1);
     expect(uiStore.getState().selection).toEqual({ kind: "tile", x: 6, y: 1 });
@@ -112,6 +111,7 @@ describe("Viewport: a left click", () => {
 
   it("with a placement in hand sends the command, and selects nothing", async () => {
     const { props } = mount();
+    act(() => uiStore.getState().setTool("terrain"));
     click(3, 4);
     await vi.waitFor(() => expect(command).toHaveBeenCalledTimes(1));
     expect(command).toHaveBeenCalledWith("terrain_raise", { x: 3, y: 4, w: 1, h: 1 });
@@ -120,24 +120,37 @@ describe("Viewport: a left click", () => {
     expect(uiStore.getState().inspector.open).toBe(false);
   });
 
-  it("with a dock tool in hand that has no placement, does nothing", () => {
+  it("with a dock tool in hand that has no placement, looks at the tile all the same", () => {
     mount();
     act(() => uiStore.getState().setTool("ride"));
+    expect(uiStore.getState().placement).toBeNull();
     click(3, 4);
-    expect(uiStore.getState().selection).toBeNull();
+    expect(uiStore.getState().selection).toEqual({ kind: "tile", x: 3, y: 4 });
+    expect(uiStore.getState().inspector).toEqual({ open: true, tab: "tile" });
+    expect(command).not.toHaveBeenCalled();
+  });
+
+  it("looks at the tile under every dock tool that holds no placement", () => {
+    mount();
+    for (const tool of ["path", "ride", "scenery", "shop", "staff", "park"] as const) {
+      act(() => {
+        uiStore.getState().select(null);
+        uiStore.getState().setTool(tool);
+      });
+      click(2, 2);
+      expect(uiStore.getState().selection, tool).toEqual({ kind: "tile", x: 2, y: 2 });
+    }
     expect(command).not.toHaveBeenCalled();
   });
 
   it("selects a tile under Select even before the connection is made: looking needs no sim", () => {
     mount({ client: null });
-    act(() => uiStore.getState().cancel());
     click(1, 1);
     expect(uiStore.getState().selection).toEqual({ kind: "tile", x: 1, y: 1 });
   });
 
   it("does nothing before there is terrain", () => {
     mount({ terrain: null });
-    act(() => uiStore.getState().cancel());
     click(1, 1);
     expect(uiStore.getState().selection).toBeNull();
   });

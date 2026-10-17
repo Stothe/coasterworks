@@ -58,6 +58,7 @@ function host(): HostState {
         halted: false,
         cash: 1_000_000,
         loan: 0,
+        monthStartCash: 1_000_000,
         date: "March 1, Year 1",
         terrainVersion: 0,
         hasTerrain: false,
@@ -144,6 +145,8 @@ describe("the keys with the real viewport", () => {
 
   it("leaves q and e to the viewport, which takes them", async () => {
     const rig = await mount();
+    // With Terrain in hand, so that a key which took another tool would show.
+    press("1");
     const yaw = rig.yaw;
     expect(press("e")).toBe(true);
     expect(rig.yaw).toBe(yaw);

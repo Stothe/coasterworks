@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { uiStore } from "../src/state/uiStore";
 import { useHost, type HostState } from "../src/state/useHost";
-import type { ParkStatus } from "../src/state/useParkStatus";
 import {
   CLEAR_OF_INSPECTOR_REM,
   EDGE_GAP_REM,
@@ -30,24 +29,7 @@ const catalog = createDefaultRegistry().catalog();
 const OK: ExecResult = { ok: true, id: 1, cost: 2000 };
 const command = vi.fn<(name: string, input: unknown) => Promise<ExecResult>>();
 const setSpeed = vi.fn<(speed: Speed) => Promise<void>>();
-const status: ParkStatus = {
-  name: "Queryland",
-  tick: 0,
-  date: "March 1, Year 1",
-  year: 1,
-  month: 0,
-  day: 1,
-  cash: 1_000_000,
-  monthStartCash: 1_000_000,
-  loan: 500_000,
-  guests: 0,
-  rating: 0,
-  width: 16,
-  height: 16,
-};
-const query = vi.fn(async (name: string) =>
-  name === "park_status" ? { ok: true, result: status } : { ok: true, result: catalog },
-);
+const query = vi.fn(async () => ({ ok: true, result: catalog }));
 
 /** A 16 by 16 map at height 8 whose tile (3, 3) has its own four corners. */
 function terrain(corners: [number, number, number, number] = [5, 6, 7, 4]): TerrainData {
@@ -68,13 +50,15 @@ function terrain(corners: [number, number, number, number] = [5, 6, 7, 4]): Terr
 function host(over: Partial<HostState> = {}): HostState {
   return {
     status: "ready",
+    name: "Queryland",
     snapshot: {
       header: {
         tick: 0,
         speed: 1 as Speed,
         halted: false,
         cash: 1_000_000,
-        loan: 0,
+        loan: 500_000,
+        monthStartCash: 1_000_000,
         date: "March 1, Year 1",
         terrainVersion: 0,
         hasTerrain: true,
@@ -152,6 +136,9 @@ describe("the page's hook for tests", () => {
     await ready();
     const hook = window.__coasterworks;
     expect(hook?.ready).toBe(true);
+    // The park opens with nothing in hand.
+    expect(hook?.uiState()).toEqual({ tool: "select", placement: null });
+    act(() => press("1"));
     expect(hook?.uiState().tool).toBe("terrain");
     expect(hook?.uiState().placement?.command).toBe("terrain_raise");
     act(() => press("Escape"));
@@ -166,7 +153,15 @@ describe("the status pills open the inspector", () => {
     fireEvent.click(cashPill());
     expect(store().inspector).toEqual({ open: true, tab: "finances" });
     expect(store().selection).toEqual({ kind: "park" });
-    expect(await within(inspector() as HTMLElement).findByText("This month")).toBeTruthy();
+    expect(within(inspector() as HTMLElement).getByText("This month")).toBeTruthy();
+  });
+
+  it("names the park in the panel's heading, from the host's welcome", async () => {
+    await ready();
+    fireEvent.click(datePill());
+    expect(
+      within(inspector() as HTMLElement).getByRole("heading", { name: "Queryland" }),
+    ).toBeTruthy();
   });
 
   it("the date pill opens Overview on the park", async () => {
@@ -202,7 +197,7 @@ describe("the status pills open the inspector", () => {
     press("7");
     fireEvent.click(screen.getByRole("button", { name: "Timeline" }));
     expect(store().selection).toEqual({ kind: "park" });
-    expect(await screen.findByText("Nothing has happened yet.")).toBeTruthy();
+    expect(screen.getByText("Nothing has happened yet.")).toBeTruthy();
   });
 });
 
@@ -219,6 +214,7 @@ describe("Escape and the close button", () => {
 
   it("Escape puts the tool down first, and closes the inspector the second time", async () => {
     await ready();
+    press("1");
     fireEvent.click(cashPill());
     expect(store().tool).toBe("terrain");
     press("Escape");
@@ -232,8 +228,11 @@ describe("Escape and the close button", () => {
 });
 
 describe("keys while typing in the loan amount (Review Focus 5)", () => {
+  let view: Awaited<ReturnType<typeof ready>>;
   async function openFinances() {
-    await ready();
+    view = await ready();
+    // With Raise in hand, so a key that got through would show.
+    press("1");
     fireEvent.click(cashPill());
     const take = await screen.findByRole("form", { name: "Take loan" });
     return within(take).getByLabelText("Amount") as HTMLInputElement;
@@ -271,7 +270,7 @@ describe("keys while typing in the loan amount (Review Focus 5)", () => {
     expect(inspector()).not.toBeNull();
   });
 
-  it("takes the loan, and the status shows it", async () => {
+  it("takes the loan, and the next snapshot shows it", async () => {
     const amount = await openFinances();
     fireEvent.change(amount, { target: { value: "100" } });
     fireEvent.click(
@@ -282,10 +281,17 @@ describe("keys while typing in the loan amount (Review Focus 5)", () => {
     await waitFor(() =>
       expect(command).toHaveBeenCalledWith("finance_take_loan", { amount: 10_000 }),
     );
-    // And it asked the park for its status again.
-    await waitFor(() =>
-      expect(query.mock.calls.filter(([name]) => name === "park_status").length).toBeGreaterThan(1),
+    // The host answers a command with a snapshot at once, and the panel shows the loan from it.
+    const books = () =>
+      within(inspector() as HTMLElement).getByText("Loan").nextElementSibling?.textContent;
+    expect(books()).toBe("$5,000.00");
+    const header = host().snapshot?.header;
+    if (!header) throw new Error("no snapshot");
+    vi.mocked(useHost).mockReturnValue(
+      host({ snapshot: { header: { ...header, loan: 510_000, cash: 1_010_000 } } }),
     );
+    view.rerender(<App />);
+    expect(books()).toBe("$5,100.00");
   });
 });
 
@@ -402,6 +408,8 @@ describe("the tile menu in the app", () => {
 
   it("holds the shortcut keys while it is open: Space chooses, it does not pause", async () => {
     await ready();
+    // With Raise in hand, so a key that got through would show.
+    act(() => store().setTool("terrain"));
     openMenu();
     const item = within(await screen.findByRole("menu")).getByRole("menuitem", {
       name: "Raise here",
@@ -416,6 +424,7 @@ describe("the tile menu in the app", () => {
 describe("the dock does not swallow clicks beside it", () => {
   it("its wrapper lets pointer events through, and the tray and the dock take them", async () => {
     await ready();
+    act(() => store().setTool("terrain"));
     const dock = screen.getByRole("group", { name: "Tools" });
     const tray = screen.getByRole("region", { name: "Terrain tray" });
     const wrapper = dock.parentElement as HTMLElement;

@@ -1,16 +1,16 @@
-import type { ParkStatus } from "../../state/useParkStatus";
+import type { ParkInfo } from "../../state/useParkInfo";
 import { formatCents } from "../format";
 import { Row, Rows } from "./Rows";
 
 /** The park at a glance: its name, the date, the money, and the places guests will fill. */
-export function ParkOverview({ status }: { status: ParkStatus | null }) {
-  if (!status) return <p className="text-sm text-muted">Loading the park</p>;
+export function ParkOverview({ info }: { info: ParkInfo | null }) {
+  if (!info) return <p className="text-sm text-muted">Loading the park</p>;
   return (
     <Rows label="Park">
-      <Row label="Park">{status.name}</Row>
-      <Row label="Date">{status.date}</Row>
-      <Row label="Cash">{formatCents(status.cash)}</Row>
-      <Row label="Loan">{formatCents(status.loan)}</Row>
+      <Row label="Park">{info.name ?? "Park"}</Row>
+      <Row label="Date">{info.date}</Row>
+      <Row label="Cash">{formatCents(info.cash)}</Row>
+      <Row label="Loan">{formatCents(info.loan)}</Row>
       <Row label="Guests" tone="muted">
         Coming with guests
       </Row>

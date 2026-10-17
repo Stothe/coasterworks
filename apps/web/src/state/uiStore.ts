@@ -89,15 +89,16 @@ function dockToolOf(command: string): DockTool | undefined {
   return DOCK_TOOLS.find((tool) => command.startsWith(`${tool}_`));
 }
 
-/** Raise, the terrain tool in hand when the park opens and when the dock goes back to Terrain. */
+/** Raise, the terrain tool in hand when the dock goes to Terrain. */
 function raise(size: BrushSize): Placement {
   return { ...terrainPlacement("raise"), size };
 }
 
 /** The plain store, for code outside React and for tests. */
 export const uiStore = createStore<UiState>()((set, get) => ({
-  tool: "terrain",
-  placement: raise(1),
+  // The park opens with nothing in hand, so that a click looks at a tile and changes nothing.
+  tool: "select",
+  placement: null,
   brushSize: 1,
   selection: null,
   inspector: { open: false, tab: "overview" },

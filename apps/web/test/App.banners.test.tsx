@@ -2,6 +2,7 @@ import type { SimClient, Speed } from "@coasterworks/protocol";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
+import { uiStore } from "../src/state/uiStore";
 import { useHost, type HostState } from "../src/state/useHost";
 
 vi.mock("../src/state/useHost", () => ({ useHost: vi.fn() }));
@@ -20,6 +21,7 @@ function host(over: Partial<HostState> = {}): HostState {
         halted: false,
         cash: 1_000_000,
         loan: 0,
+        monthStartCash: 1_000_000,
         date: "March 1, Year 1",
         terrainVersion: 0,
         hasTerrain: false,
@@ -50,10 +52,14 @@ const LOST = "Lost the connection to the park. Restart Coasterworks.";
 
 beforeEach(() => {
   setSpeed.mockResolvedValue(undefined);
+  // Terrain in hand, so that its tray is up to be looked at.
+  uiStore.setState(uiStore.getInitialState(), true);
+  uiStore.getState().setTool("terrain");
 });
 afterEach(() => {
   cleanup();
   setSpeed.mockReset();
+  uiStore.setState(uiStore.getInitialState(), true);
 });
 
 function speedButtons(): HTMLButtonElement[] {

@@ -21,7 +21,9 @@ test("the timeline lists what the player did, and ? shows the keyboard map", asy
   // The top-right buttons: the Assistant is not here yet.
   await expect(page.getByRole("button", { name: "Assistant" })).toBeDisabled();
 
-  // Terrain is in hand with Raise, so a click on the map raises the tile under it.
+  // 1 takes up Terrain with Raise in hand, so a click on the map raises the tile under it.
+  await page.keyboard.press("1");
+  await expect(page.getByRole("region", { name: "Terrain tray" })).toBeVisible();
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
 
   // The bell opens the inspector on the Timeline, which lists the raise as the player's own.

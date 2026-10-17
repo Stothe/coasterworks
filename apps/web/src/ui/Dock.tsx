@@ -6,11 +6,15 @@ import {
   PathIcon,
   RideIcon,
   SceneryIcon,
+  SelectIcon,
   ShopIcon,
   StaffIcon,
   TerrainIcon,
 } from "./icons";
 import { Kbd } from "./kit";
+
+/** The tool-less pointer, which the dock offers first: with it in hand a click looks at a tile. */
+const SELECT_LABEL = "Select";
 
 /** The dock's tools in the order of its keys, `1` to `7`, with the word and icon of each. */
 export const DOCK_ITEMS: ReadonlyArray<{ tool: DockTool; label: string; icon: ReactNode }> = [
@@ -23,8 +27,11 @@ export const DOCK_ITEMS: ReadonlyArray<{ tool: DockTool; label: string; icon: Re
   { tool: "park", label: "Park", icon: <ParkIcon /> },
 ];
 
+const BUTTON =
+  "hud-button relative min-w-[4.5rem] flex-col gap-0.5 rounded-lg px-2 pt-1.5 pb-1 text-muted aria-pressed:bg-accent-strong aria-pressed:text-on-accent";
+
 export interface DockProps {
-  /** The tool in hand; Select highlights none of the seven. */
+  /** The tool in hand: Select, or one of the seven. */
   tool: Tool;
   onSelect(tool: Tool): void;
   /** Turns every button off, for a park that can no longer be edited. */
@@ -32,8 +39,9 @@ export interface DockProps {
 }
 
 /**
- * The bottom bar of seven tools. A click picks one, and a click on the one in hand puts it down
- * for Select. The keys `1` to `7` are the app's keymap, and the hints only say so.
+ * The bottom bar: Select, then seven tools. A click picks one, and a click on the one in hand puts
+ * it down for Select. The keys `1` to `7` are the app's keymap, and the hints only say so; Select
+ * has no key of its own, because Esc puts whatever is in hand down.
  */
 export function Dock({ tool, onSelect, disabled = false }: DockProps) {
   return (
@@ -42,6 +50,18 @@ export function Dock({ tool, onSelect, disabled = false }: DockProps) {
       aria-label="Tools"
       className="glass pointer-events-auto flex items-stretch gap-0.5 p-1.5"
     >
+      <button
+        type="button"
+        aria-label={SELECT_LABEL}
+        aria-pressed={tool === "select"}
+        aria-keyshortcuts="Escape"
+        disabled={disabled}
+        onClick={() => onSelect("select")}
+        className={BUTTON}
+      >
+        <SelectIcon />
+        <span className="text-xs font-medium">{SELECT_LABEL}</span>
+      </button>
       {DOCK_ITEMS.map((item, index) => {
         const active = tool === item.tool;
         return (
@@ -54,7 +74,7 @@ export function Dock({ tool, onSelect, disabled = false }: DockProps) {
             aria-keyshortcuts={String(index + 1)}
             disabled={disabled}
             onClick={() => onSelect(active ? "select" : item.tool)}
-            className="hud-button relative min-w-[4.5rem] flex-col gap-0.5 rounded-lg px-2 pt-1.5 pb-1 text-muted aria-pressed:bg-accent-strong aria-pressed:text-on-accent"
+            className={BUTTON}
           >
             {item.icon}
             <span className="text-xs font-medium">{item.label}</span>

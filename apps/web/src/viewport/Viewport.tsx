@@ -75,8 +75,8 @@ function failure(error: unknown): ExecResult {
 /**
  * The 3D view of the park, and the pointer input that edits it. What a click does is the
  * placement in the UI store, which the dock's trays and the command bar start: with none in
- * hand it does nothing but, under the Select tool, select the tile for the inspector. Nothing is
- * outlined under the pointer without a placement.
+ * hand it does nothing but select the tile for the inspector, under any tool. Nothing is outlined
+ * under the pointer without a placement.
  */
 export function Viewport(props: ViewportProps) {
   const placement = useUiStore((state) => state.placement);
@@ -142,8 +142,8 @@ export function Viewport(props: ViewportProps) {
         const { client, terrain, placement, onResult } = latest.current;
         if (!terrain) return;
         if (!placement) {
-          // Nothing in hand but the pointer: a click looks at the tile.
-          if (uiStore.getState().tool === "select") uiStore.getState().inspectTile(x, y);
+          // Nothing in hand but the pointer, whatever tool the dock is on: a click looks at the tile.
+          uiStore.getState().inspectTile(x, y);
           return;
         }
         if (!client) return;

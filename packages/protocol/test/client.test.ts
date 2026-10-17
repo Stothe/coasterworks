@@ -489,6 +489,7 @@ describe("SimClient", () => {
         halted: false,
         cash: 0,
         loan: 0,
+        monthStartCash: 0,
         date: "March 1, Year 1",
         terrainVersion: 0,
         hasTerrain: false,

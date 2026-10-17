@@ -55,16 +55,11 @@ test("the inspector shows the park and a tile, and a right click on the map offe
   await inspector.getByRole("button", { name: "Close inspector" }).click();
   await expect(inspector).toHaveCount(0);
 
-  // Escape puts Terrain down, which leaves Select: a click on the map now looks at a tile.
+  // The park opens on Select: a click on the map looks at a tile, and changes nothing.
   const dock = page.getByRole("group", { name: "Tools" });
-  await expect(dock.getByRole("button", { name: "Terrain" })).toHaveAttribute(
+  await expect(dock.getByRole("button", { name: "Select" })).toHaveAttribute(
     "aria-pressed",
     "true",
-  );
-  await page.keyboard.press("Escape");
-  await expect(dock.getByRole("button", { name: "Terrain" })).toHaveAttribute(
-    "aria-pressed",
-    "false",
   );
 
   const canvas = page.getByLabel("Park view");

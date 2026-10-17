@@ -73,6 +73,7 @@ function host(): HostState {
         halted: false,
         cash: 1_000_000,
         loan: 0,
+        monthStartCash: 1_000_000,
         date: "March 1, Year 1",
         terrainVersion: 1,
         hasTerrain: true,
@@ -112,6 +113,12 @@ async function mount() {
   });
 }
 
+/** The park with Terrain taken up, which puts Raise in hand: the park itself opens with nothing. */
+async function mountWithTerrain() {
+  await mount();
+  act(() => uiStore.getState().setTool("terrain"));
+}
+
 const canvas = () => screen.getByLabelText("Park view");
 
 /** A left click on the canvas, as a pointer makes it, with the modifier keys held. */
@@ -131,20 +138,20 @@ const choose = (name: string) => fireEvent.click(screen.getByRole("button", { na
 const lastCall = () => command.mock.calls.at(-1);
 
 describe("a click on the map runs what the tray has in hand", () => {
-  it("raises with the Raise tool the park opens with", async () => {
-    await mount();
+  it("raises with the Raise tool that taking up Terrain puts in hand", async () => {
+    await mountWithTerrain();
     await clickMap();
     expect(command).toHaveBeenCalledExactlyOnceWith("terrain_raise", { x: 5, y: 6, w: 1, h: 1 });
   });
 
   it("lowers on Shift-click with Raise in hand", async () => {
-    await mount();
+    await mountWithTerrain();
     await clickMap({ shiftKey: true });
     expect(lastCall()).toEqual(["terrain_lower", { x: 5, y: 6, w: 1, h: 1 }]);
   });
 
   it("covers the brush: 3 by 3 around the tile, and less at the edge of the map", async () => {
-    await mount();
+    await mountWithTerrain();
     choose("3");
     await clickMap();
     expect(lastCall()).toEqual(["terrain_raise", { x: 4, y: 5, w: 3, h: 3 }]);
@@ -154,7 +161,7 @@ describe("a click on the map runs what the tray has in hand", () => {
   });
 
   it("smooths the brush", async () => {
-    await mount();
+    await mountWithTerrain();
     choose("Smooth");
     choose("2");
     await clickMap();
@@ -162,7 +169,7 @@ describe("a click on the map runs what the tray has in hand", () => {
   });
 
   it("fills water two steps above the clicked tile's lowest corner, and drains with Alt", async () => {
-    await mount();
+    await mountWithTerrain();
     choose("Water");
     await clickMap();
     expect(lastCall()).toEqual(["terrain_set_water", { x: 5, y: 6, w: 1, h: 1, level: 6 }]);
@@ -175,7 +182,7 @@ describe("a click on the map runs what the tray has in hand", () => {
   });
 
   it("fills as far above as the stepper says", async () => {
-    await mount();
+    await mountWithTerrain();
     choose("Water");
     choose("Increase water level");
     choose("Increase water level");
@@ -184,7 +191,7 @@ describe("a click on the map runs what the tray has in hand", () => {
   });
 
   it("sets the surface the chip row names: Sand is 1", async () => {
-    await mount();
+    await mountWithTerrain();
     choose("Surface");
     await clickMap();
     expect(lastCall()).toEqual(["terrain_set_surface", { x: 5, y: 6, w: 1, h: 1, surface: 0 }]);
@@ -197,7 +204,7 @@ describe("a click on the map runs what the tray has in hand", () => {
   });
 
   it("levels to the clicked tile's lowest corner, or to the height it was set to", async () => {
-    await mount();
+    await mountWithTerrain();
     choose("Level");
     stage.under = { x: 8, y: 9 };
     await clickMap();
@@ -210,7 +217,7 @@ describe("a click on the map runs what the tray has in hand", () => {
   });
 
   it("does what the command bar started, in place of the tool the tray was on", async () => {
-    await mount();
+    await mountWithTerrain();
     choose("Lower");
     fireEvent.keyDown(window, { key: "k", ctrlKey: true });
     const search = screen.getByPlaceholderText("Type a command…");
@@ -221,7 +228,7 @@ describe("a click on the map runs what the tray has in hand", () => {
   });
 
   it("does nothing with the pointer over no tile", async () => {
-    await mount();
+    await mountWithTerrain();
     stage.under = null;
     await clickMap();
     expect(command).not.toHaveBeenCalled();
@@ -229,14 +236,14 @@ describe("a click on the map runs what the tray has in hand", () => {
 
   it("shows what a click was charged in the tray", async () => {
     command.mockResolvedValue({ ok: true, id: 3, cost: 5000 });
-    await mount();
+    await mountWithTerrain();
     await clickMap();
     expect(screen.getByLabelText("Last charge").textContent).toBe("Charged $50.00");
   });
 
   it("tells the player why a click was refused", async () => {
     command.mockResolvedValue({ ok: false, error: "Not enough cash" });
-    await mount();
+    await mountWithTerrain();
     choose("Water");
     await clickMap();
     expect(screen.getByRole("alert").textContent).toContain("Not enough cash");
@@ -253,23 +260,33 @@ describe("with nothing in hand", () => {
   });
 
   it("does nothing on a click once the tool in hand has been clicked again", async () => {
-    await mount();
+    await mountWithTerrain();
     fireEvent.click(screen.getByRole("button", { name: "Terrain" }));
     await clickMap();
     expect(command).not.toHaveBeenCalled();
   });
 
-  it("does nothing with a tool that has no placement, such as Rides", async () => {
+  it("looks at the tile instead, as the park opens: no command, and the inspector on the tile", async () => {
+    await mount();
+    expect(uiStore.getState().tool).toBe("select");
+    await clickMap();
+    expect(command).not.toHaveBeenCalled();
+    expect(uiStore.getState().selection).toEqual({ kind: "tile", x: 5, y: 6 });
+    expect(screen.getByRole("heading", { name: "Tile (5, 6)" })).toBeTruthy();
+  });
+
+  it("sends no command with a tool that has no placement, such as Rides, but looks at the tile", async () => {
     await mount();
     press("3");
     await clickMap();
     expect(command).not.toHaveBeenCalled();
+    expect(uiStore.getState().selection).toEqual({ kind: "tile", x: 5, y: 6 });
   });
 });
 
 describe("the outline under the pointer", () => {
   it("is the brush on the tile under the pointer", async () => {
-    await mount();
+    await mountWithTerrain();
     await hover();
     expect(stage.highlight).toHaveBeenLastCalledWith(5, 6, 1, 1);
     choose("3");
@@ -277,7 +294,7 @@ describe("the outline under the pointer", () => {
   });
 
   it("is gone when Esc puts the placement down, without the pointer moving", async () => {
-    await mount();
+    await mountWithTerrain();
     await hover();
     expect(stage.highlight).toHaveBeenLastCalledWith(5, 6, 1, 1);
     act(() => press("Escape"));
@@ -289,7 +306,7 @@ describe("the outline under the pointer", () => {
   });
 
   it("is gone when the tool in hand is clicked again, and when another tool is taken up", async () => {
-    await mount();
+    await mountWithTerrain();
     await hover();
     fireEvent.click(screen.getByRole("button", { name: "Terrain" }));
     expect(stage.highlight).toHaveBeenLastCalledWith(null);
@@ -300,7 +317,7 @@ describe("the outline under the pointer", () => {
   });
 
   it("comes back with the placement the command bar starts, from another tool", async () => {
-    await mount();
+    await mountWithTerrain();
     await hover();
     press("3");
     expect(stage.highlight).toHaveBeenLastCalledWith(null);

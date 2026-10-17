@@ -66,7 +66,10 @@ test("opens a park, shapes terrain, undoes it, pauses, and draws", async ({ page
   );
   expect(status?.ok).toBe(true);
 
-  // A click on the middle of the park with the default Raise tool is paid for in cash.
+  // A click on the middle of the park with Raise in hand is paid for in cash. The park opens with
+  // nothing in hand (a click would only look at the tile), and 1 takes up Terrain with Raise.
+  await page.keyboard.press("1");
+  await expect(page.getByRole("region", { name: "Terrain tray" })).toBeVisible();
   const canvas = page.getByLabel("Park view");
   await expect(canvas).toBeVisible();
   const box = await canvas.boundingBox();

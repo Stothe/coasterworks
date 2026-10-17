@@ -1,10 +1,12 @@
 import { SimClient, SimHostServer, createLinkedTransports } from "@coasterworks/protocol";
 import type { EventMessage, HostTimers, MessageTransport } from "@coasterworks/protocol";
 import { Sim, createWorld } from "@coasterworks/sim";
-import { StrictMode, type ReactNode } from "react";
+import { Profiler, StrictMode, type ReactNode } from "react";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
 import { useHost } from "../src/state/useHost";
+import { useSnapshot } from "../src/state/useSnapshot";
+import { buildTimeline } from "../src/state/useTimeline";
 
 interface Rig {
   sim: Sim;
@@ -64,8 +66,11 @@ function logEvent(id: number, over: Partial<EventMessage["entry"]> = {}): EventM
   };
 }
 
-/** `useHost` over a client that does nothing but connect, and hands back a way to send it events. */
-async function withStubClient() {
+/**
+ * `useHost` over a client that does nothing but connect, and hands back a way to send it events.
+ * `history` is what the client answers to the `log_recent` query with, newest first.
+ */
+async function withStubClient(history: unknown[] | "fails" = []) {
   let handler: ((event: EventMessage) => void) | undefined;
   const client = {
     onSnapshot: () => () => {},
@@ -75,15 +80,25 @@ async function withStubClient() {
     },
     onError: () => () => {},
     onClose: () => () => {},
-    connect: async () => ({ halted: false }),
+    connect: async () => ({ halted: false, name: "Stub Park" }),
+    query: vi.fn(async (name: string) => {
+      if (history === "fails") throw new Error("Connection closed");
+      return name === "log_recent" ? { ok: true, result: history } : { ok: false, error: "no" };
+    }),
     close: () => {},
   } as unknown as SimClient;
   const hook = renderHook(() => useHost(async () => ({ client })));
   await waitFor(() => expect(hook.result.current.status).toBe("ready"));
   return {
     result: hook.result,
+    client,
     emit: (event: EventMessage) => handler?.(event),
   };
+}
+
+/** A log entry as the sim's `log_recent` answers with it. */
+function entryOf(id: number, over: Partial<EventMessage["entry"]> = {}): EventMessage["entry"] {
+  return logEvent(id, over).entry;
 }
 
 afterEach(() => {
@@ -205,6 +220,207 @@ describe("useHost", () => {
     });
     expect(result.current.events).toHaveLength(200);
     expect(result.current.events[0]?.entry.id).toBe(1);
+  });
+
+  it("knows the park's name from the welcome", async () => {
+    const rig = makeRig();
+    const { result } = renderHook(() => useHost(rig.connect));
+    expect(result.current.name).toBeUndefined();
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(result.current.name).toBe("Hook Test");
+  });
+
+  describe("the snapshots", () => {
+    it("are read from the state as the latest, and a snapshot that only moves time on commits nothing", async () => {
+      const rig = makeRig();
+      let commits = 0;
+      const { result } = renderHook(() => useHost(rig.connect), {
+        wrapper: ({ children }) => (
+          <Profiler id="host" onRender={() => commits++}>
+            {children}
+          </Profiler>
+        ),
+      });
+      await waitFor(() => expect(result.current.status).toBe("ready"));
+      const state = result.current;
+      const firstTick = state.snapshot?.header.tick ?? 0;
+      // React renders once more for the first update that leaves the state as it was; after that, none.
+      act(() => {
+        rig.advance(1000);
+        rig.runLoop();
+      });
+      await waitFor(() => expect(state.snapshot?.header.tick).toBeGreaterThan(firstTick));
+      const settled = commits;
+
+      for (let again = 0; again < 3; again++) {
+        act(() => {
+          rig.advance(1000);
+          rig.runLoop();
+        });
+      }
+      await waitFor(() => expect(state.snapshot?.header.tick).toBeGreaterThan(firstTick + 40));
+      // The same state reads the latest snapshot, and none of them rendered anything.
+      expect(result.current).toBe(state);
+      expect(commits).toBe(settled);
+    });
+
+    it("tell a subscriber after each one, and stop when it stops", async () => {
+      const rig = makeRig();
+      const { result } = renderHook(() => useHost(rig.connect));
+      await waitFor(() => expect(result.current.status).toBe("ready"));
+      const heard = vi.fn();
+      const stop = result.current.subscribeSnapshot?.(heard);
+      act(() => {
+        rig.advance(1000);
+        rig.runLoop();
+      });
+      await waitFor(() => expect(heard).toHaveBeenCalled());
+      const seen = heard.mock.calls.length;
+      stop?.();
+      act(() => {
+        rig.advance(1000);
+        rig.runLoop();
+      });
+      expect(heard).toHaveBeenCalledTimes(seen);
+    });
+
+    it("render a component that follows part of one when that part changes, and only then", async () => {
+      const rig = makeRig();
+      const view = renderHook(() => {
+        const host = useHost(rig.connect);
+        const cash = useSnapshot(host, (snapshot) => snapshot?.header.cash);
+        const tick = useSnapshot(host, (snapshot) => snapshot?.header.tick);
+        return { host, cash, tick };
+      });
+      await waitFor(() => expect(view.result.current.cash).toBe(10_000_00));
+      await act(async () => {
+        await view.result.current.host.client?.command("terrain_raise", { x: 1, y: 1, w: 1, h: 1 });
+      });
+      await waitFor(() => expect(view.result.current.cash).toBe(10_000_00 - 4 * 50_00));
+      act(() => {
+        rig.advance(1000);
+        rig.runLoop();
+      });
+      await waitFor(() => expect(view.result.current.tick).toBeGreaterThan(0));
+    });
+  });
+
+  describe("the history", () => {
+    it("fills the events with what the park's log held when the page joined, oldest first", async () => {
+      const rig = makeRig();
+      rig.sim.execute("terrain_raise", { x: 1, y: 1, w: 1, h: 1 }, "agent");
+      rig.sim.execute("terrain_lower", { x: 1, y: 1, w: 1, h: 1 }, "player");
+      const { result } = renderHook(() => useHost(rig.connect));
+      await waitFor(() => expect(result.current.events).toHaveLength(2));
+      expect(result.current.events.map((e) => [e.entry.name, e.entry.client])).toEqual([
+        ["terrain_raise", "agent"],
+        ["terrain_lower", "player"],
+      ]);
+      expect(result.current.historyThrough).toBe(result.current.events[1]?.entry.id);
+      expect(result.current.events[0]).toMatchObject({ t: "event", kind: "log" });
+    });
+
+    it("asks once, for the 200 the query allows, when the connection is ready", async () => {
+      const { client } = await withStubClient([entryOf(1)]);
+      await waitFor(() => expect(client.query).toHaveBeenCalledTimes(1));
+      expect(client.query).toHaveBeenCalledWith("log_recent", { limit: 200 });
+    });
+
+    it("keeps the live event when the history holds the same id: one entry, the live one", async () => {
+      const { result, emit } = await withStubClient();
+      // The live event comes first, as one sent while the query was out would.
+      act(() => emit(logEvent(5, { cost: 111, client: "agent" })));
+      const stub = await withStubClient([entryOf(5, { cost: 999 }), entryOf(4, { cost: 444 })]);
+      act(() => stub.emit(logEvent(5, { cost: 111, client: "agent" })));
+      await waitFor(() => expect(stub.result.current.events).toHaveLength(2));
+      expect(stub.result.current.events.map((e) => [e.entry.id, e.entry.cost])).toEqual([
+        [4, 444],
+        [5, 111],
+      ]);
+      expect(result.current.events).toHaveLength(1);
+    });
+
+    it("puts history before a live event of a later id, and never twice", async () => {
+      const { result, emit } = await withStubClient([entryOf(2), entryOf(1)]);
+      await waitFor(() => expect(result.current.events).toHaveLength(2));
+      act(() => emit(logEvent(3, { client: "agent" })));
+      act(() => emit(logEvent(2, { cost: 7 })));
+      expect(result.current.events.map((e) => e.entry.id)).toEqual([1, 2, 3]);
+      expect(result.current.events[1]?.entry.cost).toBe(7);
+    });
+
+    it("keeps the newest 200 of a history and the live events together", async () => {
+      const history = Array.from({ length: 200 }, (_, i) => entryOf(200 - i));
+      const { result, emit } = await withStubClient(history);
+      await waitFor(() => expect(result.current.events).toHaveLength(200));
+      act(() => emit(logEvent(201)));
+      expect(result.current.events).toHaveLength(200);
+      expect(result.current.events[0]?.entry.id).toBe(2);
+      expect(result.current.events.at(-1)?.entry.id).toBe(201);
+    });
+
+    it("says how far it reaches, so those entries are known and not news", async () => {
+      const { result, emit } = await withStubClient([entryOf(8), entryOf(7)]);
+      await waitFor(() => expect(result.current.historyThrough).toBe(8));
+      // A live event after it moves nothing.
+      act(() => emit(logEvent(9)));
+      expect(result.current.historyThrough).toBe(8);
+    });
+
+    it("computes the timeline's undo marks over the history too: a loaded undo marks its target", async () => {
+      const { result } = await withStubClient([
+        entryOf(3, { name: "undo", input: { target: 2 }, cost: -200 }),
+        entryOf(2, { name: "terrain_lower" }),
+        entryOf(1, { name: "terrain_raise" }),
+      ]);
+      await waitFor(() => expect(result.current.events).toHaveLength(3));
+      const timeline = buildTimeline(result.current.events);
+      expect(timeline.map((e) => [e.id, e.undone])).toEqual([
+        [3, false],
+        [2, true],
+        [1, false],
+      ]);
+      expect(timeline[0]?.title).toBe("Undid Lower terrain");
+    });
+
+    it("does the same over the real log: an undo the sim did before the page joined", async () => {
+      const rig = makeRig();
+      rig.sim.execute("terrain_raise", { x: 1, y: 1, w: 1, h: 1 }, "agent");
+      rig.sim.undo("player");
+      const { result } = renderHook(() => useHost(rig.connect));
+      await waitFor(() => expect(result.current.events).toHaveLength(2));
+      const timeline = buildTimeline(result.current.events);
+      expect(timeline.map((e) => [e.name, e.undone])).toEqual([
+        ["undo", false],
+        ["terrain_raise", true],
+      ]);
+    });
+
+    it("leaves the timeline to begin from now when the park cannot answer", async () => {
+      const { result, emit } = await withStubClient("fails");
+      expect(result.current.status).toBe("ready");
+      act(() => emit(logEvent(1)));
+      expect(result.current.events.map((e) => e.entry.id)).toEqual([1]);
+      expect(result.current.historyThrough ?? 0).toBe(0);
+      expect(result.current.error).toBeUndefined();
+    });
+
+    it("ignores an answer that is not a list of log entries", async () => {
+      const { result } = await withStubClient([{ nonsense: true }, "text", entryOf(4)]);
+      await waitFor(() => expect(result.current.events).toHaveLength(1));
+      expect(result.current.events[0]?.entry.id).toBe(4);
+    });
+
+    it("does not ask a connection that failed, or one lost before it was ready", async () => {
+      const rig = makeRig();
+      const failing = vi.fn(async () => {
+        throw new Error("no socket");
+      });
+      const { result } = renderHook(() => useHost(failing));
+      await waitFor(() => expect(result.current.status).toBe("error"));
+      expect(result.current.events).toEqual([]);
+      expect(rig.connect).not.toHaveBeenCalled();
+    });
   });
 
   it("sets error when the host reports one that is not about a request", async () => {

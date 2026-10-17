@@ -21,9 +21,9 @@ const loan: Action = {
 };
 
 describe("uiStore: starting state", () => {
-  it("has Raise in hand, no selection, and everything closed", () => {
-    expect(state().tool).toBe("terrain");
-    expect(state().placement).toEqual({ command: "terrain_raise", defaults: {}, size: 1 });
+  it("has nothing in hand but the pointer, no selection, and everything closed", () => {
+    expect(state().tool).toBe("select");
+    expect(state().placement).toBeNull();
     expect(state().brushSize).toBe(1);
     expect(state().selection).toBeNull();
     expect(state().inspector).toEqual({ open: false, tab: "overview" });
@@ -91,6 +91,12 @@ describe("uiStore: tools and placement", () => {
     state().setTool("select");
     expect(state().tool).toBe("select");
     expect(state().placement).toBeNull();
+  });
+
+  it("taking up Terrain from the starting Select puts Raise in hand", () => {
+    state().setTool("terrain");
+    expect(state().tool).toBe("terrain");
+    expect(state().placement).toEqual({ command: "terrain_raise", defaults: {}, size: 1 });
   });
 
   it("setTool to Terrain puts Raise in hand at the brush size last chosen", () => {

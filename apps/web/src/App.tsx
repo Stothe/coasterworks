@@ -1,13 +1,15 @@
 import type { SimClient, Speed } from "@coasterworks/protocol";
 import type { ExecResult } from "@coasterworks/sim";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { humanizeName, type UiActionDeps } from "./actions/registry";
+import type { UiActionDeps } from "./actions/registry";
 import type { Action, ActionContext } from "./actions/types";
 import { useActions } from "./actions/useActions";
 import { bindingFor, stepSpeed } from "./state/keys";
 import { uiStore, useUiStore } from "./state/uiStore";
-import { useHost } from "./state/useHost";
+import { useAgentToasts } from "./state/useAgentToasts";
+import { useHost, type HostState } from "./state/useHost";
 import { useNotifications } from "./state/useNotifications";
+import { useSnapshot, type SnapshotSource } from "./state/useSnapshot";
 import { useTimeline, type TileRect } from "./state/useTimeline";
 import { useToasts } from "./state/useToasts";
 import { Banner } from "./ui/Banner";
@@ -16,7 +18,7 @@ import { Dock } from "./ui/Dock";
 import { HelpOverlay } from "./ui/HelpOverlay";
 import { Inspector } from "./ui/Inspector";
 import { CLEAR_OF_INSPECTOR_REM } from "./ui/layout";
-import { StatusPills } from "./ui/StatusPills";
+import { StatusPills, type StatusPillsProps } from "./ui/StatusPills";
 import { TileContextMenu, type TileMenuHandle } from "./ui/TileContextMenu";
 import { Toast } from "./ui/Toast";
 import { TopRight } from "./ui/TopRight";
@@ -33,15 +35,40 @@ interface Live {
   halted: boolean;
   disconnected: boolean;
   client: SimClient | null;
+  host: HostState;
   changeSpeed(speed: Speed): void;
   onResult(result: ExecResult): void;
   ctx: ActionContext | null;
   byId: ReadonlyMap<string, Action>;
 }
 
+/**
+ * The status pills, with the cash, the month's change and the date followed from the snapshots. They
+ * are the part of the app that changes with the clock, so they are what a snapshot renders.
+ */
+function LiveStatusPills({
+  source,
+  ...rest
+}: Omit<StatusPillsProps, "cash" | "monthChange" | "date"> & { source: SnapshotSource }) {
+  const cash = useSnapshot(source, (snapshot) => snapshot?.header.cash);
+  const monthStartCash = useSnapshot(source, (snapshot) => snapshot?.header.monthStartCash);
+  const date = useSnapshot(source, (snapshot) => snapshot?.header.date);
+  if (cash === undefined || monthStartCash === undefined || date === undefined) return null;
+  return <StatusPills cash={cash} monthChange={cash - monthStartCash} date={date} {...rest} />;
+}
+
+/** The view, with the time of day following the sim's tick. */
+function LiveViewport({
+  source,
+  ...rest
+}: Omit<ViewportProps, "tick"> & { source: SnapshotSource }) {
+  const tick = useSnapshot(source, (snapshot) => snapshot?.header.tick ?? 0);
+  return <Viewport {...rest} tick={tick} />;
+}
+
 export function App() {
   const host = useHost();
-  const { toasts, push, dismiss } = useToasts();
+  const { toasts, push, dismiss, update } = useToasts();
   const uiTool = useUiStore((state) => state.tool);
   const selection = useUiStore((state) => state.selection);
   const inspectorOpen = useUiStore((state) => state.inspector.open);
@@ -50,7 +77,9 @@ export function App() {
   const viewport = useRef<ViewportHandle>(null);
 
   const { client } = host;
-  const speed: Speed = host.snapshot?.header.speed ?? 1;
+  // The one thing of the snapshot the app itself follows. A snapshot every 50 ms renders the pills
+  // and the view; the app renders when the speed changes.
+  const speed: Speed = useSnapshot(host, (snapshot) => snapshot?.header.speed ?? 1);
   // The speed a pause interrupted, which Space brings back.
   const resumeSpeed = useRef<Speed>(1);
   // The speed last asked for, until the host's snapshot confirms it. Keys pressed in quick
@@ -110,9 +139,6 @@ export function App() {
     ({ x, y, w, h }: TileRect) => viewport.current?.focusTile(x, y, w, h),
     [],
   );
-  // The newest event the host has seen. The inspector looks at the park again after each one.
-  const lastEventId = host.events.at(-1)?.entry.id;
-
   const { halted } = host;
   const disconnected = host.status === "disconnected";
   // The key handler and the actions' handlers read the latest of everything through this, so the
@@ -122,6 +148,7 @@ export function App() {
     halted,
     disconnected,
     client,
+    host,
     changeSpeed,
     onResult,
     ctx: null,
@@ -185,16 +212,35 @@ export function App() {
   }, [execute]);
 
   const { actions, byId, ready: catalogReady, error: catalogError } = useActions(client, deps);
+
+  // The context is made again when the connection or what the actions read of the interface
+  // changes, and never for a snapshot: `snapshot` is read from the latest when asked.
   const ctx = useMemo<ActionContext | null>(
     () =>
       client
-        ? { client, snapshot: host.snapshot, ui: { tool: uiTool, selection, inspectorOpen } }
+        ? {
+            client,
+            get snapshot() {
+              return live.current.host.snapshot;
+            },
+            ui: { tool: uiTool, selection, inspectorOpen },
+          }
         : null,
-    [client, host.snapshot, uiTool, selection, inspectorOpen],
+    [client, uiTool, selection, inspectorOpen],
   );
 
   useEffect(() => {
-    live.current = { speed, halted, disconnected, client, changeSpeed, onResult, ctx, byId };
+    live.current = {
+      speed,
+      halted,
+      disconnected,
+      client,
+      host,
+      changeSpeed,
+      onResult,
+      ctx,
+      byId,
+    };
   });
 
   useEffect(() => {
@@ -241,32 +287,28 @@ export function App() {
     if (reportedError !== undefined) push(reportedError, { kind: "error" });
   }, [reportedError, push]);
 
-  // What the bell counts: an agent's commands, and the errors above, since it was last opened.
-  const notifications = useNotifications(host.events, reportedError);
+  // What the bell counts: an agent's commands since it was last opened. What was in the log when
+  // the page joined is history, not news.
+  const seenThrough = host.historyThrough ?? 0;
+  const notifications = useNotifications(host.events, seenThrough);
   const { clear: clearNotifications } = notifications;
   const openNotifications = useCallback(() => {
     uiStore.getState().openInspector("timeline");
     clearNotifications();
   }, [clearNotifications]);
 
-  // Whatever an agent does shows up as it happens, and a click on it goes to where it happened.
+  // Whatever an agent does shows up as it happens, a burst of commands as one message, and a click
+  // on it goes to where it happened or else to the Timeline.
   const timeline = useTimeline(host.events);
-  const seenEvent = useRef(0);
-  useEffect(() => {
-    const entries = new Map(timeline.map((entry) => [entry.id, entry]));
-    for (const { entry } of host.events) {
-      if (entry.id <= seenEvent.current) continue;
-      seenEvent.current = entry.id;
-      if (entry.client !== "agent") continue;
-      const found = entries.get(entry.id);
-      const title = found?.title ?? humanizeName(entry.name);
-      const rect = found?.rect;
-      push(
-        `Agent: ${title}`,
-        rect ? { action: { label: `Jump to ${title}`, run: () => focusRect(rect) } } : {},
-      );
-    }
-  }, [host.events, timeline, push, focusRect]);
+  useAgentToasts({
+    events: host.events,
+    timeline,
+    seenThrough,
+    push,
+    update,
+    focusRect,
+    openTimeline: openNotifications,
+  });
 
   // Tells the smoke test, and anyone with a console, that the page has a sim to talk to.
   useEffect(() => {
@@ -293,10 +335,10 @@ export function App() {
         notify={push}
         disabled={disconnected}
       >
-        <Viewport
+        <LiveViewport
           ref={viewport}
+          source={host}
           terrain={host.terrain}
-          tick={host.snapshot?.header.tick ?? 0}
           client={client}
           onResult={onResult}
           onSecondaryClick={openTileMenu}
@@ -304,17 +346,14 @@ export function App() {
       </TileContextMenu>
       <div className="pointer-events-none absolute inset-0" onClick={releaseFocus}>
         <div className="pointer-events-auto absolute top-3.5 left-3.5">
-          {host.snapshot && (
-            <StatusPills
-              cash={host.snapshot.header.cash}
-              date={host.snapshot.header.date}
-              speed={speed}
-              onSpeedChange={changeSpeed}
-              speedDisabled={host.halted || disconnected}
-              onOpenFinances={() => uiStore.getState().openInspector("finances")}
-              onOpenOverview={() => uiStore.getState().openInspector("overview")}
-            />
-          )}
+          <LiveStatusPills
+            source={host}
+            speed={speed}
+            onSpeedChange={changeSpeed}
+            speedDisabled={host.halted || disconnected}
+            onOpenFinances={() => uiStore.getState().openInspector("finances")}
+            onOpenOverview={() => uiStore.getState().openInspector("overview")}
+          />
         </div>
         {/*
           The tray and the dock sit in the middle of the space the inspector leaves, and move left
@@ -363,14 +402,14 @@ export function App() {
         </div>
         <Inspector
           terrain={host.terrain}
-          client={client}
+          source={host}
+          parkName={host.name}
           actions={actions}
           ctx={ctx}
           execute={execute}
           notify={push}
           timeline={timeline}
           focusTile={focusRect}
-          {...(lastEventId !== undefined && { lastEventId })}
         />
         <Toast toasts={toasts} onDismiss={dismiss} besideInspector={inspectorOpen} />
         <HelpOverlay byId={byId} />

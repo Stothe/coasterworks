@@ -24,6 +24,8 @@ export interface SnapshotHeader {
   cash: number;
   /** Integer cents. */
   loan: number;
+  /** Integer cents: the cash when the month began, so `cash - monthStartCash` is the month's change. */
+  monthStartCash: number;
   /** The game date, already formatted, such as `"March 1, Year 1"`. */
   date: string;
   /** Changes whenever the terrain may have; a client that holds this version holds the terrain. */
@@ -51,6 +53,7 @@ const SnapshotHeaderSchema = z.object({
   halted: z.boolean(),
   cash: z.number().int(),
   loan: z.number().int(),
+  monthStartCash: z.number().int(),
   date: z.string(),
   terrainVersion: z.number().int().nonnegative(),
   hasTerrain: z.boolean(),

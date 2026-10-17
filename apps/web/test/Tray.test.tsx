@@ -8,6 +8,8 @@ import { costHintOf } from "../src/ui/trays/CatalogTray";
 
 beforeEach(() => {
   uiStore.setState(uiStore.getInitialState(), true);
+  // The terrain tray is for the terrain tool, and taking it up puts Raise in hand.
+  uiStore.getState().setTool("terrain");
 });
 afterEach(() => {
   cleanup();
@@ -80,7 +82,7 @@ describe("TerrainTray: the verbs", () => {
     ]);
   });
 
-  it("opens on Raise, which is what the park starts with in hand", () => {
+  it("opens on Raise, which is what taking up Terrain puts in hand", () => {
     renderTray();
     expect(pressed("Terrain tool")).toEqual(["Raise"]);
   });
@@ -367,7 +369,7 @@ describe("TerrainTray: the last charge", () => {
 
   it("tells the player what to do before anything has been charged", () => {
     renderTray({ lastCharge: null });
-    expect(charge().textContent).toBe("Click the ground to shape it");
+    expect(charge().textContent).toBe("Click the ground to shape it · Esc puts the tool down");
   });
 
   it("says what the last command cost", () => {

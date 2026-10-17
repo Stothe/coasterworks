@@ -4,7 +4,10 @@ export interface ToastItem {
   id: number;
   text: string;
   kind: "info" | "error";
-  /** Makes the message a button: what it is called to assistive technology, and what it does. */
+  /**
+   * Makes the message a button. `label` says what pressing it does (`Open the Timeline`); the
+   * button's name is the message and then that, so the name has the words the eye reads in it.
+   */
   action?: { label: string; run(): void };
 }
 
@@ -65,7 +68,7 @@ function JumpButton({
   return (
     <button
       type="button"
-      aria-label={action.label}
+      aria-label={`${children}. ${action.label}`}
       onClick={() => {
         action.run();
         onDone();

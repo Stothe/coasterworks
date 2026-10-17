@@ -17,6 +17,7 @@ function header(over: Partial<SnapshotHeader> = {}): SnapshotHeader {
     halted: false,
     cash: 1_000_000,
     loan: 500_000,
+    monthStartCash: 900_000,
     date: "March 4, Year 1",
     terrainVersion: 7,
     hasTerrain: true,
@@ -59,6 +60,15 @@ describe("snapshot encoding", () => {
     expect(decoded.terrain?.water).toEqual(original.water);
     expect(decoded.terrain?.corners[0]).toBe(63);
     expect(decoded.terrain?.water[2]).toBe(12);
+  });
+
+  it("carries the cash the month began with, with and without terrain", () => {
+    const withTerrain = decodeSnapshot(
+      encodeSnapshot(header({ monthStartCash: -1_250 }), terrain()),
+    );
+    expect(withTerrain.header.monthStartCash).toBe(-1_250);
+    const plain = decodeSnapshot(encodeSnapshot(header({ hasTerrain: false })));
+    expect(plain.header.monthStartCash).toBe(900_000);
   });
 
   it("returns real typed arrays of the right sizes", () => {
@@ -183,6 +193,13 @@ describe("snapshot decoding", () => {
     expect(() => decodeSnapshot(frameWithHeader(JSON.stringify(withoutHalted)))).toThrow(
       /header is invalid/,
     );
+    const { monthStartCash: _month, ...withoutMonth } = header();
+    expect(() => decodeSnapshot(frameWithHeader(JSON.stringify(withoutMonth)))).toThrow(
+      /header is invalid/,
+    );
+    expect(() =>
+      decodeSnapshot(frameWithHeader(JSON.stringify(header({ monthStartCash: 1.5 })))),
+    ).toThrow(ProtocolError);
     expect(() =>
       decodeSnapshot(frameWithHeader(JSON.stringify(header({ speed: 3 as never })))),
     ).toThrow(ProtocolError);

@@ -147,6 +147,7 @@ test("? shows the keyboard map and Esc puts it away", async ({ page }) => {
 
   const help = page.getByRole("dialog", { name: "Keyboard shortcuts" });
   await expect(help).toHaveCount(0);
+  await page.keyboard.press("1");
   await page.keyboard.press("?");
   await expect(help).toBeVisible();
   await expect(help.getByText("Command bar")).toBeVisible();
@@ -158,6 +159,8 @@ test("? shows the keyboard map and Esc puts it away", async ({ page }) => {
 
 test("Esc returns to Select, with nothing in hand", async ({ page }) => {
   await openPark(page);
+  // The park opens that way.
+  expect(await uiState(page)).toEqual({ tool: "select", placement: null });
 
   await page.keyboard.press("1");
   await page.getByRole("button", { name: "Water", exact: true }).click();
@@ -166,7 +169,11 @@ test("Esc returns to Select, with nothing in hand", async ({ page }) => {
   await page.keyboard.press("Escape");
   await expect.poll(() => uiState(page)).toEqual({ tool: "select", placement: null });
   const dock = page.getByRole("group", { name: "Tools" });
-  await expect(dock.getByRole("button", { pressed: true })).toHaveCount(0);
+  await expect(dock.getByRole("button", { pressed: true })).toHaveCount(1);
+  await expect(dock.getByRole("button", { name: "Select" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   await expect(page.getByRole("region", { name: /tray$/ })).toHaveCount(0);
 
   // A click on the map now looks at a tile, and costs nothing.
@@ -190,6 +197,7 @@ test.describe("at the desktop minimum, 1100 by 700", () => {
     await openPark(page);
 
     // The tallest case: Water's extra controls in the tray, and the Finances forms in the inspector.
+    await page.keyboard.press("1");
     await page.getByRole("button", { name: "Water", exact: true }).click();
     await page.getByRole("button", { name: /^Open finances/ }).click();
     const inspector = page.getByRole("complementary", { name: "Inspector" });
@@ -277,7 +285,9 @@ test("every control, in every panel, has a name and is at least 32 px to hit", a
     expect(await controlProblems(page), what).toEqual({ unnamed: [], small: [] });
   };
 
-  await audit("the park as it opens: pills, speeds, dock and the Terrain tray");
+  await audit("the park as it opens: pills, speeds and the dock, with Select in hand");
+  await page.keyboard.press("1");
+  await audit("the Terrain tray");
   for (const verb of ["Water", "Surface", "Level"]) {
     await page.getByRole("button", { name: verb, exact: true }).click();
     await audit(`the ${verb} tray`);

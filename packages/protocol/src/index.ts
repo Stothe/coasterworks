@@ -2,6 +2,7 @@ export { SimClient } from "./client.js";
 export { SimHostServer } from "./host.js";
 export type { HostTimers, SimHostOptions } from "./host.js";
 export {
+  LogEntryPublicSchema,
   PROTOCOL_VERSION,
   ProtocolError,
   parseClientMessage,

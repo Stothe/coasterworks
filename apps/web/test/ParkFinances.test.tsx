@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildActions, type UiActionDeps } from "../src/actions/registry";
 import type { ActionContext } from "../src/actions/types";
-import type { ParkStatus } from "../src/state/useParkStatus";
+import type { ParkInfo } from "../src/state/useParkInfo";
 import { ParkFinances } from "../src/ui/inspector/ParkFinances";
 import { ParkOverview } from "../src/ui/inspector/ParkOverview";
 
@@ -38,44 +38,34 @@ const ctx: ActionContext = {
   ui: { tool: "select", selection: { kind: "park" }, inspectorOpen: true },
 };
 
-const park = (over: Partial<ParkStatus> = {}): ParkStatus => ({
+const park = (over: Partial<ParkInfo> = {}): ParkInfo => ({
   name: "Queryland",
-  tick: 0,
   date: "March 1, Year 1",
-  year: 1,
-  month: 0,
-  day: 1,
   cash: 1_000_000,
   monthStartCash: 1_000_000,
   loan: 0,
-  guests: 0,
-  rating: 0,
-  width: 16,
-  height: 16,
   ...over,
 });
 
 const OK: ExecResult = { ok: true, id: 1, cost: 0 };
 
 function setup(
-  status: ParkStatus | null = park({ loan: 500_000 }),
+  info: ParkInfo | null = park({ loan: 500_000 }),
   result: ExecResult = OK,
   extra: { actions?: typeof actions; ctx?: ActionContext | null } = {},
 ) {
   const execute = vi.fn<(name: string, input: unknown) => Promise<ExecResult>>(async () => result);
   const notify = vi.fn();
-  const onChanged = vi.fn();
   const view = render(
     <ParkFinances
-      status={status}
+      info={info}
       actions={extra.actions ?? actions}
       ctx={extra.ctx === undefined ? ctx : extra.ctx}
       execute={execute}
       notify={notify}
-      onChanged={onChanged}
     />,
   );
-  return { execute, notify, onChanged, ...view };
+  return { execute, notify, ...view };
 }
 
 const form = (name: string) => screen.getByRole("form", { name });
@@ -99,7 +89,7 @@ describe("ParkFinances: the numbers", () => {
 
   it("shows it in red when the cash is down, with the minus sign", () => {
     setup(park({ cash: 993_750, monthStartCash: 1_000_000 }));
-    expect(fact("This month").textContent).toBe("-$62.50");
+    expect(fact("This month").textContent).toBe("\u2212$62.50");
     expect(fact("This month").className).not.toContain("text-success");
     expect(fact("This month").className).toContain("text-danger");
   });
@@ -110,24 +100,23 @@ describe("ParkFinances: the numbers", () => {
     expect(fact("This month").className).toContain("text-success");
   });
 
-  it("follows a new status", () => {
+  it("follows a new snapshot", () => {
     const view = setup(park({ cash: 1_000_000 }));
     expect(fact("Cash").textContent).toBe("$10,000.00");
     view.rerender(
       <ParkFinances
-        status={park({ cash: 800_000 })}
+        info={park({ cash: 800_000 })}
         actions={actions}
         ctx={ctx}
         execute={view.execute}
         notify={view.notify}
-        onChanged={view.onChanged}
       />,
     );
     expect(fact("Cash").textContent).toBe("$8,000.00");
-    expect(fact("This month").textContent).toBe("-$2,000.00");
+    expect(fact("This month").textContent).toBe("\u2212$2,000.00");
   });
 
-  it("says it is loading before the first status, and still offers the loan forms", () => {
+  it("says it is loading before the first snapshot, and still offers the loan forms", () => {
     setup(null);
     expect(screen.getByText("Loading the books")).toBeTruthy();
     expect(screen.queryByText("Cash")).toBeNull();
@@ -167,29 +156,29 @@ describe("ParkFinances: the loan forms", () => {
     expect(execute).toHaveBeenCalledWith("finance_take_loan", { amount: 100_000 });
   });
 
-  it("asks for a fresh status after a loan went through, and says so", async () => {
-    const { onChanged, notify } = setup();
+  it("says so when a loan went through; the next snapshot has the money", async () => {
+    const { notify } = setup();
     fireEvent.change(amount("Repay loan"), { target: { value: "100" } });
     submit("Repay loan");
-    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
     expect(notify).toHaveBeenCalledWith("Loan repaid");
 
     fireEvent.change(amount("Take loan"), { target: { value: "100" } });
     submit("Take loan");
-    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(notify).toHaveBeenCalledTimes(2));
     expect(notify).toHaveBeenLastCalledWith("Loan taken");
   });
 
   it("empties the amount once the loan went through, so a second click is not the same loan again", async () => {
-    const { onChanged } = setup();
+    const { notify } = setup();
     fireEvent.change(amount("Take loan"), { target: { value: "100" } });
     submit("Take loan");
-    await waitFor(() => expect(onChanged).toHaveBeenCalled());
+    await waitFor(() => expect(notify).toHaveBeenCalled());
     expect(amount("Take loan").value).toBe("");
   });
 
-  it("shows a refusal under the form and asks for nothing", async () => {
-    const { onChanged, notify } = setup(park({ loan: 0 }), {
+  it("shows a refusal under the form and says nothing else", async () => {
+    const { notify } = setup(park({ loan: 0 }), {
       ok: false,
       error: "You only owe $0.00",
     });
@@ -198,7 +187,6 @@ describe("ParkFinances: the loan forms", () => {
     expect((await within(form("Repay loan")).findByRole("alert")).textContent).toBe(
       "You only owe $0.00",
     );
-    expect(onChanged).not.toHaveBeenCalled();
     expect(notify).not.toHaveBeenCalled();
     expect(amount("Repay loan").value).toBe("5");
   });
@@ -243,7 +231,7 @@ describe("ParkFinances: the loan forms", () => {
 
 describe("ParkOverview", () => {
   it("shows the park's name, the date, the cash and the loan", () => {
-    render(<ParkOverview status={park({ name: "Queryland", loan: 500_000, cash: 1_500_000 })} />);
+    render(<ParkOverview info={park({ name: "Queryland", loan: 500_000, cash: 1_500_000 })} />);
     expect(fact("Park").textContent).toBe("Queryland");
     expect(fact("Date").textContent).toBe("March 1, Year 1");
     expect(fact("Cash").textContent).toBe("$15,000.00");
@@ -251,13 +239,13 @@ describe("ParkOverview", () => {
   });
 
   it("holds the places of guests and the rating, which come later", () => {
-    render(<ParkOverview status={park()} />);
+    render(<ParkOverview info={park()} />);
     expect(fact("Guests").textContent).toBe("Coming with guests");
     expect(fact("Park rating").textContent).toBe("Coming with guests");
   });
 
-  it("says it is loading before the first status", () => {
-    render(<ParkOverview status={null} />);
+  it("says it is loading before the first snapshot", () => {
+    render(<ParkOverview info={null} />);
     expect(screen.getByText("Loading the park")).toBeTruthy();
   });
 });

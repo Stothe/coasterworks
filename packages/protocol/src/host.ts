@@ -424,6 +424,7 @@ export class SimHostServer {
         halted: this.isHalted,
         cash: finance.cash,
         loan: finance.loan,
+        monthStartCash: finance.monthStart.cash,
         date: formatDate(dateOf(tick)),
         terrainVersion: this.terrainVersion,
         hasTerrain: withTerrain,

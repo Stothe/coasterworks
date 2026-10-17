@@ -20,6 +20,7 @@ function hostAt(speed: Speed, halted: boolean): HostState {
         halted,
         cash: 1_000_000,
         loan: 0,
+        monthStartCash: 1_000_000,
         date: "March 1, Year 1",
         terrainVersion: 0,
         hasTerrain: false,

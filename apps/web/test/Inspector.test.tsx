@@ -2,13 +2,14 @@ import type { SimClient } from "@coasterworks/protocol";
 import type { TerrainData } from "@coasterworks/render";
 import { createDefaultRegistry, type ExecResult } from "@coasterworks/sim";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { Profiler } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildActions, type UiActionDeps } from "../src/actions/registry";
 import type { ActionContext } from "../src/actions/types";
 import { uiStore } from "../src/state/uiStore";
-import { EVENT_DEBOUNCE_MS, type ParkStatus } from "../src/state/useParkStatus";
 import { buildTimeline } from "../src/state/useTimeline";
 import { Inspector, type InspectorProps } from "../src/ui/Inspector";
+import { makeSource, type TestSource } from "./snapshotSource";
 
 const noop = vi.fn();
 const deps: UiActionDeps = {
@@ -33,25 +34,9 @@ const deps: UiActionDeps = {
 };
 const actions = buildActions(createDefaultRegistry().catalog(), deps);
 
-const park = (over: Partial<ParkStatus> = {}): ParkStatus => ({
-  name: "Queryland",
-  tick: 0,
-  date: "March 1, Year 1",
-  year: 1,
-  month: 0,
-  day: 1,
-  cash: 1_000_000,
-  monthStartCash: 1_000_000,
-  loan: 0,
-  guests: 0,
-  rating: 0,
-  width: 16,
-  height: 16,
-  ...over,
-});
-
 const query = vi.fn<(name: string, input: unknown) => Promise<unknown>>();
 const client = { query } as unknown as SimClient;
+let source: TestSource;
 const ctx: ActionContext = {
   client,
   snapshot: null,
@@ -70,7 +55,7 @@ function terrain(): TerrainData {
 
 beforeEach(() => {
   uiStore.setState(uiStore.getInitialState(), true);
-  query.mockResolvedValue({ ok: true, result: park({ loan: 500_000, cash: 1_500_000 }) });
+  source = makeSource({ loan: 500_000, cash: 1_500_000, monthStartCash: 1_200_000 });
   execute.mockResolvedValue({ ok: true, id: 1, cost: 0 });
 });
 afterEach(() => {
@@ -84,7 +69,8 @@ afterEach(() => {
 function renderInspector(props: Partial<InspectorProps> = {}) {
   const all: InspectorProps = {
     terrain: terrain(),
-    client,
+    source,
+    parkName: "Queryland",
     actions,
     ctx,
     execute,
@@ -113,14 +99,15 @@ describe("Inspector: when it shows", () => {
   it("is nothing while it is closed", () => {
     const { container } = renderInspector();
     expect(container.innerHTML).toBe("");
-    expect(query).not.toHaveBeenCalled();
+    // Nothing follows the clock while nothing shows it.
+    expect(source.listeners()).toBe(0);
   });
 
   it("is one panel on the right, with a heading naming what it shows", async () => {
     store().openInspector("overview");
     renderInspector();
     expect(screen.getAllByRole("complementary", { name: "Inspector" })).toHaveLength(1);
-    expect(await within(inspector()).findByRole("heading", { name: "Queryland" })).toBeTruthy();
+    expect(within(inspector()).getByRole("heading", { name: "Queryland" })).toBeTruthy();
   });
 
   it("floats on glass", () => {
@@ -145,7 +132,7 @@ describe("Inspector: the park", () => {
     store().select(null);
     renderInspector();
     expect(tabs()).toEqual(["Overview", "Finances", "Timeline"]);
-    expect(await screen.findByRole("heading", { name: "Queryland" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Queryland" })).toBeTruthy();
   });
 
   it("has the tabs Overview, Finances and Timeline, on the one that was opened", async () => {
@@ -153,19 +140,31 @@ describe("Inspector: the park", () => {
     renderInspector();
     expect(tabs()).toEqual(["Overview", "Finances", "Timeline"]);
     expect(selectedTab()).toBe("Finances");
-    expect(await screen.findByText("This month")).toBeTruthy();
+    expect(screen.getByText("This month")).toBeTruthy();
   });
 
-  it("shows the date as the header's status once it knows it", async () => {
+  it("shows the date as the header's status once it knows it", () => {
     store().openInspector("overview");
     renderInspector();
-    expect(await within(inspector()).findAllByText("March 1, Year 1")).not.toHaveLength(0);
+    expect(within(inspector()).getAllByText("March 1, Year 1")).not.toHaveLength(0);
+  });
+
+  it("is titled Park until the host has said what the park is called", () => {
+    store().openInspector("overview");
+    renderInspector({ parkName: undefined });
+    expect(within(inspector()).getByRole("heading", { name: "Park" })).toBeTruthy();
+  });
+
+  it("shows no numbers before the first snapshot", () => {
+    store().openInspector("overview");
+    renderInspector({ source: makeSource(null) });
+    expect(screen.getByText("Loading the park")).toBeTruthy();
   });
 
   it("Overview lists the park's name, date, cash and loan", async () => {
     store().openInspector("overview");
     renderInspector();
-    expect(await screen.findByText("$15,000.00")).toBeTruthy();
+    expect(screen.getByText("$15,000.00")).toBeTruthy();
     expect(screen.getByText("$5,000.00")).toBeTruthy();
     expect(screen.getAllByText("Coming with guests")).toHaveLength(2);
   });
@@ -209,7 +208,7 @@ describe("Inspector: the park", () => {
     // Radix opens a tab on mouse down; a keyboard focus does the same.
     await waitFor(() => expect(store().inspector.tab).toBe("finances"));
     expect(store().selection).toEqual({ kind: "park" });
-    expect(await screen.findByText("This month")).toBeTruthy();
+    expect(screen.getByText("This month")).toBeTruthy();
   });
 
   it("falls back to Overview when the tab is the tile's but the park is selected", async () => {
@@ -218,13 +217,13 @@ describe("Inspector: the park", () => {
     uiStore.setState({ inspector: { open: true, tab: "tile" } });
     renderInspector();
     expect(selectedTab()).toBe("Overview");
-    expect(await screen.findByRole("heading", { name: "Queryland" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Queryland" })).toBeTruthy();
   });
 
   it("Finances forms run through the execute it was given", async () => {
     store().openInspector("finances");
     renderInspector();
-    const repay = await screen.findByRole("form", { name: "Repay loan" });
+    const repay = screen.getByRole("form", { name: "Repay loan" });
     fireEvent.change(within(repay).getByLabelText("Amount"), { target: { value: "20" } });
     fireEvent.click(within(repay).getByRole("button", { name: "Repay loan" }));
     await waitFor(() =>
@@ -232,17 +231,25 @@ describe("Inspector: the park", () => {
     );
   });
 
-  it("asks for the status again after a loan, so the numbers show it", async () => {
+  it("shows a loan in the next snapshot, which the host sends at once", () => {
     store().openInspector("finances");
     renderInspector();
-    const repay = await screen.findByRole("form", { name: "Repay loan" });
-    const asked = query.mock.calls.length;
-    query.mockResolvedValue({ ok: true, result: park({ loan: 300_000, cash: 1_300_000 }) });
-    fireEvent.change(within(repay).getByLabelText("Amount"), { target: { value: "2000" } });
+    const books = within(
+      inspector().querySelector<HTMLElement>('dl[aria-label="Finances"]') as HTMLElement,
+    );
+    expect(books.getByText("$5,000.00")).toBeTruthy();
+    act(() => source.push({ loan: 300_000, cash: 1_300_000 }));
+    expect(books.getByText("$3,000.00")).toBeTruthy();
+    expect(books.getByText("$13,000.00")).toBeTruthy();
+  });
+
+  it("tells notify when a loan form went through", async () => {
+    store().openInspector("finances");
+    renderInspector();
+    const repay = screen.getByRole("form", { name: "Repay loan" });
+    fireEvent.change(within(repay).getByLabelText("Amount"), { target: { value: "20" } });
     fireEvent.click(within(repay).getByRole("button", { name: "Repay loan" }));
-    await waitFor(() => expect(query.mock.calls.length).toBeGreaterThan(asked));
-    expect(await screen.findByText("$13,000.00")).toBeTruthy();
-    expect(notify).toHaveBeenCalledWith("Loan repaid");
+    await waitFor(() => expect(notify).toHaveBeenCalledWith("Loan repaid"));
   });
 });
 
@@ -302,59 +309,67 @@ describe("Inspector: a tile", () => {
   });
 });
 
-describe("Inspector: the status it polls", () => {
-  beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }));
-  afterEach(() => vi.useRealTimers());
-
-  it("asks for park_status while the park is shown, every second", async () => {
-    store().openInspector("overview");
+describe("Inspector: following the snapshots", () => {
+  it("shows the cash, the loan, the date and the month's change as they change", () => {
+    store().openInspector("finances");
     renderInspector();
-    await act(async () => {});
-    expect(query).toHaveBeenCalledWith("park_status", {});
-    const before = query.mock.calls.length;
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(2000);
-    });
-    expect(query.mock.calls.length).toBe(before + 2);
+    const books = within(
+      inspector().querySelector<HTMLElement>('dl[aria-label="Finances"]') as HTMLElement,
+    );
+    // $15,000 now against $12,000 when the month began.
+    expect(books.getByText("This month").nextSibling?.textContent).toBe("+$3,000.00");
+    act(() => source.push({ cash: 1_100_000 }));
+    expect(books.getByText("This month").nextSibling?.textContent).toBe("\u2212$1,000.00");
+    act(() => source.push({ monthStartCash: 1_100_000, date: "April 1, Year 1" }));
+    expect(books.getByText("This month").nextSibling?.textContent).toBe("$0.00");
+    expect(within(inspector()).getAllByText("April 1, Year 1")).not.toHaveLength(0);
   });
 
-  it("does not ask while a tile is shown, and asks again when the park comes back", async () => {
+  it("asks the host for nothing: it reads what the host sent", () => {
+    store().openInspector("finances");
+    renderInspector();
+    act(() => source.push({ cash: 1 }));
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it("does not render again for a snapshot that changes none of what it shows", () => {
+    store().openInspector("overview");
+    let commits = 0;
+    render(
+      <Profiler id="inspector" onRender={() => commits++}>
+        <Inspector
+          terrain={terrain()}
+          source={source}
+          parkName="Queryland"
+          actions={actions}
+          ctx={ctx}
+          execute={execute}
+          notify={notify}
+        />
+      </Profiler>,
+    );
+    const first = commits;
+    // Time moving on and the speed changing are not the park's name, date, cash or loan.
+    act(() => source.push({ tick: 40 }));
+    act(() => source.push({ tick: 80, speed: 2 }));
+    expect(commits).toBe(first);
+    act(() => source.push({ cash: 1_000_001 }));
+    expect(commits).toBeGreaterThan(first);
+  });
+
+  it("stops following when it is closed", () => {
+    store().openInspector("overview");
+    renderInspector();
+    expect(source.listeners()).toBeGreaterThan(0);
+    act(() => store().closeInspector());
+    expect(source.listeners()).toBe(0);
+  });
+
+  it("does not follow the clock while a tile is shown", () => {
     store().inspectTile(3, 3);
     renderInspector();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(3000);
-    });
-    expect(query).not.toHaveBeenCalled();
+    expect(source.listeners()).toBe(0);
     act(() => store().openInspector("overview"));
-    await act(async () => {});
-    expect(query).toHaveBeenCalledTimes(1);
-  });
-
-  it("asks once more after the events, a moment after the last", async () => {
-    store().openInspector("overview");
-    const { again } = renderInspector({ lastEventId: 3 });
-    await act(async () => {});
-    const before = query.mock.calls.length;
-    again({ lastEventId: 4 });
-    again({ lastEventId: 5 });
-    await act(async () => {});
-    // Not at once: an agent's burst of commands is one question.
-    expect(query.mock.calls.length).toBe(before);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(EVENT_DEBOUNCE_MS);
-    });
-    expect(query.mock.calls.length).toBe(before + 1);
-  });
-
-  it("stops asking when it is closed", async () => {
-    store().openInspector("overview");
-    renderInspector();
-    await act(async () => {});
-    act(() => store().closeInspector());
-    query.mockClear();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
-    });
-    expect(query).not.toHaveBeenCalled();
+    expect(source.listeners()).toBeGreaterThan(0);
   });
 });

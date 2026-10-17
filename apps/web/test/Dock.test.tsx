@@ -6,14 +6,23 @@ import { Dock } from "../src/ui/Dock";
 afterEach(cleanup);
 
 const LABELS = ["Terrain", "Paths", "Rides", "Scenery", "Shops", "Staff", "Park"];
+const ALL = ["Select", ...LABELS];
 
 describe("Dock", () => {
-  it("has the seven tools of the spec in order, each a button named for its word", () => {
+  it("has Select first and then the seven tools of the spec in order, each a button named for its word", () => {
     render(<Dock tool="select" onSelect={() => {}} />);
     const group = screen.getByRole("group", { name: "Tools" });
     const buttons = within(group).getAllByRole("button");
-    expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(LABELS);
-    expect(buttons.map((b) => b.textContent?.replace(/\d$/, ""))).toEqual(LABELS);
+    expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(ALL);
+    expect(buttons.map((b) => b.textContent?.replace(/\d$/, ""))).toEqual(ALL);
+  });
+
+  it("gives Select the pointer icon and Esc, which is the key that gets to it, and no number", () => {
+    render(<Dock tool="select" onSelect={() => {}} />);
+    const select = screen.getByRole("button", { name: "Select" });
+    expect(select.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+    expect(select.querySelector("kbd")).toBeNull();
+    expect(select.getAttribute("aria-keyshortcuts")).toBe("Escape");
   });
 
   it("gives each an icon and the key that takes the tool up", () => {
@@ -36,12 +45,31 @@ describe("Dock", () => {
     expect(pressed()).toEqual(["Rides"]);
     rerender(<Dock tool="park" onSelect={() => {}} />);
     expect(pressed()).toEqual(["Park"]);
-    // Select is no button of the dock: nothing is pressed.
+    // With nothing in hand Select is the one pressed, and no tool is.
     rerender(<Dock tool="select" onSelect={() => {}} />);
-    expect(pressed()).toEqual([]);
+    expect(pressed()).toEqual(["Select"]);
     for (const b of screen.getAllByRole("button")) {
-      expect(b.getAttribute("aria-pressed")).toBe("false");
+      expect(b.getAttribute("aria-pressed")).toBe(
+        b.getAttribute("aria-label") === "Select" ? "true" : "false",
+      );
     }
+  });
+
+  it("presses Select when the tool is Select, as the park opens", () => {
+    render(<Dock tool="select" onSelect={() => {}} />);
+    expect(screen.getByRole("button", { name: "Select" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Terrain" }).getAttribute("aria-pressed")).toBe(
+      "false",
+    );
+  });
+
+  it("puts the tool down for Select when Select is clicked", () => {
+    const onSelect = vi.fn();
+    render(<Dock tool="ride" onSelect={onSelect} />);
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith("select");
   });
 
   it("picks a tool on a click", () => {

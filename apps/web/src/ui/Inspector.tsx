@@ -1,9 +1,9 @@
-import type { SimClient } from "@coasterworks/protocol";
 import type { TerrainData } from "@coasterworks/render";
 import type { ExecResult } from "@coasterworks/sim";
 import type { Action, ActionContext, InspectorTab } from "../actions/types";
 import { uiStore, useUiStore } from "../state/uiStore";
-import { useParkStatus } from "../state/useParkStatus";
+import type { SnapshotSource } from "../state/useSnapshot";
+import { useParkInfo } from "../state/useParkInfo";
 import type { TileRect, TimelineEntry } from "../state/useTimeline";
 import { ParkFinances } from "./inspector/ParkFinances";
 import { ParkOverview } from "./inspector/ParkOverview";
@@ -16,7 +16,10 @@ import { Timeline } from "./Timeline";
 export interface InspectorProps {
   /** The latest terrain, which the tile tab reads on every render. */
   terrain: TerrainData | null;
-  client: SimClient | null;
+  /** Where the park's money and date are read from, and followed as snapshots arrive. */
+  source: SnapshotSource;
+  /** The park's name, from the host's welcome. */
+  parkName?: string | undefined;
   /** Every action: the finances tab's loan forms are the ones that run the finance commands. */
   actions: readonly Action[];
   ctx: ActionContext | null;
@@ -24,8 +27,6 @@ export interface InspectorProps {
   execute(name: string, input: unknown): Promise<ExecResult>;
   /** Shows a message to the player. */
   notify(text: string, options?: { kind?: "info" | "error" }): void;
-  /** The id of the newest event the host has reported: the park's status is asked for again after it. */
-  lastEventId?: number;
   /** The park's timeline, newest first, which its tab lists. */
   timeline?: readonly TimelineEntry[];
   /** Looks at an area of the map: what a timeline entry with an area does when clicked. */
@@ -94,42 +95,38 @@ function TilePanel({ terrain, x, y, execute, notify }: InspectorProps & { x: num
 }
 
 function ParkPanel({
-  client,
+  source,
+  parkName,
   actions,
   ctx,
   execute,
   notify,
-  lastEventId,
   timeline = NO_ENTRIES,
   focusTile = NOWHERE,
 }: InspectorProps) {
   const tab = useUiStore((state) => state.inspector.tab);
   // The tile's tab is no tab of the park's: a park that is shown while it is current shows Overview.
   const shown: ParkTab = tab === "tile" ? "overview" : tab;
-  const { status, refresh } = useParkStatus(client, {
-    active: true,
-    ...(lastEventId !== undefined && { after: lastEventId }),
-  });
+  const info = useParkInfo(source, parkName);
   return (
-    <Panel title={status?.name ?? "Park"} actions={closeButton}>
-      {status && <Status>{status.date}</Status>}
+    <Panel title={parkName ?? "Park"} actions={closeButton}>
+      {info && <Status>{info.date}</Status>}
       <Tabs
         label="Park sections"
         value={shown}
         onValueChange={(next) => uiStore.getState().openInspector(next as ParkTab)}
         tabs={[
-          { id: "overview", label: "Overview", content: <ParkOverview status={status} /> },
+          { id: "overview", label: "Overview", content: <ParkOverview info={info} /> },
           {
             id: "finances",
             label: "Finances",
             content: (
               <ParkFinances
-                status={status}
+                info={info}
                 actions={actions}
                 ctx={ctx}
                 execute={execute}
                 notify={notify}
-                onChanged={refresh}
               />
             ),
           },

@@ -43,6 +43,7 @@ function host(speed: Speed = 1): HostState {
         halted: false,
         cash: 1_000_000,
         loan: 0,
+        monthStartCash: 1_000_000,
         date: "March 1, Year 1",
         terrainVersion: 0,
         hasTerrain: false,
@@ -165,6 +166,7 @@ describe("the command bar in the app", () => {
 describe("the keys while the bar is in use", () => {
   it("do nothing while the cmdk input has focus, except Escape", async () => {
     await ready();
+    act(() => uiStore.getState().setTool("terrain"));
     press("k", { ctrlKey: true });
     const field = input();
     expect(document.activeElement).toBe(field);
@@ -176,7 +178,7 @@ describe("the keys while the bar is in use", () => {
     press("z", { ctrlKey: true, shiftKey: true }, field);
     press("?", {}, field);
     press("Home", {}, field);
-    // Terrain is what the park opens with, so a key that took another tool would show.
+    // Terrain is in hand, so a key that took another tool would show.
     expect(uiStore.getState().tool).toBe("terrain");
     expect(uiStore.getState().helpOpen).toBe(false);
     expect(setSpeed).not.toHaveBeenCalled();
@@ -191,6 +193,7 @@ describe("the keys while the bar is in use", () => {
 
   it("do nothing while the form's field has focus", async () => {
     await ready();
+    act(() => uiStore.getState().setTool("terrain"));
     press("k", { ctrlKey: true });
     fireEvent.change(input(), { target: { value: "take loan" } });
     fireEvent.keyDown(input(), { key: "Enter" });
@@ -205,6 +208,7 @@ describe("the keys while the bar is in use", () => {
 
   it("do nothing at all while the bar is open, wherever the focus is", async () => {
     await ready();
+    act(() => uiStore.getState().setTool("terrain"));
     press("k", { ctrlKey: true });
     press("3");
     press(" ");
@@ -290,6 +294,7 @@ describe("the keymap", () => {
 
   it("ignores a key some other part of the page already handled", async () => {
     await ready();
+    act(() => uiStore.getState().setTool("terrain"));
     const event = new KeyboardEvent("keydown", { key: "2", cancelable: true });
     event.preventDefault();
     window.dispatchEvent(event);
@@ -304,6 +309,7 @@ describe("the keymap", () => {
       error: "closed",
     });
     await ready();
+    act(() => uiStore.getState().setTool("terrain"));
     press("2");
     press("k", { ctrlKey: true });
     expect(uiStore.getState().tool).toBe("terrain");

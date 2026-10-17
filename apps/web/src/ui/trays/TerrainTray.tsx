@@ -24,7 +24,11 @@ export interface TerrainTrayProps {
 }
 
 function Charge({ cents }: { cents: number | null }) {
-  if (cents === null) return <span className="text-muted">Click the ground to shape it</span>;
+  if (cents === null) {
+    return (
+      <span className="text-muted">Click the ground to shape it · Esc puts the tool down</span>
+    );
+  }
   if (cents < 0) {
     return (
       <span className="text-success tabular-nums">Refunded {formatCents(Math.abs(cents))}</span>

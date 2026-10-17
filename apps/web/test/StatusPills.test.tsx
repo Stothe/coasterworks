@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { StatusPills } from "../src/ui/StatusPills";
-import { formatCents } from "../src/ui/format";
+import { formatCents, formatChange } from "../src/ui/format";
 
 afterEach(cleanup);
 
@@ -12,6 +12,7 @@ describe("StatusPills", () => {
     render(
       <StatusPills
         cash={1_000_000}
+        monthChange={0}
         date="March 1, Year 1"
         speed={1}
         onSpeedChange={noop}
@@ -27,6 +28,7 @@ describe("StatusPills", () => {
     render(
       <StatusPills
         cash={1_000_000}
+        monthChange={0}
         date="March 1, Year 1"
         speed={1}
         onSpeedChange={noop}
@@ -42,6 +44,7 @@ describe("StatusPills", () => {
     const { rerender } = render(
       <StatusPills
         cash={0}
+        monthChange={0}
         date="March 1, Year 1"
         speed={0}
         onSpeedChange={noop}
@@ -58,6 +61,7 @@ describe("StatusPills", () => {
     rerender(
       <StatusPills
         cash={0}
+        monthChange={0}
         date="March 1, Year 1"
         speed={4}
         onSpeedChange={noop}
@@ -79,6 +83,7 @@ describe("StatusPills", () => {
     render(
       <StatusPills
         cash={0}
+        monthChange={0}
         date="March 1, Year 1"
         speed={1}
         onSpeedChange={onSpeedChange}
@@ -96,6 +101,7 @@ describe("StatusPills", () => {
     render(
       <StatusPills
         cash={0}
+        monthChange={0}
         date="March 1, Year 1"
         speed={1}
         onSpeedChange={noop}
@@ -112,6 +118,7 @@ describe("StatusPills", () => {
     render(
       <StatusPills
         cash={0}
+        monthChange={0}
         date="March 1, Year 1"
         speed={0}
         onSpeedChange={onSpeedChange}
@@ -135,6 +142,7 @@ describe("StatusPills: the cash and the date open the inspector", () => {
     render(
       <StatusPills
         cash={1_000_000}
+        monthChange={0}
         date="March 1, Year 1"
         speed={1}
         onSpeedChange={noop}
@@ -154,6 +162,7 @@ describe("StatusPills: the cash and the date open the inspector", () => {
     render(
       <StatusPills
         cash={0}
+        monthChange={0}
         date="April 10, Year 1"
         speed={1}
         onSpeedChange={noop}
@@ -172,6 +181,7 @@ describe("StatusPills: the cash and the date open the inspector", () => {
     render(
       <StatusPills
         cash={0}
+        monthChange={0}
         date="March 1, Year 1"
         speed={1}
         onSpeedChange={noop}
@@ -190,6 +200,7 @@ describe("StatusPills: the cash and the date open the inspector", () => {
     render(
       <StatusPills
         cash={-12_345}
+        monthChange={0}
         date="March 1, Year 1"
         speed={1}
         onSpeedChange={noop}
@@ -198,6 +209,66 @@ describe("StatusPills: the cash and the date open the inspector", () => {
       />,
     );
     expect(screen.getByRole("button", { name: "Open finances (cash -$123.45)" })).toBeTruthy();
+  });
+});
+
+describe("the month's change", () => {
+  function pills(monthChange: number, cash = 1_000_000) {
+    return (
+      <StatusPills
+        cash={cash}
+        monthChange={monthChange}
+        date="March 1, Year 1"
+        speed={1}
+        onSpeedChange={noop}
+        onOpenFinances={noop}
+        onOpenOverview={noop}
+      />
+    );
+  }
+
+  it("shows a gain beside the cash in green", () => {
+    render(pills(64_000));
+    const change = screen.getByTestId("month-change");
+    expect(change.textContent).toBe("+$640.00");
+    expect(change.className).toContain("text-success");
+    expect(screen.getByLabelText("Cash").textContent).toBe("💰$10,000.00+$640.00");
+  });
+
+  it("shows a loss with a true minus sign, in red", () => {
+    render(pills(-12_000));
+    const change = screen.getByTestId("month-change");
+    expect(change.textContent).toBe("\u2212$120.00");
+    expect(change.className).toContain("text-danger");
+  });
+
+  it("shows nothing for a month that has not moved the cash", () => {
+    render(pills(0));
+    expect(screen.queryByTestId("month-change")).toBeNull();
+    expect(screen.getByRole("button", { name: "Open finances (cash $10,000.00)" })).toBeTruthy();
+  });
+
+  it("says it in the button's name too", () => {
+    const { rerender } = render(pills(64_000));
+    expect(
+      screen.getByRole("button", { name: "Open finances (cash $10,000.00, this month +$640.00)" }),
+    ).toBeTruthy();
+    rerender(pills(-12_000));
+    expect(
+      screen.getByRole("button", {
+        name: "Open finances (cash $10,000.00, this month \u2212$120.00)",
+      }),
+    ).toBeTruthy();
+  });
+});
+
+describe("formatChange", () => {
+  it("signs a gain with a plus and a loss with a minus sign, and leaves none bare", () => {
+    expect(formatChange(64_000)).toBe("+$640.00");
+    expect(formatChange(-12_000)).toBe("\u2212$120.00");
+    expect(formatChange(0)).toBe("$0.00");
+    expect(formatChange(-1_234_567)).toBe("\u2212$12,345.67");
+    expect(formatChange(1)).toBe("+$0.01");
   });
 });
 

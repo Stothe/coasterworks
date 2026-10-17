@@ -41,8 +41,15 @@ test("the dock opens a tray for each tool, Water is paid for, and Escape puts it
   const tool = (name: string) => dock.getByRole("button", { name });
   const trays = page.getByRole("region", { name: /tray$/ });
 
-  // The park opens with Terrain in hand and its tray up.
+  // The park opens with Select in hand, and no tray.
+  await expect(tool("Select")).toHaveAttribute("aria-pressed", "true");
+  await expect(tool("Terrain")).toHaveAttribute("aria-pressed", "false");
+  await expect(trays).toHaveCount(0);
+
+  // 1 puts Terrain in hand, with its tray up.
+  await page.keyboard.press("1");
   await expect(tool("Terrain")).toHaveAttribute("aria-pressed", "true");
+  await expect(tool("Select")).toHaveAttribute("aria-pressed", "false");
   await expect(page.getByRole("region", { name: "Terrain tray" })).toBeVisible();
 
   // 3 is Rides, whose tray is empty until the next update.
@@ -70,9 +77,17 @@ test("the dock opens a tray for each tool, Water is paid for, and Escape puts it
   await expect.poll(lastCommand).toBe("terrain_set_water");
   await expect.poll(async () => cents(await cash.innerText())).toBeLessThan(before);
 
-  // Escape puts the tool down: no tray, nothing pressed.
+  // Escape puts the tool down: no tray, and Select is the one pressed.
   await page.keyboard.press("Escape");
   await expect(trays).toHaveCount(0);
   await expect(tool("Terrain")).toHaveAttribute("aria-pressed", "false");
   await expect(tool("Rides")).toHaveAttribute("aria-pressed", "false");
+  await expect(tool("Select")).toHaveAttribute("aria-pressed", "true");
+
+  // The Select button does the same from any tool.
+  await page.keyboard.press("3");
+  await expect(tool("Rides")).toHaveAttribute("aria-pressed", "true");
+  await tool("Select").click();
+  await expect(tool("Select")).toHaveAttribute("aria-pressed", "true");
+  await expect(trays).toHaveCount(0);
 });

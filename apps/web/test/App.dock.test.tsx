@@ -32,6 +32,7 @@ function host(): HostState {
         halted: false,
         cash: 1_000_000,
         loan: 0,
+        monthStartCash: 1_000_000,
         date: "March 1, Year 1",
         terrainVersion: 0,
         hasTerrain: false,
@@ -70,6 +71,12 @@ async function ready() {
   });
 }
 
+/** Renders the app and takes Terrain up, which puts Raise in hand and its tray up. */
+async function readyWithTerrain() {
+  await ready();
+  act(() => uiStore.getState().setTool("terrain"));
+}
+
 const press = (
   key: string,
   mods: Partial<KeyboardEventInit> = {},
@@ -86,8 +93,23 @@ const tray = () => screen.queryByRole("region", { name: /tray$/ });
 const store = () => uiStore.getState();
 
 describe("the dock in the app", () => {
-  it("opens with Terrain in hand, Raise chosen and its tray showing", async () => {
+  it("opens with Select in hand, nothing placed, and no tray", async () => {
     await ready();
+    expect(pressedTools()).toEqual(["Select"]);
+    expect(tray()).toBeNull();
+    expect(store().tool).toBe("select");
+    expect(store().placement).toBeNull();
+    // Select is the first button, ahead of the seven tools.
+    expect(
+      within(dock())
+        .getAllByRole("button")
+        .map((b) => b.getAttribute("aria-label")),
+    ).toEqual(["Select", "Terrain", "Paths", "Rides", "Scenery", "Shops", "Staff", "Park"]);
+  });
+
+  it("1 puts Raise in hand, and shows the Terrain tray and its idle hint", async () => {
+    await ready();
+    press("1");
     expect(pressedTools()).toEqual(["Terrain"]);
     expect(screen.getByRole("region", { name: "Terrain tray" })).toBeTruthy();
     expect(
@@ -97,10 +119,31 @@ describe("the dock in the app", () => {
         .map((b) => b.getAttribute("aria-label")),
     ).toEqual(["Raise"]);
     expect(store().placement).toEqual({ command: "terrain_raise", defaults: {}, size: 1 });
+    expect(screen.getByLabelText("Last charge").textContent).toContain("Esc puts the tool down");
+  });
+
+  it("a click on Terrain does the same as 1", async () => {
+    await ready();
+    fireEvent.click(dockButton("Terrain"));
+    expect(pressedTools()).toEqual(["Terrain"]);
+    expect(store().placement).toMatchObject({ command: "terrain_raise", size: 1 });
+  });
+
+  it("the Select button puts the tool down, and Esc does the same", async () => {
+    await ready();
+    press("1");
+    fireEvent.click(dockButton("Select"));
+    expect(store().tool).toBe("select");
+    expect(store().placement).toBeNull();
+    expect(pressedTools()).toEqual(["Select"]);
+    expect(tray()).toBeNull();
+    press("3");
+    press("Escape");
+    expect(pressedTools()).toEqual(["Select"]);
   });
 
   it("has no terrain bar of its own any more", async () => {
-    await ready();
+    await readyWithTerrain();
     expect(screen.queryByRole("toolbar", { name: "Terrain tools" })).toBeNull();
     // One brush control, not two.
     expect(screen.getAllByRole("group", { name: "Brush size" })).toHaveLength(1);
@@ -137,11 +180,11 @@ describe("the dock in the app", () => {
   });
 
   it("goes to Select when the tool in hand is clicked again, and drops the tray", async () => {
-    await ready();
+    await readyWithTerrain();
     fireEvent.click(dockButton("Terrain"));
     expect(store().tool).toBe("select");
     expect(store().placement).toBeNull();
-    expect(pressedTools()).toEqual([]);
+    expect(pressedTools()).toEqual(["Select"]);
     expect(tray()).toBeNull();
     // And the tool is taken up again with a click.
     fireEvent.click(dockButton("Terrain"));
@@ -150,18 +193,18 @@ describe("the dock in the app", () => {
   });
 
   it("Esc puts the placement down, returns to Select, and hides the tray", async () => {
-    await ready();
+    await readyWithTerrain();
     fireEvent.click(screen.getByRole("button", { name: "Smooth" }));
     expect(store().placement?.command).toBe("terrain_smooth");
     press("Escape");
     expect(store().placement).toBeNull();
     expect(store().tool).toBe("select");
-    expect(pressedTools()).toEqual([]);
+    expect(pressedTools()).toEqual(["Select"]);
     expect(tray()).toBeNull();
   });
 
   it("chooses a terrain verb from its chip, and from its key, whatever tool is in hand", async () => {
-    await ready();
+    await readyWithTerrain();
     fireEvent.click(screen.getByRole("button", { name: "Smooth" }));
     expect(store().placement?.command).toBe("terrain_smooth");
 
@@ -192,7 +235,7 @@ describe("the dock in the app", () => {
   });
 
   it("steps the brush with [ and ], one size a press, and stops at the ends", async () => {
-    await ready();
+    await readyWithTerrain();
     const size = () => store().placement?.size;
     press("]");
     expect(size()).toBe(2);
@@ -267,7 +310,7 @@ describe("the dock in the app", () => {
 
   it("is turned off when the connection is lost", async () => {
     vi.mocked(useHost).mockReturnValue({ ...host(), status: "disconnected" });
-    await ready();
+    await readyWithTerrain();
     for (const b of within(dock()).getAllByRole("button")) {
       expect((b as HTMLButtonElement).disabled).toBe(true);
     }
@@ -285,9 +328,9 @@ describe("the terrain tray's charge", () => {
   };
 
   it("shows what a click cost, and what an undo gave back", async () => {
-    await ready();
+    await readyWithTerrain();
     const charge = () => screen.getByLabelText("Last charge").textContent;
-    expect(charge()).toBe("Click the ground to shape it");
+    expect(charge()).toBe("Click the ground to shape it · Esc puts the tool down");
     give({ ok: true, id: 1, cost: 5000 });
     expect(charge()).toBe("Charged $50.00");
     give({ ok: true, id: 2, cost: -5000 });

@@ -50,6 +50,7 @@ describe("handshake", () => {
       date: "March 1, Year 1",
       cash: sim.world.finance.cash,
       loan: sim.world.finance.loan,
+      monthStartCash: sim.world.finance.monthStart.cash,
       hasTerrain: true,
       width: 8,
       height: 8,
@@ -645,6 +646,25 @@ describe("periodic snapshots", () => {
     clock.advance(50);
     host.tick();
     expect(peer.lastSnapshot().header.date).toBe("April 3, Year 1");
+  });
+
+  it("shows the cash the month began with, and the new month's once one starts", () => {
+    const { sim, clock, host } = setup();
+    const peer = joined(host);
+    const opening = sim.world.finance.cash;
+    peer.send({ t: "command", id: 1, name: "terrain_raise", input: RAISE });
+    const { header } = peer.lastSnapshot();
+    // The raise has been paid for, but the month has not turned: the month began with the opening cash.
+    expect(header.cash).toBeLessThan(opening);
+    expect(header.monthStartCash).toBe(opening);
+    expect(header.monthStartCash).toBe(sim.world.finance.monthStart.cash);
+
+    sim.step(400 * 31 + 400 * 2); // into April 3
+    clock.advance(50);
+    host.tick();
+    const april = peer.lastSnapshot().header;
+    expect(april.monthStartCash).toBe(sim.world.finance.monthStart.cash);
+    expect(april.monthStartCash).toBe(april.cash);
   });
 });
 

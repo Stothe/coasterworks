@@ -1,13 +1,14 @@
 import type { ExecResult } from "@coasterworks/sim";
 import { useState } from "react";
 import type { Action, ActionContext } from "../../actions/types";
-import type { ParkStatus } from "../../state/useParkStatus";
+import type { ParkInfo } from "../../state/useParkInfo";
 import { ActionForm } from "../ActionForm";
-import { formatCents } from "../format";
+import { formatCents, formatChange } from "../format";
 import { Row, Rows } from "./Rows";
 
 export interface ParkFinancesProps {
-  status: ParkStatus | null;
+  /** The park's money as of the latest snapshot, or null before the first. */
+  info: ParkInfo | null;
   /** Every action: the loan forms are the ones that run the finance commands. */
   actions: readonly Action[];
   /** What an action may use. Null before the connection is made: nothing can run yet. */
@@ -16,13 +17,6 @@ export interface ParkFinancesProps {
   execute(name: string, input: unknown): Promise<ExecResult>;
   /** Shows a message to the player. */
   notify(text: string): void;
-  /** Called after a loan went through, so the status can be asked for again. */
-  onChanged(): void;
-}
-
-/** A change in money: `+$5.00` for a gain, `-$5.00` for a loss, `$0.00` for none. */
-function formatChange(cents: number): string {
-  return cents > 0 ? `+${formatCents(cents)}` : formatCents(cents);
 }
 
 /** Put the field down when Escape is pressed in it: there is no panel to go back from. */
@@ -38,28 +32,22 @@ const LOANS = [
 ] as const;
 
 /**
- * The inspector's finances tab: cash, loan and what the month has done to the cash, with a form
- * to take a loan and one to pay it back. The forms are the sim's own commands drawn from its
- * schemas, so their bounds are the sim's.
+ * The inspector's finances tab: cash, loan and what the month has done to the cash, from the
+ * latest snapshot, with a form to take a loan and one to pay it back. The forms are the sim's own
+ * commands drawn from its schemas, so their bounds are the sim's. A loan that goes through shows
+ * in the next snapshot, which the host sends at once.
  */
-export function ParkFinances({
-  status,
-  actions,
-  ctx,
-  execute,
-  notify,
-  onChanged,
-}: ParkFinancesProps) {
+export function ParkFinances({ info, actions, ctx, execute, notify }: ParkFinancesProps) {
   // A form that went through starts again empty: a new key is a new form.
   const [sent, setSent] = useState<Readonly<Record<string, number>>>({});
-  const change = status ? status.cash - status.monthStartCash : 0;
+  const change = info ? info.cash - info.monthStartCash : 0;
 
   return (
     <div className="flex flex-col gap-4">
-      {status ? (
+      {info ? (
         <Rows label="Finances">
-          <Row label="Cash">{formatCents(status.cash)}</Row>
-          <Row label="Loan">{formatCents(status.loan)}</Row>
+          <Row label="Cash">{formatCents(info.cash)}</Row>
+          <Row label="Loan">{formatCents(info.loan)}</Row>
           <Row label="This month" tone={change >= 0 ? "good" : "bad"}>
             {formatChange(change)}
           </Row>
@@ -84,7 +72,6 @@ export function ParkFinances({
                 onDone={() => {
                   setSent((current) => ({ ...current, [command]: (current[command] ?? 0) + 1 }));
                   notify(done);
-                  onChanged();
                 }}
               />
             </div>
