@@ -4,7 +4,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { buildActions } from "../src/actions/registry";
-import type { ActionContext } from "../src/actions/types";
+import type { Action, ActionContext } from "../src/actions/types";
 import { uiStore } from "../src/state/uiStore";
 import { useHost, type HostState } from "../src/state/useHost";
 import { makeSource, type TestSource } from "./snapshotSource";
@@ -130,12 +130,25 @@ describe("the app and the host's snapshots, 50 ms apart", () => {
     expect(seen.bar.at(-1)?.ctx).toBe(ctx);
   });
 
-  it("makes the context again when what the actions read of the interface changes", async () => {
+  it("makes the context again when what the actions read of the interface changes, and for a halt", async () => {
     await ready();
     const before = seen.bar.at(-1)?.ctx;
     act(() => uiStore.getState().setTool("ride"));
     const afterTool = seen.bar.at(-1)?.ctx as ActionContext;
     expect(afterTool).not.toBe(before);
     expect(afterTool.ui.tool).toBe("ride");
+  });
+
+  it("reads a halt from the host's state, and turns pause and the speeds off with it", async () => {
+    const view = await ready();
+    const pause = (): Action | undefined =>
+      (seen.bar.at(-1)?.actions as Action[]).find((action) => action.id === "ui.pause");
+    expect(pause()?.enabled?.(seen.bar.at(-1)?.ctx as ActionContext)).toBe(true);
+    vi.mocked(useHost).mockReturnValue({ ...source, halted: true });
+    // A halt is state, not a snapshot: the app is rendered again for it.
+    await act(async () => {
+      view.rerender(<App />);
+    });
+    expect(pause()?.enabled?.(seen.bar.at(-1)?.ctx as ActionContext)).toBe(false);
   });
 });

@@ -259,6 +259,18 @@ describe("the keymap", () => {
     expect(uiStore.getState().tool).toBe("select");
   });
 
+  it("opens the dock tools from an AZERTY number row, by the physical key", async () => {
+    await ready();
+    press("&", { code: "Digit1" });
+    expect(uiStore.getState().tool).toBe("terrain");
+    press("é", { code: "Digit2" });
+    expect(uiStore.getState().tool).toBe("path");
+    press("è", { code: "Digit7" });
+    expect(uiStore.getState().tool).toBe("park");
+    press("Escape");
+    expect(uiStore.getState().tool).toBe("select");
+  });
+
   it("toggles help on ?", async () => {
     await ready();
     press("?", { shiftKey: true });
@@ -301,18 +313,64 @@ describe("the keymap", () => {
     expect(uiStore.getState().tool).toBe("terrain");
   });
 
-  it("does nothing when the connection is lost", async () => {
-    vi.mocked(useHost).mockReturnValue({
-      ...host(),
-      status: "disconnected",
-      client: null,
-      error: "closed",
+  describe("when the connection is lost", () => {
+    const lost = () =>
+      ({ ...host(), status: "disconnected", client: null, error: "closed" }) as const;
+
+    it("does nothing that needs the sim: no tool, no bar, no undo, no speed", async () => {
+      vi.mocked(useHost).mockReturnValue(lost());
+      await ready();
+      act(() => uiStore.getState().setTool("terrain"));
+      press("2");
+      press("k", { ctrlKey: true });
+      press("z", { ctrlKey: true });
+      press(" ");
+      press("+");
+      expect(uiStore.getState().tool).toBe("terrain");
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(undo).not.toHaveBeenCalled();
+      expect(setSpeed).not.toHaveBeenCalled();
     });
+
+    it("keeps Esc working, which only puts the tool down", async () => {
+      vi.mocked(useHost).mockReturnValue(lost());
+      await ready();
+      act(() => uiStore.getState().setTool("terrain"));
+      press("Escape");
+      expect(uiStore.getState().tool).toBe("select");
+      expect(uiStore.getState().placement).toBeNull();
+    });
+
+    it("keeps ? working, which only shows the keyboard map, and Esc puts it away", async () => {
+      vi.mocked(useHost).mockReturnValue(lost());
+      await ready();
+      press("?", { shiftKey: true });
+      expect(uiStore.getState().helpOpen).toBe(true);
+      expect(screen.getByRole("dialog", { name: "Keyboard shortcuts" })).toBeTruthy();
+      press("Escape");
+      expect(uiStore.getState().helpOpen).toBe(false);
+    });
+
+    it("keeps Home working too: the camera needs no sim", async () => {
+      vi.mocked(useHost).mockReturnValue(lost());
+      await ready();
+      const heard = vi.fn();
+      window.addEventListener(CLASSIC_VIEW_REQUEST, heard);
+      press("Home");
+      window.removeEventListener(CLASSIC_VIEW_REQUEST, heard);
+      expect(heard).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("closes the keyboard map when the command bar opens, so Esc has one thing to close", async () => {
     await ready();
-    act(() => uiStore.getState().setTool("terrain"));
-    press("2");
+    press("?", { shiftKey: true });
+    expect(uiStore.getState().helpOpen).toBe(true);
     press("k", { ctrlKey: true });
-    expect(uiStore.getState().tool).toBe("terrain");
+    expect(uiStore.getState().helpOpen).toBe(false);
+    expect(screen.queryByRole("dialog", { name: "Keyboard shortcuts" })).toBeNull();
+    expect(screen.getByRole("dialog", { name: "Command bar" })).toBeTruthy();
+    press("Escape");
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

@@ -6,6 +6,7 @@ import { RECT_KEYS, defaultsFromSchema, humanize, isRectSchema } from "./schema"
 import {
   DOCK_TOOLS,
   type Action,
+  type ActionContext,
   type DockTool,
   type InspectorTab,
   type JsonSchemaObject,
@@ -123,6 +124,9 @@ const TOOL_TITLES: Readonly<Record<DockTool, string>> = {
 interface UiOptions {
   /** Left out of the command bar's list. */
   hidden?: true;
+  enabled?: (ctx: ActionContext) => boolean;
+  /** Works without a connection: it only changes the interface. */
+  offline?: true;
 }
 
 function uiAction(
@@ -131,7 +135,7 @@ function uiAction(
   description: string,
   keywords: string[],
   run: () => void,
-  { hidden }: UiOptions = {},
+  { hidden, enabled, offline }: UiOptions = {},
 ): Action {
   const action: Action = {
     id,
@@ -147,8 +151,13 @@ function uiAction(
     },
   };
   if (hidden) action.hidden = true;
+  if (enabled) action.enabled = enabled;
+  if (offline) action.offline = true;
   return action;
 }
+
+/** The speed controls need a sim that is there and running: a halted one waits for Resume. */
+const running = (ctx: ActionContext) => ctx.connected && !ctx.halted;
 
 function uiActions({ ui }: UiActionDeps): Action[] {
   return [
@@ -158,6 +167,7 @@ function uiActions({ ui }: UiActionDeps): Action[] {
       "Pause or resume the simulation.",
       ["pause", "resume", "stop", "play"],
       () => ui.pause(),
+      { enabled: running },
     ),
     ...SPEEDS.map((speed) =>
       uiAction(
@@ -166,6 +176,7 @@ function uiActions({ ui }: UiActionDeps): Action[] {
         `Run the simulation at ${speed}x speed.`,
         ["speed", "faster", "slower", `${speed}x`],
         () => ui.setSpeed(speed),
+        { enabled: running },
       ),
     ),
     uiAction(
@@ -174,6 +185,7 @@ function uiActions({ ui }: UiActionDeps): Action[] {
       "Step the simulation one speed faster.",
       ["speed", "faster", "increase", "plus"],
       () => ui.stepSpeed(1),
+      { enabled: running },
     ),
     uiAction(
       "ui.speed.down",
@@ -181,6 +193,7 @@ function uiActions({ ui }: UiActionDeps): Action[] {
       "Step the simulation one speed slower.",
       ["speed", "slower", "decrease", "minus"],
       () => ui.stepSpeed(-1),
+      { enabled: running },
     ),
     uiAction("ui.undo", "Undo", "Undo the last command.", ["undo", "revert", "back"], () =>
       ui.undo(),
@@ -194,6 +207,7 @@ function uiActions({ ui }: UiActionDeps): Action[] {
       "Snap the camera to a classic isometric angle; again for the next of the four.",
       ["camera", "view", "reset", "home", "isometric"],
       () => ui.classicView(),
+      { offline: true },
     ),
     ...DOCK_TOOLS.map((tool) =>
       uiAction(
@@ -245,6 +259,7 @@ function uiActions({ ui }: UiActionDeps): Action[] {
       "Show the keyboard shortcuts.",
       ["help", "keys", "keyboard", "shortcuts"],
       () => ui.help(),
+      { offline: true },
     ),
     // The next two are for keys: the bar does not list them.
     uiAction(
@@ -261,7 +276,7 @@ function uiActions({ ui }: UiActionDeps): Action[] {
       "Close what is open, or put the tool down.",
       ["cancel", "escape", "close"],
       () => ui.cancel(),
-      { hidden: true },
+      { hidden: true, offline: true },
     ),
   ];
 }

@@ -32,11 +32,19 @@ export interface UiStore {
 
 /**
  * What an action may use when it runs or when it is asked if it is enabled. The context lasts as
- * long as the connection and what the actions read of the interface do, not as long as a
- * snapshot: the host sends one every 50 ms, so `snapshot` is read from the latest when asked.
+ * long as the connection and the few facts below do, not as long as a snapshot: the host sends one
+ * every 50 ms, so `snapshot` is read from the latest when it is asked for.
  */
 export interface ActionContext {
-  client: SimClient;
+  /** The host's client, or null while there is no connection. */
+  client: SimClient | null;
+  /**
+   * False while there is no connection, before it is made and after it is lost. Then `client` is
+   * null, the panels are given no context at all, and only an action marked `offline` is run, by a key.
+   */
+  connected: boolean;
+  /** True while the host has stopped the simulation after a fault. */
+  halted: boolean;
   /** The latest snapshot the host sent, or null before the first. Always the latest when read. */
   readonly snapshot: DecodedSnapshot | null;
   ui: UiStore;
@@ -86,6 +94,11 @@ export interface Action {
   run: (ctx: ActionContext, input?: unknown) => Promise<void> | void;
   /** False when the action cannot be done now. Absent means always enabled. */
   enabled?: (ctx: ActionContext) => boolean;
+  /**
+   * True for an action that only changes the interface, so its key works even after the connection
+   * is lost. Every other action needs the sim to answer.
+   */
+  offline?: boolean;
 }
 
 /** One field of a generated form. */

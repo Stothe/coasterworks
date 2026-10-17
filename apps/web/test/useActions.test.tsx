@@ -205,6 +205,8 @@ describe("useActions", () => {
     await waitFor(() => expect(result.current.ready).toBe(true));
     const ctx = {
       client,
+      connected: true,
+      halted: false,
       snapshot: null,
       ui: { tool: "select", selection: null, inspectorOpen: false },
     } as const;

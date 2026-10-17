@@ -81,8 +81,12 @@ export const KEYMAP: readonly KeyBinding[] = [
   { combo: "home", actionId: "ui.classicView" },
 ];
 
-/** The parts of a key event a combo is matched against. */
-export type KeyLike = Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey">;
+/**
+ * The parts of a key event a combo is matched against. `code` is the physical key, which a layout
+ * does not change; it is only read for the dock's digits (see `matchCombo`).
+ */
+export type KeyLike = Pick<KeyboardEvent, "key" | "ctrlKey" | "metaKey" | "altKey" | "shiftKey"> &
+  Partial<Pick<KeyboardEvent, "code">>;
 
 /** True on a Mac (and its phones), where `mod` is Command. Read at the time, not once. */
 export function isMac(): boolean {
@@ -165,6 +169,20 @@ function keyName(key: string): string {
   return key === " " ? "space" : key.toLowerCase();
 }
 
+/** The dock's keys, whose digits a layout may not type without Shift. */
+const DOCK_DIGIT = /^[1-7]$/;
+
+/**
+ * True when the event's key is `want`. A dock digit is also matched by its physical key, `Digit1`
+ * to `Digit7`, when the key typed is not a digit: on an AZERTY keyboard the number row types
+ * `&é"'(-è` unshifted, and the digit needs Shift. The map is searched in order, so the `-` that
+ * AZERTY puts on the 6 key is still Slow down, which comes before the dock's digits.
+ */
+function keyIs(event: KeyLike, want: string): boolean {
+  if (keyName(event.key) === want) return true;
+  return DOCK_DIGIT.test(want) && event.code === `Digit${want}` && !/^[0-9]$/.test(event.key);
+}
+
 /**
  * True when a key event is exactly `combo`: its key, and no modifier the combo does not name. Shift
  * is the exception for a symbol (`?` and `+` are typed with it on most keyboards), which it only
@@ -172,7 +190,7 @@ function keyName(key: string): string {
  */
 export function matchCombo(event: KeyLike, combo: string, mac: boolean = isMac()): boolean {
   const want = parse(combo);
-  if (keyName(event.key) !== want.key) return false;
+  if (!keyIs(event, want.key)) return false;
   if (event.ctrlKey !== (want.ctrl || (want.mod && !mac))) return false;
   if (event.metaKey !== (want.meta || (want.mod && mac))) return false;
   if (event.altKey !== want.alt) return false;

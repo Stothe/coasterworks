@@ -166,7 +166,9 @@ function ActionList({
                 keywords={[action.title, ...action.keywords]}
                 disabled={isDisabled(action)}
                 onSelect={() => onChoose(action)}
-                className="flex min-h-8 cursor-pointer items-center gap-3 rounded-lg px-2.5 py-1.5 data-[disabled=true]:cursor-not-allowed data-[disabled=true]:opacity-50 data-[selected=true]:bg-fill-strong"
+                // The row the arrow keys are on is filled and ringed: the ring is drawn inward, so the
+                // list's edge does not cut it, and it shows where the fill alone is hard to see.
+                className="flex min-h-8 cursor-pointer items-center gap-3 rounded-lg px-2.5 py-1.5 data-[disabled=true]:cursor-not-allowed data-[disabled=true]:opacity-50 data-[selected=true]:bg-fill-strong data-[selected=true]:outline-2 data-[selected=true]:-outline-offset-2 data-[selected=true]:outline-accent"
               >
                 <span className="flex min-w-0 flex-1 flex-col">
                   <span className="truncate text-sm">{action.title}</span>

@@ -23,6 +23,8 @@ afterEach(() => {
 
 const ctx = {
   client: {} as SimClient,
+  connected: true,
+  halted: false,
   snapshot: null,
   ui: { tool: "select", selection: null, inspectorOpen: false },
 } satisfies ActionContext;
@@ -166,6 +168,24 @@ describe("CommandBar: the list", () => {
     expect(screen.queryByText("⌘Z")).toBeNull();
   });
 
+  it("rings the row the arrow keys are on: a 2px accent line drawn inside it, with the fill", () => {
+    setup();
+    open();
+    const active = screen
+      .getAllByRole("option")
+      .find((o) => o.getAttribute("aria-selected") === "true");
+    expect(active).toBeTruthy();
+    const classes = (active as HTMLElement).className.split(" ");
+    for (const ring of [
+      "data-[selected=true]:bg-fill-strong",
+      "data-[selected=true]:outline-2",
+      "data-[selected=true]:-outline-offset-2",
+      "data-[selected=true]:outline-accent",
+    ]) {
+      expect(classes, ring).toContain(ring);
+    }
+  });
+
   it("leaves out the actions that exist only for a key", () => {
     setup();
     open();
@@ -249,6 +269,68 @@ describe("CommandBar: the list", () => {
     expect(ui.undo).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog")).toBeTruthy();
     expect(option(/Redo/).getAttribute("aria-disabled")).toBe("false");
+  });
+
+  it("dims Pause and the speeds while the sim is halted, and leaves the rest as they are", () => {
+    const noop = vi.fn();
+    const deps: UiActionDeps = {
+      startPlacement: noop,
+      openForm: noop,
+      execute: vi.fn(async () => OK),
+      ui: {
+        pause: noop,
+        setSpeed: noop,
+        stepSpeed: noop,
+        undo: noop,
+        redo: noop,
+        classicView: noop,
+        setTool: noop,
+        openInspector: noop,
+        help: noop,
+        commandBar: noop,
+        cancel: noop,
+        terrain: noop,
+        brush: noop,
+      },
+    };
+    const actions = buildActions(catalog, deps);
+    const view = render(
+      <CommandBar
+        actions={actions}
+        ctx={{ ...ctx, halted: true }}
+        execute={vi.fn()}
+        notify={vi.fn()}
+      />,
+    );
+    open();
+    const dimmed = (name: RegExp) => option(name).getAttribute("aria-disabled");
+    for (const name of [/Pause/, /Speed 1x/, /Speed 8x/, /Speed up/, /Slow down/]) {
+      expect(dimmed(name), String(name)).toBe("true");
+    }
+    expect(dimmed(/Undo/)).toBe("false");
+    expect(dimmed(/Raise terrain/)).toBe("false");
+
+    // Running again turns them back on.
+    view.rerender(<CommandBar actions={actions} ctx={ctx} execute={vi.fn()} notify={vi.fn()} />);
+    expect(dimmed(/Pause/)).toBe("false");
+    expect(dimmed(/Speed 4x/)).toBe("false");
+  });
+
+  it("dims everything while there is no connection, which is a context of none", () => {
+    const { ui } = setup();
+    cleanup();
+    const noop = vi.fn();
+    const actions = buildActions(catalog, {
+      startPlacement: noop,
+      openForm: noop,
+      execute: vi.fn(async () => OK),
+      ui,
+    });
+    render(<CommandBar actions={actions} ctx={null} execute={vi.fn()} notify={vi.fn()} />);
+    open();
+    for (const name of [/Pause/, /Undo/, /Raise terrain/]) {
+      expect(option(name).getAttribute("aria-disabled"), String(name)).toBe("true");
+    }
   });
 
   it("explains when the sim's commands have not loaded", () => {

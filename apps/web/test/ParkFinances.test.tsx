@@ -34,6 +34,8 @@ const deps: UiActionDeps = {
 const actions = buildActions(createDefaultRegistry().catalog(), deps);
 const ctx: ActionContext = {
   client: {} as SimClient,
+  connected: true,
+  halted: false,
   snapshot: null,
   ui: { tool: "select", selection: { kind: "park" }, inspectorOpen: true },
 };

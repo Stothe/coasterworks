@@ -45,6 +45,8 @@ const onWindows = () => vi.stubGlobal("navigator", { platform: "Win32" });
 
 const ctx = {
   client: {} as SimClient,
+  connected: true,
+  halted: false,
   snapshot: null,
   ui: { tool: "select", selection: null, inspectorOpen: false },
 } satisfies ActionContext;
@@ -385,6 +387,52 @@ describe("buildActions: interface actions", () => {
     // The bar's action exists for the key to run, and the bar does not list it.
     expect(actions.filter((a) => !a.hidden).some((a) => a.shortcut === "⌘K")).toBe(false);
     expect(actions.find((a) => a.id === "ui.commandBar")?.shortcut).toBe("⌘K");
+  });
+
+  it("disables pause and the speeds while the sim is halted or the connection is lost", () => {
+    const { get } = setup([]);
+    const speedIds = [
+      "ui.pause",
+      "ui.speed.1",
+      "ui.speed.2",
+      "ui.speed.4",
+      "ui.speed.8",
+      "ui.speed.up",
+      "ui.speed.down",
+    ];
+    for (const id of speedIds) {
+      const enabled = get(id).enabled;
+      expect(enabled, id).toBeTypeOf("function");
+      expect(enabled?.(ctx), id).toBe(true);
+      expect(enabled?.({ ...ctx, halted: true }), `${id} halted`).toBe(false);
+      expect(enabled?.({ ...ctx, connected: false }), `${id} disconnected`).toBe(false);
+    }
+  });
+
+  it("leaves the rest enabled: undo, the tools and the panels need no running sim", () => {
+    const { actions } = setup([]);
+    const gated = actions.filter((a) => a.enabled).map((a) => a.id);
+    expect(gated.sort()).toEqual(
+      [
+        "ui.pause",
+        "ui.speed.1",
+        "ui.speed.2",
+        "ui.speed.4",
+        "ui.speed.8",
+        "ui.speed.up",
+        "ui.speed.down",
+      ].sort(),
+    );
+  });
+
+  it("marks as offline only the actions that change the interface and nothing else", () => {
+    const { actions } = setup();
+    expect(
+      actions
+        .filter((a) => a.offline)
+        .map((a) => a.id)
+        .sort(),
+    ).toEqual(["ui.cancel", "ui.classicView", "ui.help"]);
   });
 
   it("gives each a title, a description and keywords", () => {

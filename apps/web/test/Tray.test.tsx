@@ -18,6 +18,8 @@ afterEach(() => {
 
 const ctx: ActionContext = {
   client: {} as SimClient,
+  connected: true,
+  halted: false,
   snapshot: null,
   ui: { tool: "ride", selection: null, inspectorOpen: false },
 };

@@ -67,6 +67,73 @@ describe("matchCombo", () => {
   });
 });
 
+describe("matchCombo: the dock's digits on a layout that types symbols there", () => {
+  /** The number row of an AZERTY keyboard, unshifted: the key typed and the physical key. */
+  const AZERTY: ReadonlyArray<[string, string]> = [
+    ["&", "Digit1"],
+    ["é", "Digit2"],
+    ['"', "Digit3"],
+    ["'", "Digit4"],
+    ["(", "Digit5"],
+    ["-", "Digit6"],
+    ["è", "Digit7"],
+  ];
+
+  it("takes Digit1 to Digit7 for 1 to 7 when the key typed is not a digit", () => {
+    AZERTY.forEach(([typed, code], index) => {
+      expect(matchCombo(key(typed, { code }), String(index + 1)), code).toBe(true);
+    });
+  });
+
+  it("matches only the digit its own physical key names", () => {
+    expect(matchCombo(key("&", { code: "Digit1" }), "2")).toBe(false);
+    expect(matchCombo(key("é", { code: "Digit2" }), "1")).toBe(false);
+    expect(matchCombo(key("&", { code: "KeyA" }), "1")).toBe(false);
+    expect(matchCombo(key("&"), "1")).toBe(false);
+  });
+
+  it("leaves the keys 8, 9 and 0 alone: the dock has no tool for them", () => {
+    expect(matchCombo(key("_", { code: "Digit8" }), "8")).toBe(false);
+    expect(matchCombo(key("ç", { code: "Digit9" }), "9")).toBe(false);
+    expect(matchCombo(key("à", { code: "Digit0" }), "0")).toBe(false);
+  });
+
+  it("does not look at the physical key when the key typed is a digit", () => {
+    // A QWERTY keyboard, a numeric pad, or AZERTY with Shift: the key typed is the answer.
+    expect(matchCombo(key("1", { code: "Digit1" }), "1")).toBe(true);
+    expect(matchCombo(key("1", { code: "Numpad1" }), "1")).toBe(true);
+    expect(matchCombo(key("2", { code: "Digit1" }), "1")).toBe(false);
+    expect(matchCombo(key("1", { code: "Digit2" }), "2")).toBe(false);
+  });
+
+  it("still needs the same modifiers: Ctrl or Shift with the key is not the dock's key", () => {
+    expect(matchCombo(key("&", { code: "Digit1", ctrlKey: true }), "1", false)).toBe(false);
+    expect(matchCombo(key("&", { code: "Digit1", altKey: true }), "1", false)).toBe(false);
+    expect(matchCombo(key("&", { code: "Digit1", shiftKey: true }), "1")).toBe(false);
+  });
+
+  it("is only for the dock's digits, not for a letter or a symbol whose key is elsewhere", () => {
+    expect(matchCombo(key("q", { code: "KeyA" }), "a")).toBe(false);
+    expect(matchCombo(key("w", { code: "KeyZ" }), "z")).toBe(false);
+    expect(matchCombo(key("%", { code: "Digit5" }), "[")).toBe(false);
+  });
+
+  it("finds the dock's tool for an AZERTY key, and leaves the 6 key to Slow down", () => {
+    const aimed = (typed: string, code: string) =>
+      ({ ...key(typed, { code }), target: { tagName: "DIV" } }) as unknown as KeyboardEvent;
+    expect(bindingFor(aimed("&", "Digit1"), false)?.actionId).toBe("ui.tool.terrain");
+    expect(bindingFor(aimed("é", "Digit2"), false)?.actionId).toBe("ui.tool.path");
+    expect(bindingFor(aimed("è", "Digit7"), false)?.actionId).toBe("ui.tool.park");
+    // The - on that layout is on the 6 key, and the map names it before the dock's digits.
+    expect(bindingFor(aimed("-", "Digit6"), false)?.actionId).toBe("ui.speed.down");
+  });
+
+  it("does not run a dock key held in a text field", () => {
+    const typing = { ...key("&", { code: "Digit1" }), target: { tagName: "INPUT" } };
+    expect(bindingFor(typing as unknown as KeyboardEvent, false)).toBeUndefined();
+  });
+});
+
 describe("shortcutOf", () => {
   it("writes the first key of the map that runs the action, for the keyboard in use", () => {
     expect(shortcutOf("ui.undo", true)).toBe("⌘Z");

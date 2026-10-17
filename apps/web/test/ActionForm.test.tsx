@@ -10,6 +10,8 @@ afterEach(cleanup);
 
 const ctx = {
   client: {} as SimClient,
+  connected: true,
+  halted: false,
   snapshot: null,
   ui: { tool: "select", selection: null, inspectorOpen: false },
 } satisfies ActionContext;

@@ -240,6 +240,18 @@ describe("uiStore: command bar, form and help", () => {
     expect(state().formAction).toBeNull();
   });
 
+  it("opening the bar puts the keyboard map away, and so does opening a form", () => {
+    state().toggleHelp();
+    state().openCommandBar();
+    expect(state().commandBarOpen).toBe(true);
+    expect(state().helpOpen).toBe(false);
+    state().closeCommandBar();
+    state().toggleHelp();
+    state().openForm(loan);
+    expect(state().formAction).toBe(loan);
+    expect(state().helpOpen).toBe(false);
+  });
+
   it("toggles help", () => {
     state().toggleHelp();
     expect(state().helpOpen).toBe(true);

@@ -38,6 +38,7 @@ interface Live {
   host: HostState;
   changeSpeed(speed: Speed): void;
   onResult(result: ExecResult): void;
+  /** The context of the keys: null only until the first render has made it. */
   ctx: ActionContext | null;
   byId: ReadonlyMap<string, Action>;
 }
@@ -213,21 +214,24 @@ export function App() {
 
   const { actions, byId, ready: catalogReady, error: catalogError } = useActions(client, deps);
 
-  // The context is made again when the connection or what the actions read of the interface
-  // changes, and never for a snapshot: `snapshot` is read from the latest when asked.
-  const ctx = useMemo<ActionContext | null>(
-    () =>
-      client
-        ? {
-            client,
-            get snapshot() {
-              return live.current.host.snapshot;
-            },
-            ui: { tool: uiTool, selection, inspectorOpen },
-          }
-        : null,
-    [client, uiTool, selection, inspectorOpen],
+  // The context is made again when the connection, the halt or what the actions read of the
+  // interface changes, and never for a snapshot: `snapshot` is read from the latest when asked.
+  // The keys always have one, so that those which need no connection (Esc, ?) still run when it is
+  // lost; the panels are given none then, which turns them off.
+  const connected = client !== null;
+  const keyCtx = useMemo<ActionContext>(
+    () => ({
+      client,
+      connected,
+      halted,
+      get snapshot() {
+        return live.current.host.snapshot;
+      },
+      ui: { tool: uiTool, selection, inspectorOpen },
+    }),
+    [client, connected, halted, uiTool, selection, inspectorOpen],
   );
+  const ctx = connected ? keyCtx : null;
 
   useEffect(() => {
     live.current = {
@@ -238,7 +242,7 @@ export function App() {
       host,
       changeSpeed,
       onResult,
-      ctx,
+      ctx: keyCtx,
       byId,
     };
   });
@@ -248,8 +252,6 @@ export function App() {
       // Something nearer the key, such as the command bar's dialog, has dealt with it already.
       if (e.defaultPrevented) return;
       const now = live.current;
-      // Nobody is there to answer: the keys do nothing until the app is restarted.
-      if (now.disconnected) return;
       // While the command bar is up it has the keyboard: only Escape gets through to the app.
       const barOpen = uiStore.getState().commandBarOpen;
 
@@ -260,6 +262,8 @@ export function App() {
       if (barOpen && binding.actionId !== "ui.cancel") return;
       const action = now.byId.get(binding.actionId);
       if (!action || !now.ctx) return;
+      // Nobody is there to answer: only the keys that change the interface itself still work.
+      if (now.disconnected && !action.offline) return;
       if (action.enabled && !action.enabled(now.ctx)) return;
       e.preventDefault();
       const report = (error: unknown) => now.onResult({ ok: false, error: messageOf(error) });

@@ -39,6 +39,8 @@ const client = { query } as unknown as SimClient;
 let source: TestSource;
 const ctx: ActionContext = {
   client,
+  connected: true,
+  halted: false,
   snapshot: null,
   ui: { tool: "select", selection: { kind: "park" }, inspectorOpen: true },
 };

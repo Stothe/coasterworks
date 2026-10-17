@@ -69,6 +69,7 @@ export interface UiState {
   /** Selects tile (`x`, `y`) and opens the inspector on it: the one inspector moves to the tile. */
   inspectTile(x: number, y: number): void;
   closeInspector(): void;
+  /** Opens the command bar, and puts the keyboard map away if it is up. */
   openCommandBar(): void;
   closeCommandBar(): void;
   /** Shows the form of `action` in the command bar, opening the bar if it is shut. */
@@ -143,9 +144,10 @@ export const uiStore = createStore<UiState>()((set, get) => ({
   inspectTile: (x, y) =>
     set({ selection: { kind: "tile", x, y }, inspector: { open: true, tab: "tile" } }),
   closeInspector: () => set((state) => ({ inspector: { ...state.inspector, open: false } })),
-  openCommandBar: () => set({ commandBarOpen: true, formAction: null }),
+  // The bar and the keyboard map are layers of the same kind: one at a time.
+  openCommandBar: () => set({ commandBarOpen: true, formAction: null, helpOpen: false }),
   closeCommandBar: () => set({ commandBarOpen: false, formAction: null }),
-  openForm: (action) => set({ formAction: action, commandBarOpen: true }),
+  openForm: (action) => set({ formAction: action, commandBarOpen: true, helpOpen: false }),
   closeForm: () => set({ formAction: null }),
   toggleHelp: () => set((state) => ({ helpOpen: !state.helpOpen })),
   cancel: () =>
