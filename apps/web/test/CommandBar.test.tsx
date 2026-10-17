@@ -55,6 +55,8 @@ function setup(extra: CatalogEntry[] = [], tweak?: (actions: Action[]) => Action
     help: vi.fn(),
     commandBar: vi.fn(),
     cancel: vi.fn(),
+    terrain: vi.fn(),
+    brush: vi.fn(),
   };
   const deps: UiActionDeps = {
     startPlacement: (command, defaults) => uiStore.getState().startPlacement(command, defaults),

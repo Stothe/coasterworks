@@ -12,7 +12,7 @@ export const DOCK_TOOLS = ["terrain", "path", "ride", "scenery", "shop", "staff"
 export type DockTool = (typeof DOCK_TOOLS)[number];
 
 /** The parts of the inspector an action can open. */
-export type InspectorTab = "overview" | "finances";
+export type InspectorTab = "overview" | "finances" | "timeline";
 
 /** What is selected on the map or in the park. */
 export type UiSelection = { kind: "tile"; x: number; y: number } | { kind: "park" } | null;

@@ -27,3 +27,6 @@ https://creativecommons.org/licenses/by/4.0/legalcode
 
 Source code in this repository is licensed separately under the MIT License;
 see the LICENSE file.
+
+The line icons in apps/web/src/ui/icons.tsx are original artwork that happens to be written as
+code. They are covered by this license, not by the MIT License.

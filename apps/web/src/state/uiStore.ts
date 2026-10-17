@@ -7,6 +7,7 @@ import {
   type UiSelection,
 } from "../actions/types";
 import type { BrushSize } from "../viewport/brush";
+import { terrainPlacement, type TerrainOptions, type TerrainVerb } from "../viewport/terrainTools";
 
 /** What the player has in hand: one of the dock's tools, or nothing but the pointer. */
 export type Tool = DockTool | "select";
@@ -44,6 +45,11 @@ export interface UiState {
    * is a terrain command). `size` is the brush; without it, the last one chosen.
    */
   startPlacement(command: string, defaults: Record<string, unknown>, size?: BrushSize): void;
+  /**
+   * Takes up a terrain verb (Raise, Water, ...): starts its placement, which puts the dock on
+   * Terrain. `options` are what the verb is started with, the tray's starting ones without them.
+   */
+  startTerrain(verb: TerrainVerb, options?: TerrainOptions): void;
   /** Sets the brush size, for the placement in progress and for the next one. */
   setBrushSize(size: BrushSize): void;
   select(selection: UiSelection): void;
@@ -69,10 +75,15 @@ function dockToolOf(command: string): DockTool | undefined {
   return DOCK_TOOLS.find((tool) => command.startsWith(`${tool}_`));
 }
 
+/** Raise, the terrain tool in hand when the park opens and when the dock goes back to Terrain. */
+function raise(size: BrushSize): Placement {
+  return { ...terrainPlacement("raise"), size };
+}
+
 /** The plain store, for code outside React and for tests. */
-export const uiStore = createStore<UiState>()((set) => ({
-  tool: "select",
-  placement: null,
+export const uiStore = createStore<UiState>()((set, get) => ({
+  tool: "terrain",
+  placement: raise(1),
   brushSize: 1,
   selection: null,
   inspector: { open: false, tab: "overview" },
@@ -81,10 +92,12 @@ export const uiStore = createStore<UiState>()((set) => ({
   helpOpen: false,
 
   setTool: (tool) =>
-    set((state) =>
-      // Another tool puts the placement down; the same one keeps it.
-      tool === state.tool ? state : { tool, placement: null },
-    ),
+    set((state) => {
+      // The same tool keeps what is in hand. Another puts it down, and Terrain always has
+      // something in hand: a click would otherwise do nothing under a tray with no verb chosen.
+      if (tool === state.tool) return state;
+      return { tool, placement: tool === "terrain" ? raise(state.brushSize) : null };
+    }),
   startPlacement: (command, defaults, size) =>
     set((state) => ({
       tool: dockToolOf(command) ?? state.tool,
@@ -94,6 +107,10 @@ export const uiStore = createStore<UiState>()((set) => ({
       commandBarOpen: false,
       formAction: null,
     })),
+  startTerrain: (verb, options) => {
+    const { command, defaults } = terrainPlacement(verb, options);
+    get().startPlacement(command, defaults);
+  },
   setBrushSize: (size) =>
     set((state) => ({
       brushSize: size,

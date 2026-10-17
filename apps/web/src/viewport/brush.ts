@@ -1,7 +1,7 @@
 import type { TerrainData } from "@coasterworks/render";
 import { DAYS_PER_MONTH, MAX_HEIGHT, TICKS_PER_DAY } from "@coasterworks/sim";
+import { DEFAULT_TERRAIN_OPTIONS, WATER_ABOVE } from "./terrainTools";
 
-export type TerrainToolId = "raise" | "lower" | "level" | "water";
 export type BrushSize = 1 | 2 | 3;
 
 /** A rectangle of tiles, in the shape the terrain commands take. */
@@ -15,11 +15,6 @@ export interface TileRect {
 export interface ClickMods {
   shift: boolean;
   alt: boolean;
-}
-
-export interface PlannedCommand {
-  name: string;
-  input: TileRect & { height?: number; level?: number };
 }
 
 /**
@@ -50,56 +45,24 @@ export function lowestCorner(terrain: TerrainData, x: number, y: number): number
   return Math.min(at(x, y), at(x + 1, y), at(x, y + 1), at(x + 1, y + 1));
 }
 
-/**
- * What a click with `tool` on tile (`x`, `y`) asks the sim to do, or `null` if the brush is off the
- * map. Shift flips Raise and Lower. Level sets the brush to the clicked tile's lowest corner. Water
- * fills to two steps above it, and Alt drains instead.
- */
-export function planCommand(
-  tool: TerrainToolId,
-  mods: ClickMods,
-  x: number,
-  y: number,
-  size: number,
-  terrain: TerrainData,
-): PlannedCommand | null {
-  const rect = brushRect(x, y, size, terrain.width, terrain.height);
-  if (!rect) return null;
-  switch (tool) {
-    case "raise":
-    case "lower": {
-      const raise = (tool === "raise") !== mods.shift;
-      return { name: raise ? "terrain_raise" : "terrain_lower", input: rect };
-    }
-    case "level":
-      return { name: "terrain_level", input: { ...rect, height: lowestCorner(terrain, x, y) } };
-    case "water": {
-      const level = mods.alt ? 0 : Math.min(MAX_HEIGHT, lowestCorner(terrain, x, y) + 2);
-      return { name: "terrain_set_water", input: { ...rect, level } };
-    }
-  }
-}
-
 /** What a click asks the sim to do for a placement: the command, and everything it takes. */
 export interface PlacedCommand {
   name: string;
   input: Record<string, unknown>;
 }
 
-/** The brush a terrain command is, for the ones whose missing parameters the viewport can fill. */
-const BRUSH_OF_COMMAND: Readonly<Record<string, TerrainToolId>> = {
-  terrain_raise: "raise",
-  terrain_lower: "lower",
-  terrain_level: "level",
-  terrain_set_water: "water",
-};
-
 /**
- * What a click on tile (`x`, `y`) asks the sim to do for a placement started elsewhere (the command
- * bar, a tray): the command with its `defaults`, over the tiles the brush covers. A terrain
- * command whose height or water level the placement did not give takes it from the clicked tile,
- * as the terrain bar does, and Shift and Alt do what they do there. `null` if the brush is off the
- * map.
+ * What a click on tile (`x`, `y`) asks the sim to do for `placement`: its command with its
+ * `defaults`, over the tiles the brush covers, or `null` if the brush is off the map. The area is
+ * the player's click and nothing in the defaults can move it.
+ *
+ * Four terrain commands take something only the click can tell, and read it from the clicked
+ * tile's lowest corner. Shift turns Raise into Lower and back. Level goes to that corner
+ * (`heightMode` "tile", or no height given) or to the `height` it was given. Water fills to
+ * `levelAbove` steps over that corner (two without it, or the `level` the placement gives
+ * outright), held to the highest level the sim takes, and drains with Alt. Surface is grass
+ * unless it is given one. `levelAbove` and `heightMode` are for this function only, and are left
+ * out of the command.
  */
 export function planPlacement(
   placement: { command: string; defaults: Record<string, unknown>; size: number },
@@ -108,21 +71,39 @@ export function planPlacement(
   y: number,
   terrain: TerrainData,
 ): PlacedCommand | null {
-  const brush = BRUSH_OF_COMMAND[placement.command];
-  if (brush) {
-    const planned = planCommand(brush, mods, x, y, placement.size, terrain);
-    if (!planned) return null;
-    // The area is the player's click and what the placement gave is the tool's; what the viewport
-    // worked out only fills in what is missing.
-    const { x: left, y: top, w, h } = planned.input;
-    return {
-      name: planned.name,
-      input: { ...planned.input, ...placement.defaults, x: left, y: top, w, h },
-    };
-  }
   const rect = brushRect(x, y, placement.size, terrain.width, terrain.height);
   if (!rect) return null;
-  return { name: placement.command, input: { ...placement.defaults, ...rect } };
+  const { levelAbove, heightMode, ...given } = placement.defaults;
+  const { command } = placement;
+  switch (command) {
+    case "terrain_raise":
+    case "terrain_lower": {
+      const raise = (command === "terrain_raise") !== mods.shift;
+      return { name: raise ? "terrain_raise" : "terrain_lower", input: { ...given, ...rect } };
+    }
+    case "terrain_level": {
+      const height =
+        heightMode !== "tile" && typeof given["height"] === "number"
+          ? given["height"]
+          : lowestCorner(terrain, x, y);
+      return { name: command, input: { ...given, ...rect, height } };
+    }
+    case "terrain_set_water": {
+      const above = typeof levelAbove === "number" ? levelAbove : WATER_ABOVE.default;
+      const level =
+        typeof levelAbove !== "number" && typeof given["level"] === "number"
+          ? given["level"]
+          : Math.min(MAX_HEIGHT, lowestCorner(terrain, x, y) + above);
+      return { name: command, input: { ...given, ...rect, level: mods.alt ? 0 : level } };
+    }
+    case "terrain_set_surface":
+      return {
+        name: command,
+        input: { surface: DEFAULT_TERRAIN_OPTIONS.surface, ...given, ...rect },
+      };
+    default:
+      return { name: command, input: { ...given, ...rect } };
+  }
 }
 
 /** One day-night cycle runs once a month. */

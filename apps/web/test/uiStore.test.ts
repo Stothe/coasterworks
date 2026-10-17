@@ -21,9 +21,10 @@ const loan: Action = {
 };
 
 describe("uiStore: starting state", () => {
-  it("has Select, no placement, no selection, and everything closed", () => {
-    expect(state().tool).toBe("select");
-    expect(state().placement).toBeNull();
+  it("has Raise in hand, no selection, and everything closed", () => {
+    expect(state().tool).toBe("terrain");
+    expect(state().placement).toEqual({ command: "terrain_raise", defaults: {}, size: 1 });
+    expect(state().brushSize).toBe(1);
     expect(state().selection).toBeNull();
     expect(state().inspector).toEqual({ open: false, tab: "overview" });
     expect(state().commandBarOpen).toBe(false);
@@ -64,6 +65,7 @@ describe("uiStore: tools and placement", () => {
   });
 
   it("setBrushSize with nothing placed is remembered for the next placement", () => {
+    state().cancel();
     state().setBrushSize(3);
     expect(state().placement).toBeNull();
     state().startPlacement("terrain_level", {});
@@ -77,12 +79,54 @@ describe("uiStore: tools and placement", () => {
   });
 
   it("setTool to another tool drops the placement; to the same tool keeps it", () => {
-    state().startPlacement("terrain_raise", {});
+    state().startPlacement("terrain_set_water", { levelAbove: 5 });
     state().setTool("terrain");
-    expect(state().placement?.command).toBe("terrain_raise");
+    expect(state().placement).toMatchObject({
+      command: "terrain_set_water",
+      defaults: { levelAbove: 5 },
+    });
     state().setTool("ride");
     expect(state().tool).toBe("ride");
     expect(state().placement).toBeNull();
+    state().setTool("select");
+    expect(state().tool).toBe("select");
+    expect(state().placement).toBeNull();
+  });
+
+  it("setTool to Terrain puts Raise in hand at the brush size last chosen", () => {
+    state().setBrushSize(3);
+    state().setTool("ride");
+    state().setTool("terrain");
+    expect(state().tool).toBe("terrain");
+    expect(state().placement).toEqual({ command: "terrain_raise", defaults: {}, size: 3 });
+    // And from Select, which is what Esc leaves.
+    state().cancel();
+    expect(state().placement).toBeNull();
+    state().setTool("terrain");
+    expect(state().placement?.command).toBe("terrain_raise");
+  });
+
+  it("startTerrain puts a terrain verb in hand with the options it starts at, from any tool", () => {
+    state().setTool("ride");
+    state().startTerrain("water");
+    expect(state().tool).toBe("terrain");
+    expect(state().placement).toEqual({
+      command: "terrain_set_water",
+      defaults: { levelAbove: 2 },
+      size: 1,
+    });
+    state().startTerrain("surface", { waterAbove: 2, surface: 4, heightMode: "tile", height: 8 });
+    expect(state().placement?.defaults).toEqual({ surface: 4 });
+    state().startTerrain("smooth");
+    expect(state().placement).toEqual({ command: "terrain_smooth", defaults: {}, size: 1 });
+  });
+
+  it("startTerrain keeps the brush size, and closes the command bar", () => {
+    state().setBrushSize(3);
+    state().openCommandBar();
+    state().startTerrain("lower");
+    expect(state().placement?.size).toBe(3);
+    expect(state().commandBarOpen).toBe(false);
   });
 
   it("keeps a copy of the defaults, so the caller cannot change a placement afterwards", () => {

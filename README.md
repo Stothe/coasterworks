@@ -15,7 +15,7 @@ pnpm install
 pnpm dev:web
 ```
 
-Open `http://localhost:5173`. The page runs a sample park, "Leafy Lake", in a worker of its own. Raise, Lower, Level and Water shape the land (keys `R`, `L`, `V`, `W`; `[` and `]` change the brush), Space pauses, `+` and `-` change the speed, and Cmd+Z undoes.
+Open `http://localhost:5173`. The page runs a sample park, "Leafy Lake", in a worker of its own. The dock along the bottom has seven tools (keys `1` to `7`), and Terrain's tray shapes the land: Raise, Lower, Level, Smooth, Water and Surface (keys `R`, `L`, `V`, `M`, `W`, `U`; `[` and `]` change the brush). `Esc` puts the tool down, Space pauses, `+` and `-` change the speed, and Cmd+Z undoes.
 
 ## Run the Mac app (dev)
 

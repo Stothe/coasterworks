@@ -139,10 +139,16 @@ describe("a lost connection", () => {
     vi.mocked(useHost).mockReturnValue(disconnected());
     render(<App />);
     expect(speedButtons().every((button) => button.disabled)).toBe(true);
-    const tools = screen.getByRole("toolbar", { name: "Terrain tools" });
-    const buttons = within(tools).getAllByRole("button") as HTMLButtonElement[];
-    expect(buttons.length).toBeGreaterThan(0);
-    expect(buttons.every((button) => button.disabled)).toBe(true);
+    // The dock and the terrain tray above it.
+    for (const name of ["Tools", "Terrain tool", "Brush size"]) {
+      const group = screen.getByRole("group", { name });
+      const buttons = within(group).getAllByRole("button") as HTMLButtonElement[];
+      expect(buttons.length, name).toBeGreaterThan(0);
+      expect(
+        buttons.every((button) => button.disabled),
+        name,
+      ).toBe(true);
+    }
   });
 
   it("shows only the connection banner, even if the sim had halted before", () => {

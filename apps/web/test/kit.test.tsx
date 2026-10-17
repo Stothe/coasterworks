@@ -120,6 +120,18 @@ describe("Segmented", () => {
     ).toBeNull();
   });
 
+  it("turns every option off when it is disabled", () => {
+    const onChange = vi.fn();
+    render(
+      <Segmented label="Surface" options={options} value="sand" onChange={onChange} disabled />,
+    );
+    for (const button of screen.getAllByRole("button")) {
+      expect((button as HTMLButtonElement).disabled).toBe(true);
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Grass" }));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it("is at least as big as a hit target", () => {
     render(<Segmented label="Surface" options={options} value="sand" onChange={() => {}} />);
     const sand = screen.getByRole("button", { name: "Sand" });

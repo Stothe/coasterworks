@@ -28,6 +28,14 @@ test("a placement started from the command bar is what a click does, until Escap
       const entries = (answer?.result ?? []) as Array<{ name: string }>;
       return entries[0]?.name ?? null;
     });
+  /** How many commands the sim's log holds, up to the 200 a query can return. */
+  const logLength = () =>
+    page.evaluate(async () => {
+      const client = (window as unknown as Hook).__coasterworks?.client;
+      const answer = await client?.query("log_recent", { limit: 200 });
+      if (!answer?.ok) throw new Error("log_recent failed");
+      return (answer.result as unknown[]).length;
+    });
 
   const canvas = page.getByLabel("Park view");
   await expect(canvas).toBeVisible();
@@ -35,7 +43,7 @@ test("a placement started from the command bar is what a click does, until Escap
   if (!box) throw new Error("The park view has no size");
   const clickMiddle = () => page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
 
-  // The terrain bar is on Lower, so a click that raises can only be the command bar's doing.
+  // The Lower tool is in hand, so a click that raises can only be the command bar's doing.
   await page.keyboard.press("l");
   await page.keyboard.press("ControlOrMeta+k");
   const search = page.getByPlaceholder("Type a command…");
@@ -51,10 +59,17 @@ test("a placement started from the command bar is what a click does, until Escap
   await clickMiddle();
   await expect.poll(lastCommand).toBe("terrain_raise");
 
-  // Escape puts the placement down, and the terrain bar's Lower is what a click does again.
+  // Escape puts the placement down: a click does nothing, and the tray is gone. Taking Lower up
+  // again is what makes a click do something. Only that second click is in the log.
   await page.keyboard.press("Escape");
+  await expect(page.getByRole("region", { name: "Terrain tray" })).toHaveCount(0);
+  const before = await logLength();
+  await clickMiddle();
+  await page.keyboard.press("l");
+  await expect(page.getByRole("region", { name: "Terrain tray" })).toBeVisible();
   await clickMiddle();
   await expect.poll(lastCommand).toBe("terrain_lower");
+  expect(await logLength()).toBe(before + 1);
 });
 
 test("the search field has the keyboard back after Escape from a form", async ({ page }) => {

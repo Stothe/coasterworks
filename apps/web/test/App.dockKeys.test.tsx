@@ -147,6 +147,6 @@ describe("the keys with the real viewport", () => {
     const yaw = rig.yaw;
     expect(press("e")).toBe(true);
     expect(rig.yaw).toBe(yaw);
-    expect(uiStore.getState().tool).toBe("select");
+    expect(uiStore.getState().tool).toBe("terrain");
   });
 });

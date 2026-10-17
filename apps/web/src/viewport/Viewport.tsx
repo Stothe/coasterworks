@@ -9,14 +9,7 @@ import type { ExecResult } from "@coasterworks/sim";
 import { useEffect, useRef } from "react";
 import { CLASSIC_VIEW_EVENT, onShellEvent } from "../host/shell";
 import { useUiStore } from "../state/uiStore";
-import {
-  brushRect,
-  planCommand,
-  planPlacement,
-  timeOfDay,
-  type BrushSize,
-  type TerrainToolId,
-} from "./brush";
+import { brushRect, planPlacement, timeOfDay } from "./brush";
 import { classicCycle, onClassicViewRequest } from "./classicView";
 import { framingDistance } from "./framing";
 
@@ -25,10 +18,6 @@ export interface ViewportProps {
   /** The sim tick, which sets the time of day. */
   tick: number;
   client: SimClient | null;
-  /** The terrain bar's tool, used while no placement is in progress. */
-  tool: TerrainToolId;
-  /** The terrain bar's brush, used while no placement is in progress. */
-  brush: BrushSize;
   /** Called with the outcome of every command a click sent, including one that could not be sent. */
   onResult(result: ExecResult): void;
 }
@@ -56,9 +45,12 @@ function failure(error: unknown): ExecResult {
   return { ok: false, error: error instanceof Error ? error.message : String(error) };
 }
 
-/** The 3D view of the park, and the pointer input that edits it. */
+/**
+ * The 3D view of the park, and the pointer input that edits it. What a click does is the
+ * placement in the UI store, which the dock's trays and the command bar start: with none in
+ * hand it does nothing, and nothing is outlined under the pointer.
+ */
 export function Viewport(props: ViewportProps) {
-  // A placement started elsewhere (the command bar) is what a click does, in preference to the bar.
   const placement = useUiStore((state) => state.placement);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const live = useRef<Live | null>(null);
@@ -80,11 +72,12 @@ export function Viewport(props: ViewportProps) {
     scene.setTimeOfDay(timeOfDay(latest.current.tick));
 
     const outline = () => {
-      const { terrain, brush, placement } = latest.current;
+      const { terrain, placement } = latest.current;
       const at = hover.current;
-      const size = placement?.size ?? brush;
       const rect =
-        at && terrain ? brushRect(at.x, at.y, size, terrain.width, terrain.height) : null;
+        at && terrain && placement
+          ? brushRect(at.x, at.y, placement.size, terrain.width, terrain.height)
+          : null;
       if (rect) scene.highlightTile(rect.x, rect.y, rect.w, rect.h);
       else scene.highlightTile(null);
     };
@@ -97,11 +90,9 @@ export function Viewport(props: ViewportProps) {
         outline();
       },
       onTileClick: (x, y, mods) => {
-        const { client, terrain, tool, brush, placement, onResult } = latest.current;
-        if (!client || !terrain) return;
-        const plan = placement
-          ? planPlacement(placement, mods, x, y, terrain)
-          : planCommand(tool, mods, x, y, brush, terrain);
+        const { client, terrain, placement, onResult } = latest.current;
+        if (!client || !terrain || !placement) return;
+        const plan = planPlacement(placement, mods, x, y, terrain);
         if (!plan) return;
         client
           .command(plan.name, plan.input)
@@ -143,10 +134,11 @@ export function Viewport(props: ViewportProps) {
     live.current?.scene.setTimeOfDay(timeOfDay(props.tick));
   }, [props.tick]);
 
-  // The outline is the brush, so it changes with the brush even if the pointer does not move.
+  // The outline is the brush, so it changes with the placement even if the pointer does not move:
+  // a bigger brush grows it, and putting the placement down (Esc) takes it away.
   useEffect(() => {
     outlineRef.current?.();
-  }, [props.brush, props.tool, placement]);
+  }, [placement]);
 
   return (
     <canvas

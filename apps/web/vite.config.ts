@@ -29,9 +29,18 @@ export default defineConfig({
   // The sim runs in a module worker, which imports the packages the same way the page does.
   worker: { format: "es", rollupOptions },
   build: {
-    // three.js is most of the page, and the page is one chunk.
+    // three.js is most of the page. It is its own chunk, so that the app's code can grow without
+    // the page passing the limit, and a change to the app does not make everyone fetch three.js again.
     chunkSizeWarningLimit: 1000,
-    rollupOptions,
+    rollupOptions: {
+      ...rollupOptions,
+      output: {
+        manualChunks(id: string) {
+          if (id.includes("/node_modules/three/")) return "three";
+          return undefined;
+        },
+      },
+    },
   },
   // `strictPort`: the desktop app's `tauri dev` waits for exactly this address, so a busy port must
   // be an error here, not a quiet move to 5174 that leaves the app attached to some other server.

@@ -4,19 +4,20 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { UiActionDeps } from "./actions/registry";
 import type { Action, ActionContext } from "./actions/types";
 import { useActions } from "./actions/useActions";
-import { bindingFor, isTyping, stepSpeed } from "./state/keys";
+import { bindingFor, stepSpeed } from "./state/keys";
 import { uiStore, useUiStore } from "./state/uiStore";
 import { useHost } from "./state/useHost";
 import { useToasts } from "./state/useToasts";
 import { Banner } from "./ui/Banner";
 import { CommandBar } from "./ui/CommandBar";
-import { IconButton } from "./ui/kit";
+import { Dock } from "./ui/Dock";
+import { IconButton, Panel } from "./ui/kit";
 import { StatusPills } from "./ui/StatusPills";
 import { Toast } from "./ui/Toast";
-import { BRUSH_SIZES, TERRAIN_TOOLS, TerrainTool } from "./ui/TerrainTool";
+import { Tray } from "./ui/Tray";
 import { requestClassicView } from "./viewport/classicView";
 import { Viewport } from "./viewport/Viewport";
-import type { TerrainToolId } from "./viewport/brush";
+import { BRUSH_SIZES } from "./viewport/terrainTools";
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -35,10 +36,6 @@ interface Live {
 export function App() {
   const host = useHost();
   const { toasts, push, dismiss } = useToasts();
-  // The terrain bar's tool, until the dock replaces it. A placement started elsewhere (the command
-  // bar) is in the store and wins in the viewport; the bar's own buttons put it down.
-  const [tool, setTool] = useState<TerrainToolId>("raise");
-  const brush = useUiStore((state) => state.brushSize);
   const uiTool = useUiStore((state) => state.tool);
   const selection = useUiStore((state) => state.selection);
   const inspectorOpen = useUiStore((state) => state.inspector.open);
@@ -157,6 +154,11 @@ export function App() {
         help: () => store().toggleHelp(),
         commandBar: () => store().openCommandBar(),
         cancel: () => store().cancel(),
+        terrain: (verb) => store().startTerrain(verb),
+        brush: (direction) => {
+          const next = BRUSH_SIZES[BRUSH_SIZES.indexOf(store().brushSize) + direction];
+          if (next !== undefined) store().setBrushSize(next);
+        },
       },
     };
   }, [execute]);
@@ -185,39 +187,20 @@ export function App() {
       const barOpen = uiStore.getState().commandBarOpen;
 
       const binding = bindingFor(e);
-      if (binding) {
-        // Holding a key repeats it; only undo and redo mean it.
-        if (e.repeat && !binding.combo.startsWith("mod+")) return;
-        if (barOpen && binding.actionId !== "ui.cancel") return;
-        const action = now.byId.get(binding.actionId);
-        if (!action || !now.ctx) return;
-        if (action.enabled && !action.enabled(now.ctx)) return;
-        e.preventDefault();
-        const report = (error: unknown) => now.onResult({ ok: false, error: messageOf(error) });
-        try {
-          Promise.resolve(action.run(now.ctx)).catch(report);
-        } catch (error) {
-          report(error);
-        }
-        return;
-      }
-
-      // The terrain bar's own keys, until the dock replaces it.
-      if (barOpen || e.ctrlKey || e.metaKey || e.altKey || e.repeat || isTyping(e.target)) return;
-      const key = e.key.toLowerCase();
-      if (key === "r" || key === "l" || key === "v" || key === "w") {
-        const chosen = TERRAIN_TOOLS.find((option) => option.key.toLowerCase() === key);
-        if (!chosen) return;
-        uiStore.getState().setTool("select");
-        setTool(chosen.id);
-      } else if (key === "[" || key === "]") {
-        const at = BRUSH_SIZES.indexOf(uiStore.getState().brushSize);
-        const next = BRUSH_SIZES[at + (key === "]" ? 1 : -1)];
-        if (next) uiStore.getState().setBrushSize(next);
-      } else {
-        return;
-      }
+      if (!binding) return;
+      // Holding a key repeats it; only undo and redo mean it.
+      if (e.repeat && !binding.combo.startsWith("mod+")) return;
+      if (barOpen && binding.actionId !== "ui.cancel") return;
+      const action = now.byId.get(binding.actionId);
+      if (!action || !now.ctx) return;
+      if (action.enabled && !action.enabled(now.ctx)) return;
       e.preventDefault();
+      const report = (error: unknown) => now.onResult({ ok: false, error: messageOf(error) });
+      try {
+        Promise.resolve(action.run(now.ctx)).catch(report);
+      } catch (error) {
+        report(error);
+      }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -260,8 +243,6 @@ export function App() {
         terrain={host.terrain}
         tick={host.snapshot?.header.tick ?? 0}
         client={client}
-        tool={tool}
-        brush={brush}
         onResult={onResult}
       />
       <div className="pointer-events-none absolute inset-0" onClick={releaseFocus}>
@@ -276,17 +257,18 @@ export function App() {
             />
           )}
         </div>
-        <div className="pointer-events-auto absolute bottom-4 left-1/2 -translate-x-1/2">
-          <TerrainTool
-            tool={tool}
-            onToolChange={(next) => {
-              // Choosing a tool on the bar puts down a placement the command bar started.
-              uiStore.getState().setTool("select");
-              setTool(next);
-            }}
-            brush={brush}
-            onBrushChange={(size) => uiStore.getState().setBrushSize(size)}
+        <div className="pointer-events-auto absolute bottom-4 left-1/2 flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-col items-center gap-2">
+          <Tray
+            tool={uiTool}
+            actions={actions}
+            ctx={ctx}
             lastCharge={lastCharge}
+            onError={(message) => push(message, { kind: "error" })}
+            disabled={disconnected}
+          />
+          <Dock
+            tool={uiTool}
+            onSelect={(next) => uiStore.getState().setTool(next)}
             disabled={disconnected}
           />
         </div>
@@ -310,6 +292,23 @@ export function App() {
             disabled={disconnected}
           />
         </div>
+        {inspectorOpen && (
+          // Stands in until the inspector comes, so that what the Park tray opens can be seen.
+          <div className="pointer-events-auto absolute top-24 right-3.5 w-64">
+            <Panel
+              title="Inspector"
+              actions={
+                <IconButton
+                  label="Close inspector"
+                  icon={<CloseIcon />}
+                  onClick={() => uiStore.getState().closeInspector()}
+                />
+              }
+            >
+              <p className="text-sm text-muted">Inspector coming in the next task</p>
+            </Panel>
+          </div>
+        )}
         <Toast toasts={toasts} onDismiss={dismiss} />
         {(host.status === "connecting" || host.status === "error") && (
           <div className="absolute inset-0 grid place-items-center">
@@ -330,6 +329,14 @@ export function App() {
         {...(catalogError !== undefined && { catalogError })}
       />
     </div>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="m4 4 8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
   );
 }
 

@@ -107,6 +107,8 @@ describe("KEYMAP", () => {
       help: vi.fn(),
       commandBar: vi.fn(),
       cancel: vi.fn(),
+      terrain: vi.fn(),
+      brush: vi.fn(),
     },
   };
   const ids = new Set(buildActions([], deps).map((action) => action.id));
@@ -140,6 +142,29 @@ describe("KEYMAP", () => {
       "ui.tool.staff",
       "ui.tool.park",
     ]);
+  });
+
+  it("puts the terrain verbs and the brush on their keys", () => {
+    const by = (combo: string) => KEYMAP.find((binding) => binding.combo === combo)?.actionId;
+    expect(["r", "l", "v", "m", "w", "u"].map(by)).toEqual([
+      "ui.terrain.raise",
+      "ui.terrain.lower",
+      "ui.terrain.level",
+      "ui.terrain.smooth",
+      "ui.terrain.water",
+      "ui.terrain.surface",
+    ]);
+    expect(by("[")).toBe("ui.brush.smaller");
+    expect(by("]")).toBe("ui.brush.larger");
+  });
+
+  it("leaves the terrain keys to a text field", () => {
+    const typed = { ...key("w"), target: { tagName: "INPUT" } } as unknown as KeyboardEvent;
+    expect(bindingFor(typed, false)).toBeUndefined();
+    const brush = { ...key("]"), target: { tagName: "INPUT" } } as unknown as KeyboardEvent;
+    expect(bindingFor(brush, false)).toBeUndefined();
+    const free = { ...key("w"), target: { tagName: "DIV" } } as unknown as KeyboardEvent;
+    expect(bindingFor(free, false)?.actionId).toBe("ui.terrain.water");
   });
 
   it("lets only Escape work while typing", () => {

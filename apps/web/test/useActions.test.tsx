@@ -28,6 +28,8 @@ function makeDeps(): UiActionDeps {
       help: vi.fn(),
       commandBar: vi.fn(),
       cancel: vi.fn(),
+      terrain: vi.fn(),
+      brush: vi.fn(),
     },
   };
 }

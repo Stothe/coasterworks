@@ -22,6 +22,8 @@ function makeDeps() {
     help: vi.fn(),
     commandBar: vi.fn(),
     cancel: vi.fn(),
+    terrain: vi.fn(),
+    brush: vi.fn(),
   };
   const deps = {
     startPlacement: vi.fn(),
@@ -291,16 +293,49 @@ describe("buildActions: interface actions", () => {
       expect(get(id).kind, id).toBe("ui");
       expect(get(id).hidden, id).toBe(true);
     }
-    // Everything else is listed.
+    // Everything else is listed, bar the keys of the terrain tray, which the catalog's own terrain
+    // commands already list.
     expect(
       setup()
-        .actions.filter((a) => a.hidden)
+        .actions.filter(
+          (a) => a.hidden && !a.id.startsWith("ui.terrain.") && !a.id.startsWith("ui.brush."),
+        )
         .map((a) => a.id),
     ).toEqual(["ui.commandBar", "ui.cancel"]);
     get("ui.commandBar").run(ctx);
     get("ui.cancel").run(ctx);
     expect(ui.commandBar).toHaveBeenCalledTimes(1);
     expect(ui.cancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("has an action for each terrain verb's key, which the bar does not list", () => {
+    const { get, ui } = setup([]);
+    const verbs = [
+      ["raise", "R"],
+      ["lower", "L"],
+      ["level", "V"],
+      ["smooth", "M"],
+      ["water", "W"],
+      ["surface", "U"],
+    ] as const;
+    for (const [verb, shortcut] of verbs) {
+      const action = get(`ui.terrain.${verb}`);
+      expect(action.kind, verb).toBe("ui");
+      expect(action.hidden, verb).toBe(true);
+      expect(action.shortcut, verb).toBe(shortcut);
+      action.run(ctx);
+    }
+    expect(ui.terrain.mock.calls.map(([verb]) => verb)).toEqual(verbs.map(([verb]) => verb));
+  });
+
+  it("steps the brush from [ and ]", () => {
+    const { get, ui } = setup([]);
+    expect(get("ui.brush.smaller").shortcut).toBe("[");
+    expect(get("ui.brush.larger").shortcut).toBe("]");
+    expect(get("ui.brush.smaller").hidden).toBe(true);
+    get("ui.brush.larger").run(ctx);
+    get("ui.brush.smaller").run(ctx);
+    expect(ui.brush.mock.calls).toEqual([[1], [-1]]);
   });
 
   it("has no ⌘K action, because ⌘K is the bar itself", () => {

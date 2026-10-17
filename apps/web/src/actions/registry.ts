@@ -1,5 +1,6 @@
 import type { Speed } from "@coasterworks/protocol";
 import type { CatalogEntry, ExecResult } from "@coasterworks/sim";
+import { TERRAIN_VERBS, type TerrainVerb } from "../viewport/terrainTools";
 import { RECT_KEYS, defaultsFromSchema, humanize, isRectSchema } from "./schema";
 import {
   DOCK_TOOLS,
@@ -25,6 +26,10 @@ export interface UiHandlers {
   commandBar(): void;
   /** Closes what is open, or else puts the tool down (Esc). */
   cancel(): void;
+  /** Takes up a terrain verb: starts its placement, which puts the dock on Terrain. */
+  terrain(verb: TerrainVerb): void;
+  /** One brush size larger (`1`) or smaller (`-1`), stopping at the ends. */
+  brush(direction: 1 | -1): void;
 }
 
 /**
@@ -196,6 +201,37 @@ function uiActions({ ui }: UiActionDeps): Action[] {
         () => ui.setTool(tool),
         String(index + 1),
       ),
+    ),
+    // The keys of the terrain tray. The bar lists the sim's own terrain commands, which do the
+    // same, so these are for the keyboard.
+    ...TERRAIN_VERBS.map(({ verb, label, key }) =>
+      uiAction(
+        `ui.terrain.${verb}`,
+        `${label} tool`,
+        `Take up the ${label.toLowerCase()} terrain tool.`,
+        ["terrain", "tool", verb],
+        () => ui.terrain(verb),
+        key,
+        true,
+      ),
+    ),
+    uiAction(
+      "ui.brush.smaller",
+      "Smaller brush",
+      "Make the terrain brush one size smaller.",
+      ["brush", "size", "smaller"],
+      () => ui.brush(-1),
+      "[",
+      true,
+    ),
+    uiAction(
+      "ui.brush.larger",
+      "Larger brush",
+      "Make the terrain brush one size larger.",
+      ["brush", "size", "larger"],
+      () => ui.brush(1),
+      "]",
+      true,
     ),
     uiAction(
       "ui.inspector.park",

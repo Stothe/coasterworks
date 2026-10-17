@@ -1,5 +1,6 @@
 import type { Speed } from "@coasterworks/protocol";
 import { DOCK_TOOLS } from "../actions/types";
+import { TERRAIN_VERBS } from "../viewport/terrainTools";
 
 /** The play speeds, slowest first. Pause is not one of them. */
 export const PLAY_SPEEDS = [1, 2, 4, 8] as const satisfies readonly Speed[];
@@ -64,6 +65,12 @@ export const KEYMAP: readonly KeyBinding[] = [
   { combo: "-", actionId: "ui.speed.down" },
   { combo: "_", actionId: "ui.speed.down" },
   ...DOCK_TOOLS.map((tool, index) => ({ combo: String(index + 1), actionId: `ui.tool.${tool}` })),
+  ...TERRAIN_VERBS.map(({ verb, key }) => ({
+    combo: key.toLowerCase(),
+    actionId: `ui.terrain.${verb}`,
+  })),
+  { combo: "[", actionId: "ui.brush.smaller" },
+  { combo: "]", actionId: "ui.brush.larger" },
   { combo: "?", actionId: "ui.help" },
   { combo: "home", actionId: "ui.classicView" },
 ];

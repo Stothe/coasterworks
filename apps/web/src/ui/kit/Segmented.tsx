@@ -13,6 +13,8 @@ export interface SegmentedProps<T extends string = string> {
   options: ReadonlyArray<SegmentedOption<T>>;
   value: T;
   onChange(id: T): void;
+  /** Turns every option off. */
+  disabled?: boolean;
 }
 
 /** A row of buttons of which one is on, such as the speeds. */
@@ -21,6 +23,7 @@ export function Segmented<T extends string = string>({
   options,
   value,
   onChange,
+  disabled = false,
 }: SegmentedProps<T>) {
   return (
     <div
@@ -36,6 +39,7 @@ export function Segmented<T extends string = string>({
           aria-label={option.label}
           aria-pressed={value === option.id}
           aria-keyshortcuts={option.shortcut}
+          disabled={disabled}
           onClick={() => onChange(option.id)}
           className="hud-button min-w-8 gap-1.5 rounded-md px-2.5 text-xs font-medium text-muted aria-pressed:bg-white/15 aria-pressed:text-ink"
         >

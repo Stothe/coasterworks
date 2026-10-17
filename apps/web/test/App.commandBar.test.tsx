@@ -169,14 +169,15 @@ describe("the keys while the bar is in use", () => {
     const field = input();
     expect(document.activeElement).toBe(field);
 
-    press("1", {}, field);
+    press("2", {}, field);
     press(" ", {}, field);
     press("+", {}, field);
     press("z", { ctrlKey: true }, field);
     press("z", { ctrlKey: true, shiftKey: true }, field);
     press("?", {}, field);
     press("Home", {}, field);
-    expect(uiStore.getState().tool).toBe("select");
+    // Terrain is what the park opens with, so a key that took another tool would show.
+    expect(uiStore.getState().tool).toBe("terrain");
     expect(uiStore.getState().helpOpen).toBe(false);
     expect(setSpeed).not.toHaveBeenCalled();
     expect(undo).not.toHaveBeenCalled();
@@ -197,7 +198,7 @@ describe("the keys while the bar is in use", () => {
     press("2", {}, amount);
     press(" ", {}, amount);
     press("z", { ctrlKey: true }, amount);
-    expect(uiStore.getState().tool).toBe("select");
+    expect(uiStore.getState().tool).toBe("terrain");
     expect(setSpeed).not.toHaveBeenCalled();
     expect(undo).not.toHaveBeenCalled();
   });
@@ -208,7 +209,7 @@ describe("the keys while the bar is in use", () => {
     press("3");
     press(" ");
     press("z", { ctrlKey: true });
-    expect(uiStore.getState().tool).toBe("select");
+    expect(uiStore.getState().tool).toBe("terrain");
     expect(setSpeed).not.toHaveBeenCalled();
     expect(undo).not.toHaveBeenCalled();
   });
@@ -289,10 +290,10 @@ describe("the keymap", () => {
 
   it("ignores a key some other part of the page already handled", async () => {
     await ready();
-    const event = new KeyboardEvent("keydown", { key: "1", cancelable: true });
+    const event = new KeyboardEvent("keydown", { key: "2", cancelable: true });
     event.preventDefault();
     window.dispatchEvent(event);
-    expect(uiStore.getState().tool).toBe("select");
+    expect(uiStore.getState().tool).toBe("terrain");
   });
 
   it("does nothing when the connection is lost", async () => {
@@ -303,9 +304,9 @@ describe("the keymap", () => {
       error: "closed",
     });
     await ready();
-    press("1");
+    press("2");
     press("k", { ctrlKey: true });
-    expect(uiStore.getState().tool).toBe("select");
+    expect(uiStore.getState().tool).toBe("terrain");
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 });
