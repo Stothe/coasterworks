@@ -17,6 +17,12 @@ export function isTyping(target: EventTarget | null): boolean {
   );
 }
 
+/** True when a key press is aimed inside a menu, which moves and chooses with the keys. */
+export function isInMenu(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  return !!el && typeof el.closest === "function" && el.closest('[role="menu"]') !== null;
+}
+
 /** True when a key press is aimed at a button, which Space presses. */
 export function isButton(target: EventTarget | null): boolean {
   const el = target as HTMLElement | null;
@@ -138,10 +144,11 @@ export function matchCombo(event: KeyLike, combo: string, mac: boolean = isMac()
 
 /**
  * The binding a key press runs, or undefined if it is none or the press belongs to something else:
- * a text field keeps every key but Escape, and a focused button keeps Space (it presses the button).
+ * a text field and an open menu keep every key but Escape, and a focused button keeps Space (it
+ * presses the button).
  */
 export function bindingFor(event: KeyboardEvent, mac: boolean = isMac()): KeyBinding | undefined {
-  const typing = isTyping(event.target);
+  const typing = isTyping(event.target) || isInMenu(event.target);
   return KEYMAP.find(
     (binding) =>
       (!typing || binding.when === "always") &&

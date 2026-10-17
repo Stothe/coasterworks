@@ -299,23 +299,27 @@ describe("the terrain tray's charge", () => {
     expect(Object.keys(viewport.props as object).sort()).toEqual([
       "client",
       "onResult",
+      "onSecondaryClick",
       "terrain",
       "tick",
     ]);
   });
 });
 
-describe("the park tray and the inspector placeholder", () => {
+describe("the park tray and the inspector", () => {
   it("opens the inspector on a tab from the Park tray, and shuts it again", async () => {
     await ready();
-    expect(screen.queryByRole("region", { name: "Inspector" })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "Inspector" })).toBeNull();
     press("7");
     fireEvent.click(screen.getByRole("button", { name: "Finances" }));
     expect(store().inspector).toEqual({ open: true, tab: "finances" });
-    const inspector = screen.getByRole("region", { name: "Inspector" });
-    expect(within(inspector).getByText("Inspector coming in the next task")).toBeTruthy();
+    expect(store().selection).toEqual({ kind: "park" });
+    const inspector = screen.getByRole("complementary", { name: "Inspector" });
+    expect(
+      within(inspector).getByRole("tab", { name: "Finances" }).getAttribute("aria-selected"),
+    ).toBe("true");
     fireEvent.click(within(inspector).getByRole("button", { name: "Close inspector" }));
     expect(store().inspector.open).toBe(false);
-    expect(screen.queryByRole("region", { name: "Inspector" })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "Inspector" })).toBeNull();
   });
 });

@@ -7,7 +7,13 @@ import {
   type UiSelection,
 } from "../actions/types";
 import type { BrushSize } from "../viewport/brush";
-import { terrainPlacement, type TerrainOptions, type TerrainVerb } from "../viewport/terrainTools";
+import {
+  optionsOfDefaults,
+  terrainPlacement,
+  verbOfCommand,
+  type TerrainOptions,
+  type TerrainVerb,
+} from "../viewport/terrainTools";
 
 /** What the player has in hand: one of the dock's tools, or nothing but the pointer. */
 export type Tool = DockTool | "select";
@@ -47,13 +53,21 @@ export interface UiState {
   startPlacement(command: string, defaults: Record<string, unknown>, size?: BrushSize): void;
   /**
    * Takes up a terrain verb (Raise, Water, ...): starts its placement, which puts the dock on
-   * Terrain. `options` are what the verb is started with, the tray's starting ones without them.
+   * Terrain. `options` are what the verb is started with. Without them, a verb already in hand
+   * keeps the options it has (taking up Water again is not a reset), and any other verb starts
+   * from the tray's starting ones.
    */
   startTerrain(verb: TerrainVerb, options?: TerrainOptions): void;
   /** Sets the brush size, for the placement in progress and for the next one. */
   setBrushSize(size: BrushSize): void;
   select(selection: UiSelection): void;
+  /**
+   * Opens the inspector on `tab`. A park tab (Overview, Finances, Timeline) is the park's, so it
+   * selects the park; the tile tab shows whatever tile is selected.
+   */
   openInspector(tab: InspectorTab): void;
+  /** Selects tile (`x`, `y`) and opens the inspector on it: the one inspector moves to the tile. */
+  inspectTile(x: number, y: number): void;
   closeInspector(): void;
   openCommandBar(): void;
   closeCommandBar(): void;
@@ -65,7 +79,7 @@ export interface UiState {
   /**
    * Esc. It closes the topmost thing that is open, one at a time: help, then a form (back to the
    * list), then the command bar. With none of those open it puts the tool down: no placement, and
-   * the tool is Select. The selection stays.
+   * the tool is Select. With the tool already down it closes the inspector. The selection stays.
    */
   cancel(): void;
 }
@@ -108,7 +122,10 @@ export const uiStore = createStore<UiState>()((set, get) => ({
       formAction: null,
     })),
   startTerrain: (verb, options) => {
-    const { command, defaults } = terrainPlacement(verb, options);
+    const { placement } = get();
+    const inHand = placement !== null && verbOfCommand(placement.command) === verb;
+    const kept = options ?? (inHand ? optionsOfDefaults(placement.defaults) : undefined);
+    const { command, defaults } = terrainPlacement(verb, kept);
     get().startPlacement(command, defaults);
   },
   setBrushSize: (size) =>
@@ -117,7 +134,13 @@ export const uiStore = createStore<UiState>()((set, get) => ({
       placement: state.placement && { ...state.placement, size },
     })),
   select: (selection) => set({ selection }),
-  openInspector: (tab) => set({ inspector: { open: true, tab } }),
+  openInspector: (tab) =>
+    set((state) => ({
+      inspector: { open: true, tab },
+      selection: tab === "tile" ? state.selection : { kind: "park" },
+    })),
+  inspectTile: (x, y) =>
+    set({ selection: { kind: "tile", x, y }, inspector: { open: true, tab: "tile" } }),
   closeInspector: () => set((state) => ({ inspector: { ...state.inspector, open: false } })),
   openCommandBar: () => set({ commandBarOpen: true, formAction: null }),
   closeCommandBar: () => set({ commandBarOpen: false, formAction: null }),
@@ -129,6 +152,10 @@ export const uiStore = createStore<UiState>()((set, get) => ({
       if (state.helpOpen) return { helpOpen: false };
       if (state.formAction) return { formAction: null };
       if (state.commandBarOpen) return { commandBarOpen: false };
+      // Nothing in hand and the inspector up: there is nothing left but the inspector to put away.
+      if (state.tool === "select" && state.placement === null && state.inspector.open) {
+        return { inspector: { ...state.inspector, open: false } };
+      }
       return { placement: null, tool: "select" };
     }),
 }));

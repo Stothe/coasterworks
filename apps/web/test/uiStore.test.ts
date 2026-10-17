@@ -121,6 +121,27 @@ describe("uiStore: tools and placement", () => {
     expect(state().placement).toEqual({ command: "terrain_smooth", defaults: {}, size: 1 });
   });
 
+  it("startTerrain with the verb already in hand keeps its options, and another verb starts from its own", () => {
+    state().startTerrain("water", { waterAbove: 5, surface: 3, heightMode: "tile", height: 8 });
+    // Pressing W again, or clicking Water again, is not a reset.
+    state().startTerrain("water");
+    expect(state().placement?.defaults).toEqual({ levelAbove: 5 });
+    state().startTerrain("surface", { waterAbove: 5, surface: 3, heightMode: "tile", height: 8 });
+    state().startTerrain("surface");
+    expect(state().placement?.defaults).toEqual({ surface: 3 });
+    state().startTerrain("level", { waterAbove: 2, surface: 0, heightMode: "height", height: 12 });
+    state().startTerrain("level");
+    expect(state().placement?.defaults).toEqual({ heightMode: "height", height: 12 });
+    // Another verb starts from the tray's own options, not from the last verb's.
+    state().startTerrain("water");
+    expect(state().placement?.defaults).toEqual({ levelAbove: 2 });
+    // And so does a verb picked up again after the tool was put down.
+    state().startTerrain("water", { waterAbove: 7, surface: 0, heightMode: "tile", height: 8 });
+    state().cancel();
+    state().startTerrain("water");
+    expect(state().placement?.defaults).toEqual({ levelAbove: 2 });
+  });
+
   it("startTerrain keeps the brush size, and closes the command bar", () => {
     state().setBrushSize(3);
     state().openCommandBar();
@@ -152,6 +173,38 @@ describe("uiStore: selection and inspector", () => {
     expect(state().inspector).toEqual({ open: true, tab: "finances" });
     state().closeInspector();
     expect(state().inspector).toEqual({ open: false, tab: "finances" });
+  });
+});
+
+describe("uiStore: what the inspector shows", () => {
+  it("opening a park tab selects the park, from any tile", () => {
+    state().select({ kind: "tile", x: 3, y: 4 });
+    state().openInspector("finances");
+    expect(state().selection).toEqual({ kind: "park" });
+    expect(state().inspector).toEqual({ open: true, tab: "finances" });
+  });
+
+  it("inspectTile selects the tile and opens the inspector on it, replacing a park tab", () => {
+    state().openInspector("timeline");
+    state().inspectTile(3, 4);
+    expect(state().selection).toEqual({ kind: "tile", x: 3, y: 4 });
+    expect(state().inspector).toEqual({ open: true, tab: "tile" });
+    // Another tile moves the one inspector; there is never a second.
+    state().inspectTile(5, 6);
+    expect(state().selection).toEqual({ kind: "tile", x: 5, y: 6 });
+  });
+
+  it("opening the tile tab does not change what is selected", () => {
+    state().select({ kind: "tile", x: 1, y: 1 });
+    state().openInspector("tile");
+    expect(state().selection).toEqual({ kind: "tile", x: 1, y: 1 });
+  });
+
+  it("closing the inspector keeps the selection", () => {
+    state().inspectTile(2, 2);
+    state().closeInspector();
+    expect(state().inspector.open).toBe(false);
+    expect(state().selection).toEqual({ kind: "tile", x: 2, y: 2 });
   });
 });
 
@@ -223,6 +276,49 @@ describe("uiStore: cancel", () => {
     expect(state().placement).toBeNull();
     expect(state().tool).toBe("select");
     expect(state().selection).toEqual({ kind: "tile", x: 1, y: 2 });
+  });
+
+  it("closes the inspector only once nothing else is up: help, form, bar, placement, tool first", () => {
+    state().openInspector("overview");
+    state().startPlacement("terrain_raise", {});
+    state().toggleHelp();
+    state().cancel();
+    expect(state().helpOpen).toBe(false);
+    expect(state().inspector.open).toBe(true);
+
+    state().openForm(loan);
+    state().cancel();
+    expect(state().formAction).toBeNull();
+    state().cancel();
+    expect(state().commandBarOpen).toBe(false);
+    expect(state().inspector.open).toBe(true);
+
+    // The placement and the tool go next: the first Esc puts them down ...
+    state().cancel();
+    expect(state().placement).toBeNull();
+    expect(state().tool).toBe("select");
+    expect(state().inspector.open).toBe(true);
+    // ... and the next closes the inspector, which the tray's Park tool does not need open.
+    state().cancel();
+    expect(state().inspector.open).toBe(false);
+  });
+
+  it("does not close the inspector while a dock tool is in hand, even with no placement", () => {
+    state().openInspector("finances");
+    state().setTool("ride");
+    state().cancel();
+    expect(state().tool).toBe("select");
+    expect(state().inspector.open).toBe(true);
+    state().cancel();
+    expect(state().inspector).toEqual({ open: false, tab: "finances" });
+  });
+
+  it("keeps the selection when it closes the inspector", () => {
+    state().inspectTile(4, 4);
+    state().setTool("select");
+    state().cancel();
+    expect(state().inspector.open).toBe(false);
+    expect(state().selection).toEqual({ kind: "tile", x: 4, y: 4 });
   });
 
   it("with only a dock tool chosen returns to Select; with nothing to cancel changes nothing", () => {

@@ -11,8 +11,11 @@ export type ActionKind = "command" | "query" | "ui";
 export const DOCK_TOOLS = ["terrain", "path", "ride", "scenery", "shop", "staff", "park"] as const;
 export type DockTool = (typeof DOCK_TOOLS)[number];
 
-/** The parts of the inspector an action can open. */
-export type InspectorTab = "overview" | "finances" | "timeline";
+/**
+ * The parts of the inspector: the park's three tabs, and the tile tab, which is the only one a
+ * selected tile has.
+ */
+export type InspectorTab = "overview" | "finances" | "timeline" | "tile";
 
 /** What is selected on the map or in the park. */
 export type UiSelection = { kind: "tile"; x: number; y: number } | { kind: "park" } | null;

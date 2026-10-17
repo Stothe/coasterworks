@@ -1,0 +1,130 @@
+import type { SimClient } from "@coasterworks/protocol";
+import type { TerrainData } from "@coasterworks/render";
+import type { ExecResult } from "@coasterworks/sim";
+import type { Action, ActionContext, InspectorTab } from "../actions/types";
+import { uiStore, useUiStore } from "../state/uiStore";
+import { useParkStatus } from "../state/useParkStatus";
+import { ParkFinances } from "./inspector/ParkFinances";
+import { ParkOverview } from "./inspector/ParkOverview";
+import { TileInspector } from "./inspector/TileInspector";
+import { tileInfo } from "./inspector/tileInfo";
+import { EmptyState, IconButton, Panel, Tabs } from "./kit";
+
+export interface InspectorProps {
+  /** The latest terrain, which the tile tab reads on every render. */
+  terrain: TerrainData | null;
+  client: SimClient | null;
+  /** Every action: the finances tab's loan forms are the ones that run the finance commands. */
+  actions: readonly Action[];
+  ctx: ActionContext | null;
+  /** Runs a sim command. It resolves with the sim's answer; a refusal is a result, not a throw. */
+  execute(name: string, input: unknown): Promise<ExecResult>;
+  /** Shows a message to the player. */
+  notify(text: string, options?: { kind?: "info" | "error" }): void;
+  /** The id of the newest event the host has reported: the park's status is asked for again after it. */
+  lastEventId?: number;
+}
+
+/** The park's tabs, which are the inspector's tabs but for the tile. */
+type ParkTab = Exclude<InspectorTab, "tile">;
+
+function CloseIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="m4 4 8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+const closeButton = (
+  <IconButton
+    label="Close inspector"
+    icon={<CloseIcon />}
+    onClick={() => uiStore.getState().closeInspector()}
+  />
+);
+
+/**
+ * The one panel on the right, which shows whatever is selected: a tile, or else the park. It is
+ * the only panel that changes with the selection, and there is never a second.
+ */
+export function Inspector(props: InspectorProps) {
+  const open = useUiStore((state) => state.inspector.open);
+  const selection = useUiStore((state) => state.selection);
+  if (!open) return null;
+  return (
+    <aside
+      aria-label="Inspector"
+      className="pointer-events-auto absolute top-16 right-3.5 flex max-h-[calc(100%-9rem)] w-80 max-w-[calc(100vw-1.75rem)] flex-col"
+    >
+      {selection?.kind === "tile" ? (
+        <TilePanel {...props} x={selection.x} y={selection.y} />
+      ) : (
+        <ParkPanel {...props} />
+      )}
+    </aside>
+  );
+}
+
+function Status({ children }: { children: string }) {
+  return <p className="mb-3 text-xs text-muted">{children}</p>;
+}
+
+function TilePanel({ terrain, x, y, execute, notify }: InspectorProps & { x: number; y: number }) {
+  const info = tileInfo(terrain, x, y);
+  return (
+    <Panel title={`Tile (${x}, ${y})`} actions={closeButton}>
+      {info && (
+        <Status>{`${info.surface} · ${info.water === 0 ? "dry" : `water ${info.water}`}`}</Status>
+      )}
+      <TileInspector terrain={terrain} x={x} y={y} execute={execute} notify={notify} />
+    </Panel>
+  );
+}
+
+function ParkPanel({ client, actions, ctx, execute, notify, lastEventId }: InspectorProps) {
+  const tab = useUiStore((state) => state.inspector.tab);
+  // The tile's tab is no tab of the park's: a park that is shown while it is current shows Overview.
+  const shown: ParkTab = tab === "tile" ? "overview" : tab;
+  const { status, refresh } = useParkStatus(client, {
+    active: true,
+    ...(lastEventId !== undefined && { after: lastEventId }),
+  });
+  return (
+    <Panel title={status?.name ?? "Park"} actions={closeButton}>
+      {status && <Status>{status.date}</Status>}
+      <Tabs
+        label="Park sections"
+        value={shown}
+        onValueChange={(next) => uiStore.getState().openInspector(next as ParkTab)}
+        tabs={[
+          { id: "overview", label: "Overview", content: <ParkOverview status={status} /> },
+          {
+            id: "finances",
+            label: "Finances",
+            content: (
+              <ParkFinances
+                status={status}
+                actions={actions}
+                ctx={ctx}
+                execute={execute}
+                notify={notify}
+                onChanged={refresh}
+              />
+            ),
+          },
+          {
+            id: "timeline",
+            label: "Timeline",
+            content: (
+              <EmptyState
+                title="Timeline arrives in the next update"
+                hint="Everything that happens in the park will be listed here."
+              />
+            ),
+          },
+        ]}
+      />
+    </Panel>
+  );
+}

@@ -84,6 +84,25 @@ describe("bindingFor", () => {
     }
   });
 
+  it("leaves the keys to an open menu, as it does to a field, but Escape still gets through", () => {
+    // A menu item is a div inside role="menu": Space and the arrow keys select and move there.
+    const inMenu = (k: string, mods: Partial<KeyLike> = {}) =>
+      ({
+        ...key(k, mods),
+        target: {
+          tagName: "DIV",
+          closest: (selector: string) => (selector === '[role="menu"]' ? {} : null),
+        },
+      }) as unknown as KeyboardEvent;
+    expect(bindingFor(inMenu("1"), false)).toBeUndefined();
+    expect(bindingFor(inMenu(" "), false)).toBeUndefined();
+    expect(bindingFor(inMenu("r"), false)).toBeUndefined();
+    expect(bindingFor(inMenu("z", { ctrlKey: true }), false)).toBeUndefined();
+    expect(bindingFor(inMenu("Escape"), false)?.actionId).toBe("ui.cancel");
+    // Outside a menu, the same element is just an element.
+    expect(bindingFor(aimed("DIV", " "), false)?.actionId).toBe("ui.pause");
+  });
+
   it("leaves Space to a focused button", () => {
     expect(bindingFor(aimed("BUTTON", " "), false)).toBeUndefined();
     expect(bindingFor(aimed("BUTTON", "1"), false)?.actionId).toBe("ui.tool.terrain");

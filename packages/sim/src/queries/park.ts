@@ -7,7 +7,7 @@ import { MAX_HEIGHT } from "../world/types.js";
 export const parkStatus = defineQuery({
   name: "park_status",
   description:
-    "Describes the park: name, tick, calendar date, cash and loan in cents, and map size. `month` is 0-based (March = 0). Guest count and rating are 0 until guests exist.",
+    "Describes the park: name, tick, calendar date, cash and loan in cents, and map size. `month` is 0-based (March = 0). `monthStartCash` is the cash when the month began, in cents, so `cash - monthStartCash` is the month's change. Guest count and rating are 0 until guests exist.",
   category: "park",
   input: z.object({}),
   run: (world) => {
@@ -20,6 +20,7 @@ export const parkStatus = defineQuery({
       month: date.month,
       day: date.day,
       cash: world.finance.cash,
+      monthStartCash: world.finance.monthStart.cash,
       loan: world.finance.loan,
       guests: 0,
       rating: 0,

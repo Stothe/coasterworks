@@ -405,3 +405,45 @@ describe("ActionForm: leaving", () => {
     );
   });
 });
+
+describe("ActionForm: inline", () => {
+  /** A form that sits in a panel with other things, as the inspector's loan forms do. */
+  function inline(action: Action) {
+    const execute = vi.fn<(name: string, input: unknown) => Promise<ExecResult>>(async () => OK);
+    const onDone = vi.fn();
+    const onCancel = vi.fn();
+    render(
+      <ActionForm
+        action={action}
+        ctx={ctx}
+        execute={execute}
+        onDone={onDone}
+        onCancel={onCancel}
+        inline
+      />,
+    );
+    return { execute, onDone, onCancel };
+  }
+
+  it("does not take the focus when it appears, so two of them do not fight over it", () => {
+    inline(realAction("finance_take_loan"));
+    expect(document.activeElement).not.toBe(screen.getByLabelText("Amount"));
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it("has no Back button, only the action's own", () => {
+    inline(realAction("finance_take_loan"));
+    expect(screen.queryByRole("button", { name: "Back" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Take loan" })).toBeTruthy();
+  });
+
+  it("still sends the command, and still cancels on Escape", async () => {
+    const { execute, onDone, onCancel } = inline(realAction("finance_take_loan"));
+    type("Amount", "50");
+    submit();
+    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
+    expect(execute).toHaveBeenCalledWith("finance_take_loan", { amount: 5000 });
+    fireEvent.keyDown(screen.getByLabelText("Amount"), { key: "Escape" });
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+});

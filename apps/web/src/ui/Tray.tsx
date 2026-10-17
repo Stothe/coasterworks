@@ -24,7 +24,10 @@ export function Tray({ tool, actions, ctx, lastCharge, onError, disabled = false
   if (tool === "select") return null;
   const label = DOCK_ITEMS.find((item) => item.tool === tool)?.label ?? tool;
   return (
-    <section aria-label={`${label} tray`} className="glass max-w-[calc(100vw-2rem)] p-2.5">
+    <section
+      aria-label={`${label} tray`}
+      className="glass pointer-events-auto max-w-[calc(100vw-2rem)] p-2.5"
+    >
       {tool === "terrain" ? (
         <TerrainTray lastCharge={lastCharge} disabled={disabled} />
       ) : tool === "park" ? (

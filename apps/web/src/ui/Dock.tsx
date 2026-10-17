@@ -37,7 +37,11 @@ export interface DockProps {
  */
 export function Dock({ tool, onSelect, disabled = false }: DockProps) {
   return (
-    <div role="group" aria-label="Tools" className="glass flex items-stretch gap-0.5 p-1.5">
+    <div
+      role="group"
+      aria-label="Tools"
+      className="glass pointer-events-auto flex items-stretch gap-0.5 p-1.5"
+    >
       {DOCK_ITEMS.map((item, index) => {
         const active = tool === item.tool;
         return (

@@ -25,6 +25,11 @@ export interface ActionFormProps {
   onDone(result: ExecSuccess): void;
   /** Called by Back and by Escape. */
   onCancel(): void;
+  /**
+   * True for a form that sits in a panel among other things rather than being the thing the
+   * player is doing: it does not take the focus when it appears, and has no Back button.
+   */
+  inline?: boolean;
 }
 
 /** What a field holds while it is edited: the text of a box, a select's value, or a checkbox. */
@@ -102,7 +107,14 @@ const BUTTON = "hud-button rounded-lg px-3 text-sm font-medium";
  * A form for an action's input, drawn from its schema. It checks what the player types against the
  * schema's bounds, sends the command itself, and shows the sim's answer when it is a refusal.
  */
-export function ActionForm({ action, ctx, execute, onDone, onCancel }: ActionFormProps) {
+export function ActionForm({
+  action,
+  ctx,
+  execute,
+  onDone,
+  onCancel,
+  inline = false,
+}: ActionFormProps) {
   const fields = useMemo(() => (action.schema ? fieldsFor(action.schema) : null), [action.schema]);
   const [drafts, setDrafts] = useState<Record<string, Draft>>(() =>
     Object.fromEntries((fields ?? []).map((field) => [field.name, initialDraft(field)])),
@@ -198,7 +210,7 @@ export function ActionForm({ action, ctx, execute, onDone, onCancel }: ActionFor
         const draft = drafts[field.name] ?? initialDraft(field);
         const common = {
           name: field.name,
-          autoFocus: index === 0,
+          autoFocus: index === 0 && !inline,
           "aria-required": field.required || undefined,
           onBlur: () => leave(field.name),
         };
@@ -273,9 +285,11 @@ export function ActionForm({ action, ctx, execute, onDone, onCancel }: ActionFor
         </p>
       )}
       <div className="flex justify-end gap-2">
-        <button type="button" onClick={onCancel} className={`${BUTTON} text-muted`}>
-          Back
-        </button>
+        {!inline && (
+          <button type="button" onClick={onCancel} className={`${BUTTON} text-muted`}>
+            Back
+          </button>
+        )}
         <button
           type="submit"
           disabled={busy || !available}

@@ -11,12 +11,14 @@ import { useToasts } from "./state/useToasts";
 import { Banner } from "./ui/Banner";
 import { CommandBar } from "./ui/CommandBar";
 import { Dock } from "./ui/Dock";
-import { IconButton, Panel } from "./ui/kit";
+import { Inspector } from "./ui/Inspector";
+import { IconButton } from "./ui/kit";
 import { StatusPills } from "./ui/StatusPills";
+import { TileContextMenu, type TileMenuHandle } from "./ui/TileContextMenu";
 import { Toast } from "./ui/Toast";
 import { Tray } from "./ui/Tray";
 import { requestClassicView } from "./viewport/classicView";
-import { Viewport } from "./viewport/Viewport";
+import { Viewport, type ViewportProps } from "./viewport/Viewport";
 import { BRUSH_SIZES } from "./viewport/terrainTools";
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -40,6 +42,7 @@ export function App() {
   const selection = useUiStore((state) => state.selection);
   const inspectorOpen = useUiStore((state) => state.inspector.open);
   const [lastCharge, setLastCharge] = useState<number | null>(null);
+  const tileMenu = useRef<TileMenuHandle>(null);
 
   const { client } = host;
   const speed: Speed = host.snapshot?.header.speed ?? 1;
@@ -91,6 +94,14 @@ export function App() {
     },
     [client],
   );
+
+  /** The viewport's right click: the tile menu opens at the pointer. */
+  const openTileMenu = useCallback<NonNullable<ViewportProps["onSecondaryClick"]>>(
+    (tile, point) => tileMenu.current?.openAt(tile, point),
+    [],
+  );
+  // The newest event the host has seen. The inspector looks at the park again after each one.
+  const lastEventId = host.events.at(-1)?.entry.id;
 
   const { halted } = host;
   const disconnected = host.status === "disconnected";
@@ -239,12 +250,21 @@ export function App() {
 
   return (
     <div className="fixed inset-0 overflow-hidden bg-[#0d1117] font-sans text-ink select-none">
-      <Viewport
+      <TileContextMenu
+        ref={tileMenu}
         terrain={host.terrain}
-        tick={host.snapshot?.header.tick ?? 0}
-        client={client}
-        onResult={onResult}
-      />
+        execute={execute}
+        notify={push}
+        disabled={disconnected}
+      >
+        <Viewport
+          terrain={host.terrain}
+          tick={host.snapshot?.header.tick ?? 0}
+          client={client}
+          onResult={onResult}
+          onSecondaryClick={openTileMenu}
+        />
+      </TileContextMenu>
       <div className="pointer-events-none absolute inset-0" onClick={releaseFocus}>
         <div className="pointer-events-auto absolute top-3.5 left-3.5">
           {host.snapshot && (
@@ -254,10 +274,13 @@ export function App() {
               speed={speed}
               onSpeedChange={changeSpeed}
               speedDisabled={host.halted || disconnected}
+              onOpenFinances={() => uiStore.getState().openInspector("finances")}
+              onOpenOverview={() => uiStore.getState().openInspector("overview")}
             />
           )}
         </div>
-        <div className="pointer-events-auto absolute bottom-4 left-1/2 flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-col items-center gap-2">
+        {/* Only the tray and the dock take the pointer; the space beside the narrower is the map's. */}
+        <div className="pointer-events-none absolute bottom-4 left-1/2 flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-col items-center gap-2">
           <Tray
             tool={uiTool}
             actions={actions}
@@ -292,24 +315,16 @@ export function App() {
             disabled={disconnected}
           />
         </div>
-        {inspectorOpen && (
-          // Stands in until the inspector comes, so that what the Park tray opens can be seen.
-          <div className="pointer-events-auto absolute top-24 right-3.5 w-64">
-            <Panel
-              title="Inspector"
-              actions={
-                <IconButton
-                  label="Close inspector"
-                  icon={<CloseIcon />}
-                  onClick={() => uiStore.getState().closeInspector()}
-                />
-              }
-            >
-              <p className="text-sm text-muted">Inspector coming in the next task</p>
-            </Panel>
-          </div>
-        )}
-        <Toast toasts={toasts} onDismiss={dismiss} />
+        <Inspector
+          terrain={host.terrain}
+          client={client}
+          actions={actions}
+          ctx={ctx}
+          execute={execute}
+          notify={push}
+          {...(lastEventId !== undefined && { lastEventId })}
+        />
+        <Toast toasts={toasts} onDismiss={dismiss} besideInspector={inspectorOpen} />
         {(host.status === "connecting" || host.status === "error") && (
           <div className="absolute inset-0 grid place-items-center">
             <p role="status" className="glass px-4 py-2 text-sm">
@@ -329,14 +344,6 @@ export function App() {
         {...(catalogError !== undefined && { catalogError })}
       />
     </div>
-  );
-}
-
-function CloseIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <path d="m4 4 8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
   );
 }
 

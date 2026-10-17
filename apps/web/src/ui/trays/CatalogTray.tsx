@@ -41,7 +41,7 @@ export function CatalogTray({ tool, actions, ctx, onError, disabled = false }: C
     return (
       <EmptyState
         title="Coming with the next update"
-        hint="Paths, rides, scenery, shops and staff arrive in Plan D."
+        hint="Paths, rides, scenery, shops and staff are coming soon."
       />
     );
   }

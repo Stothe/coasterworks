@@ -101,6 +101,7 @@ describe("park_status", () => {
         month: 0,
         day: 1,
         cash: 1_000_000,
+        monthStartCash: 1_000_000,
         loan: 0,
         guests: 0,
         rating: 0,
@@ -125,6 +126,8 @@ describe("park_status", () => {
         day: 10,
         // One month of interest on the loan has been charged: 5,000.00 at 10% a year over 8 months.
         cash: 1_000_000 + 5_000_00 - 62_50,
+        // April began after the interest was charged and nothing has moved the cash since.
+        monthStartCash: 1_000_000 + 5_000_00 - 62_50,
         loan: 5_000_00,
         guests: 0,
         rating: 0,
@@ -132,6 +135,19 @@ describe("park_status", () => {
         height: 4,
       },
     });
+  });
+});
+
+describe("park_status: the month's starting cash", () => {
+  it("stays where the month began while the cash moves, so a player can see the month's change", () => {
+    const { sim } = setup();
+    sim.execute("finance_take_loan", { amount: 2_000_00 });
+    sim.execute("terrain_raise", { x: 0, y: 0, w: 1, h: 1 });
+    const status = sim.query("park_status", {});
+    expect(status.ok && (status.result as { cash: number; monthStartCash: number })).toMatchObject({
+      monthStartCash: 1_000_000,
+    });
+    expect(status.ok && (status.result as { cash: number }).cash).not.toBe(1_000_000);
   });
 });
 

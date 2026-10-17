@@ -409,7 +409,7 @@ describe("CatalogTray", () => {
       renderTray({ tool, actions: [action("terrain_raise", "terrain"), action("ui.pause", "ui")] });
       expect(screen.getByText("Coming with the next update")).toBeTruthy();
       expect(
-        screen.getByText("Paths, rides, scenery, shops and staff arrive in Plan D."),
+        screen.getByText("Paths, rides, scenery, shops and staff are coming soon."),
       ).toBeTruthy();
       expect(screen.queryByRole("button")).toBeNull();
     },
@@ -544,6 +544,14 @@ describe("ParkTray", () => {
       click(name);
       expect(uiStore.getState().inspector, name).toEqual({ open: true, tab });
     }
+  });
+
+  it("selects the park, so the one inspector shows it and not a tile that was selected before", () => {
+    renderTray({ tool: "park" });
+    uiStore.getState().inspectTile(3, 3);
+    click("Finances");
+    expect(uiStore.getState().selection).toEqual({ kind: "park" });
+    expect(uiStore.getState().inspector).toEqual({ open: true, tab: "finances" });
   });
 
   it("is turned off with the rest", () => {

@@ -8,7 +8,7 @@ import {
 import type { ExecResult } from "@coasterworks/sim";
 import { useEffect, useRef } from "react";
 import { CLASSIC_VIEW_EVENT, onShellEvent } from "../host/shell";
-import { useUiStore } from "../state/uiStore";
+import { uiStore, useUiStore } from "../state/uiStore";
 import { brushRect, planPlacement, timeOfDay } from "./brush";
 import { classicCycle, onClassicViewRequest } from "./classicView";
 import { framingDistance } from "./framing";
@@ -20,7 +20,18 @@ export interface ViewportProps {
   client: SimClient | null;
   /** Called with the outcome of every command a click sent, including one that could not be sent. */
   onResult(result: ExecResult): void;
+  /**
+   * Called when the player right-clicks a tile: a right press released without dragging, which
+   * would otherwise have turned the view. `point` is where, in window coordinates, for a menu.
+   */
+  onSecondaryClick?(
+    tile: { x: number; y: number },
+    point: { clientX: number; clientY: number },
+  ): void;
 }
+
+/** Pointer travel in pixels past which a right press is an orbit and no longer a click. */
+const CLICK_SLOP = 4;
 
 /** A scene and whether it has been given terrain yet. */
 interface Live {
@@ -48,7 +59,8 @@ function failure(error: unknown): ExecResult {
 /**
  * The 3D view of the park, and the pointer input that edits it. What a click does is the
  * placement in the UI store, which the dock's trays and the command bar start: with none in
- * hand it does nothing, and nothing is outlined under the pointer.
+ * hand it does nothing but, under the Select tool, select the tile for the inspector. Nothing is
+ * outlined under the pointer without a placement.
  */
 export function Viewport(props: ViewportProps) {
   const placement = useUiStore((state) => state.placement);
@@ -91,7 +103,13 @@ export function Viewport(props: ViewportProps) {
       },
       onTileClick: (x, y, mods) => {
         const { client, terrain, placement, onResult } = latest.current;
-        if (!client || !terrain || !placement) return;
+        if (!terrain) return;
+        if (!placement) {
+          // Nothing in hand but the pointer: a click looks at the tile.
+          if (uiStore.getState().tool === "select") uiStore.getState().inspectTile(x, y);
+          return;
+        }
+        if (!client) return;
         const plan = planPlacement(placement, mods, x, y, terrain);
         if (!plan) return;
         client
@@ -99,6 +117,33 @@ export function Viewport(props: ViewportProps) {
           .then(onResult, (error: unknown) => onResult(failure(error)));
       },
     });
+
+    // A right press (or ctrl + press, the Mac's) turns the view if it moves. If it does not, it was
+    // a click: it is told to the app, whose menu opens at the pointer. The controls above have
+    // already taken the press, and the browser's own menu is cancelled there.
+    let press: { id: number; x: number; y: number; moved: boolean } | null = null;
+    const onPressDown = (e: PointerEvent) => {
+      const secondary = e.button === 2 || (e.button === 0 && e.ctrlKey);
+      press = secondary ? { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false } : null;
+    };
+    const onPressMove = (e: PointerEvent) => {
+      if (press?.id !== e.pointerId) return;
+      if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > CLICK_SLOP) press.moved = true;
+    };
+    const onPressUp = (e: PointerEvent) => {
+      const mine = press;
+      press = null;
+      if (!mine || mine.moved || mine.id !== e.pointerId) return;
+      const tile = scene.pickAt(e.clientX, e.clientY);
+      if (tile) latest.current.onSecondaryClick?.(tile, { clientX: e.clientX, clientY: e.clientY });
+    };
+    const onPressCancel = () => {
+      press = null;
+    };
+    canvas.addEventListener("pointerdown", onPressDown);
+    canvas.addEventListener("pointermove", onPressMove);
+    canvas.addEventListener("pointerup", onPressUp);
+    canvas.addEventListener("pointercancel", onPressCancel);
 
     // Home, the Classic view action and the desktop app's View > Classic View menu item all go to
     // the next of RCT's four angles.
@@ -119,6 +164,10 @@ export function Viewport(props: ViewportProps) {
       stopShell();
       stopRequest();
       observer.disconnect();
+      canvas.removeEventListener("pointerdown", onPressDown);
+      canvas.removeEventListener("pointermove", onPressMove);
+      canvas.removeEventListener("pointerup", onPressUp);
+      canvas.removeEventListener("pointercancel", onPressCancel);
       detach();
       scene.dispose();
       live.current = null;
