@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   GUEST_CAP,
   GuestState,
+  LOST_GIVE_UP,
   Rng,
   Sim,
   THOUGHT,
@@ -720,6 +721,146 @@ describe("lost guests", () => {
       Array.from(world.guests.state.subarray(0, world.guests.count)).includes(GuestState.LOST),
     ).toBe(false);
     expect(world.guests.nextGuestId - 1 - world.guests.count).toBeGreaterThanOrEqual(5);
+  });
+});
+
+describe("lost guests giving up", () => {
+  /**
+   * A park whose whole footpath has been taken up, so no guest in it can go anywhere. These parks
+   * are shut, so that nobody new arrives while the test waits thousands of ticks.
+   */
+  function pathlessPark(): Sim {
+    const sim = makePark({ rating: 0, open: false });
+    run(sim, "path_remove", { x: 8, y: 4, w: 1, h: 19 });
+    return sim;
+  }
+
+  it("counts the ticks a guest is lost, and only those", () => {
+    const sim = pathlessPark();
+    const { world } = sim;
+    const lost = placeGuest(world, { x: 8, y: 10 }, GuestState.LOST);
+    const id = at(world.guests.id, lost);
+    expect(at(world.guests.lostTicks, lost)).toBe(0);
+
+    sim.step(10);
+    expect(at(world.guests.lostTicks, findGuest(world, id))).toBe(10);
+    sim.step(90);
+    expect(at(world.guests.lostTicks, findGuest(world, id))).toBe(100);
+
+    // A guest that is not lost counts nothing.
+    const other = makePark({ rating: 0, open: false });
+    const slot = placeGuest(other.world, { x: 8, y: 10 }, GuestState.WANDERING);
+    other.step(300);
+    expect(at(other.world.guests.state, slot)).not.toBe(GuestState.LOST);
+    expect(at(other.world.guests.lostTicks, slot)).toBe(0);
+  });
+
+  it("gives up after LOST_GIVE_UP ticks lost: the guest is gone, thinking it is going home", () => {
+    expect(LOST_GIVE_UP).toBe(2400);
+    const sim = pathlessPark();
+    const { world } = sim;
+    const slot = placeGuest(world, { x: 8, y: 10 }, GuestState.LOST);
+    const id = at(world.guests.id, slot);
+    world.guests.lostTicks[slot] = LOST_GIVE_UP - 2;
+    const cash = world.finance.cash;
+    const income = { ...world.park.income };
+
+    sim.step(1);
+    expect(at(world.guests.lostTicks, findGuest(world, id))).toBe(LOST_GIVE_UP - 1);
+    expect(world.guests.count).toBe(1);
+    sim.step(1);
+    expect(findGuest(world, id)).toBe(-1);
+    expect(world.guests.count).toBe(0);
+    expect(world.park.guestsInPark).toBe(0);
+    // A removed guest's slot keeps what it last held.
+    expect(at(world.guests.thought, slot)).toBe(THOUGHT.GOING_HOME);
+    // Nobody is paid back for a visit that went wrong.
+    expect(world.finance.cash).toBe(cash);
+    expect(world.park.income).toEqual(income);
+  });
+
+  it("gives up on ten guests whose only path was cut from under them, within 3,000 ticks", () => {
+    const sim = makePark({ rating: 0, open: false });
+    const { world } = sim;
+    for (let y = 5; y <= 14; y++) {
+      const wandering = y % 2 === 1;
+      placeGuest(world, { x: 8, y }, wandering ? GuestState.WANDERING : GuestState.HEADING, {
+        dest: wandering ? -1 : tileIndexOf(world, 8, 4),
+      });
+    }
+    sim.step(30);
+    expect(world.park.guestsInPark).toBe(10);
+
+    run(sim, "path_remove", { x: 8, y: 4, w: 1, h: 19 });
+    const ticks = stepUntil(sim, () => world.guests.count === 0, 3000);
+
+    expect(ticks).toBeGreaterThan(LOST_GIVE_UP);
+    expect(world.park.guestsInPark).toBe(0);
+    expect(liveCount(world)).toBe(0);
+  });
+
+  it("gives up on guests cut off from the gate who can still get about, once they try to leave", () => {
+    const sim = makePark({ rating: 0, open: false });
+    const { world } = sim;
+    // Worn out, so they want to go home; and the path ends one tile short of the gate.
+    for (let y = 5; y <= 9; y++) {
+      placeGuest(world, { x: 8, y }, GuestState.WANDERING, { energy: 0 });
+    }
+    run(sim, "path_remove", { x: 8, y: 22, w: 1, h: 1 });
+
+    // They are lost, then wander, then try to leave, and are lost again, round and round; the time
+    // they spend lost adds up all the same.
+    const sawWandering = { seen: false };
+    stepUntil(
+      sim,
+      () => {
+        for (let slot = 0; slot < world.guests.count; slot++) {
+          if (at(world.guests.state, slot) === GuestState.WANDERING) sawWandering.seen = true;
+        }
+        return world.guests.count === 0;
+      },
+      3000,
+    );
+    expect(sawWandering.seen).toBe(true);
+    expect(world.park.guestsInPark).toBe(0);
+  });
+
+  it("does not give up on a guest who is cut off from the gate but has no wish to leave", () => {
+    const sim = makePark({ rating: 0, open: false });
+    const { world } = sim;
+    placeGuest(world, { x: 8, y: 6 }, GuestState.WANDERING);
+    run(sim, "path_remove", { x: 8, y: 11, w: 1, h: 12 });
+
+    sim.step(3000);
+    expect(world.guests.count).toBe(1);
+    expect(world.park.guestsInPark).toBe(1);
+    expect(at(world.guests.lostTicks, 0)).toBeLessThan(LOST_GIVE_UP);
+  });
+
+  it("starts counting again from nothing once a guest finds a way out", () => {
+    const sim = pathlessPark();
+    const { world } = sim;
+    const slot = placeGuest(world, { x: 8, y: 10 }, GuestState.LOST);
+    const id = at(world.guests.id, slot);
+    world.guests.lostTicks[slot] = LOST_GIVE_UP - 1000;
+    sim.step(100);
+    expect(at(world.guests.lostTicks, findGuest(world, id))).toBe(LOST_GIVE_UP - 900);
+
+    run(sim, "path_build", { x: 8, y: 4, w: 1, h: 19, kind: "foot" });
+    stepUntil(sim, () => at(world.guests.state, findGuest(world, id)) === GuestState.LEAVING, 200);
+    expect(at(world.guests.lostTicks, findGuest(world, id))).toBe(0);
+    stepUntil(sim, () => findGuest(world, id) < 0, 600);
+  });
+
+  it("starts every new guest at zero, whatever the slot held before", () => {
+    const sim = makePark({ rating: 0, open: false });
+    const { world } = sim;
+    const first = placeGuest(world, { x: 8, y: 10 }, GuestState.WANDERING);
+    world.guests.lostTicks[first] = 1234;
+    removeGuest(world, first);
+    sim.step(1);
+    const again = spawn(world);
+    expect(at(world.guests.lostTicks, again)).toBe(0);
   });
 });
 

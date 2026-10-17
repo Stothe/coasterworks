@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { defineQuery } from "../commands/define.js";
+import { copyMonthRecord, monthNet } from "../park/types.js";
 import { dateOf, formatDate } from "../time.js";
 import { MAX_HEIGHT } from "../world/types.js";
 
@@ -50,4 +51,31 @@ export const parkBounds = defineQuery({
     height: world.terrain.height,
     maxHeight: MAX_HEIGHT,
   }),
+});
+
+/** The money: cash and loan, this month so far, and the finished months. */
+export const financeSummary = defineQuery({
+  name: "finance_summary",
+  description:
+    "Summarizes the park's money, all in cents. `cash` and `loan`; `thisMonth` { entry, rides, shops, running, wages, net } for the month so far, where `net` is income less running costs and wages; `lastMonth`, the month that has just ended (or null in the first month); and `history`, up to the last 12 finished months, oldest first, each { year, month, entry, rides, shops, running, wages, net } with `month` 0-based (March = 0).",
+  category: "finance",
+  input: z.object({}),
+  run: (world) => {
+    const { park } = world;
+    const history = park.history.map(copyMonthRecord);
+    return {
+      cash: world.finance.cash,
+      loan: world.finance.loan,
+      thisMonth: {
+        entry: park.monthly.entry,
+        rides: park.monthly.rides,
+        shops: park.monthly.shops,
+        running: park.monthly.running,
+        wages: park.monthly.wages,
+        net: monthNet(park.monthly),
+      },
+      lastMonth: history.at(-1) ?? null,
+      history,
+    };
+  },
 });

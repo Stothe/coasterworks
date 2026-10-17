@@ -7,9 +7,10 @@ import {
   NAME_COUNT,
   NO_TILE,
 } from "../guests/types.js";
-import { MAX_ENTRY_FEE, MAX_RATING } from "../park/types.js";
+import { HISTORY_MONTHS, MAX_ENTRY_FEE, MAX_RATING, type ParkState } from "../park/types.js";
 import { PATH_QUEUE, edgeSide } from "../paths/paths.js";
 import { inBounds } from "../terrain/terrain.js";
+import { MONTHS_PER_YEAR } from "../time.js";
 import { MAX_HEIGHT, type World } from "../world/types.js";
 
 /** Highest `Surface` value: grass, sand, dirt, rock, snow. */
@@ -23,11 +24,13 @@ const MAX_SURFACE = 4;
  *     `MAX_HEIGHT`, every path value 0 to 2
  *   - the park's entrance, if it has one, is on the map and on its edge; the entry fee is 0 to
  *     $100.00, the rating 0 to 999, and the guest, admission, income, and expense counters are not
- *     negative
+ *     negative; its history holds at most 12 months, each a year from 1, a month 0 to 7, and whole
+ *     numbers of cents, with the income and costs not negative
  *   - every live guest has an id that is above 0, below `nextGuestId`, and used by no other guest;
- *     a state 0 to 5, a colour 0 to 8, a name and a thought that exist, cash and idle times that are
- *     not negative; a position and a target tile on the map or one tile outside it (the entrance
- *     lane); and a destination that is a tile on the map or one of the two "walking out" markers
+ *     a state 0 to 5, a colour 0 to 8, a name and a thought that exist, cash, idle times, and lost
+ *     times that are not negative; a position and a target tile on the map or one tile outside it
+ *     (the entrance lane); and a destination that is a tile on the map or one of the two "walking
+ *     out" markers
  *   - log ids start above 0, strictly increase, and are all below `nextId`
  *   - every id on the undo and redo stacks names a log entry, and no id is on the stacks twice,
  *     which covers an id on both
@@ -120,6 +123,28 @@ function parkProblem(world: World): string | null {
   for (const [label, value] of counters) {
     if (value < 0) return `${label} is ${value}, which is below 0`;
   }
+  return historyProblem(park.history);
+}
+
+/** The first thing wrong with the months of history, as a sentence, or null. */
+function historyProblem(history: ParkState["history"]): string | null {
+  if (history.length > HISTORY_MONTHS) {
+    return `history holds ${history.length} months, more than ${HISTORY_MONTHS}`;
+  }
+  for (const [i, record] of history.entries()) {
+    for (const [key, value] of Object.entries(record)) {
+      if (!Number.isInteger(value)) {
+        return `history[${i}].${key} is ${value}, which is not a whole number`;
+      }
+    }
+    if (record.year < 1) return `history[${i}].year is ${record.year}, which is below 1`;
+    if (record.month < 0 || record.month >= MONTHS_PER_YEAR) {
+      return `history[${i}].month is ${record.month}, outside 0 to ${MONTHS_PER_YEAR - 1}`;
+    }
+    for (const key of ["entry", "rides", "shops", "running", "wages"] as const) {
+      if (record[key] < 0) return `history[${i}].${key} is ${record[key]}, which is below 0`;
+    }
+  }
   return null;
 }
 
@@ -160,6 +185,9 @@ function guestProblem(world: World): string | null {
     }
     if ((g.thoughtTick[slot] as number) < 0) {
       return `${label} has thoughtTick ${g.thoughtTick[slot]}, which is below 0`;
+    }
+    if ((g.lostTicks[slot] as number) < 0) {
+      return `${label} has lostTicks ${g.lostTicks[slot]}, which is below 0`;
     }
 
     // A guest is on the map or one tile outside it, where the entrance lane is.

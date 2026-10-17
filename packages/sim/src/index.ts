@@ -15,6 +15,7 @@ export { ENTRANCE_COST } from "./commands/park.js";
 export { PATH_COST } from "./commands/path.js";
 export { MAX_ADVANCE_DAYS } from "./commands/sim.js";
 export { redoLast, undoLast } from "./commands/undo.js";
+export { LOST_GIVE_UP } from "./guests/behavior.js";
 export { guestName } from "./guests/names.js";
 export { THOUGHT, THOUGHTS, thoughtText } from "./guests/thoughts.js";
 export type { Mood, Thought } from "./guests/thoughts.js";
@@ -28,7 +29,7 @@ export {
   MAX_RATING,
   createParkState,
 } from "./park/types.js";
-export type { EdgeSide, Entrance, ParkState } from "./park/types.js";
+export type { EdgeSide, Entrance, MonthRecord, ParkState } from "./park/types.js";
 export {
   MAX_PATH_SLOPE,
   PATH_FOOT,

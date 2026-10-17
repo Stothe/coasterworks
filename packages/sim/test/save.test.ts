@@ -4,18 +4,21 @@ import { describe, expect, it } from "vitest";
 import {
   GUEST_CAP,
   GuestState,
+  LOST_GIVE_UP,
   MAX_HEIGHT,
   MIGRATIONS,
   Rng,
   SCHEMA_VERSION,
   SaveError,
   Sim,
+  createSamplePark,
   createWorld,
   deserializeWorld,
   hashWorld,
   migrate,
   serializeWorld,
   type Migration,
+  type MonthRecord,
   type World,
 } from "../src/index.js";
 import { compactGuests, removeGuest, spawnGuest } from "../src/guests/guests.js";
@@ -224,6 +227,19 @@ describe("save round trip", () => {
     world.park.income = { entry: 3_400_00, rides: 56_00, shops: 7_00 };
     world.park.expenses = { running: 80_00, wages: 9_00 };
     world.park.monthly = { entry: 100_00, rides: 20_00, shops: 3_00, running: 40_00, wages: 5_00 };
+    world.park.history = [
+      {
+        year: 1,
+        month: 7,
+        entry: 90_00,
+        rides: 10_00,
+        shops: 2_00,
+        running: 50_00,
+        wages: 8_00,
+        net: 44_00,
+      },
+      { year: 2, month: 0, entry: 1_00, rides: 0, shops: 0, running: 20_00, wages: 0, net: -19_00 },
+    ];
     expect(world.pathVersion).toBeGreaterThan(0);
 
     const loaded = deserializeWorld(serializeWorld(world));
@@ -334,6 +350,7 @@ describe("save format", () => {
       "income",
       "expenses",
       "monthly",
+      "history",
     ]);
   });
 
@@ -387,12 +404,12 @@ describe("deserializeWorld errors", () => {
     }
   });
 
-  it("throws the exact newer-version message for schema 4", () => {
+  it("throws the exact newer-version message for schema 5", () => {
     const doc = readDoc(serializeWorld(freshWorld()));
-    doc.schemaVersion = 4;
+    doc.schemaVersion = 5;
     expect(() => deserializeWorld(writeDoc(doc))).toThrow(SaveError);
     expect(() => deserializeWorld(writeDoc(doc))).toThrow(
-      "Save is from a newer version (schema 4, this build reads 3)",
+      "Save is from a newer version (schema 5, this build reads 4)",
     );
     let caught: unknown;
     try {
@@ -401,7 +418,7 @@ describe("deserializeWorld errors", () => {
       caught = error;
     }
     expect((caught as Error).message).toBe(
-      "Save is from a newer version (schema 4, this build reads 3)",
+      "Save is from a newer version (schema 5, this build reads 4)",
     );
     expect((caught as Error).name).toBe("SaveError");
   });
@@ -409,7 +426,7 @@ describe("deserializeWorld errors", () => {
   it("interpolates the versions into the newer-version message", () => {
     expectSaveError(
       () => deserializeWorld(writeDoc({ schemaVersion: 41 })),
-      /^Save is from a newer version \(schema 41, this build reads 3\)$/,
+      /^Save is from a newer version \(schema 41, this build reads 4\)$/,
     );
   });
 
@@ -550,6 +567,10 @@ describe("save integrity", () => {
       "the rating": (doc) => ((doc.park as { rating: number }).rating += 1),
       "the admissions": (doc) => ((doc.park as { totalAdmissions: number }).totalAdmissions += 1),
       "monthly wages": (doc) => ((doc.park as { monthly: { wages: number } }).monthly.wages += 1),
+      "a month of history": (doc) =>
+        ((doc.park as { history: unknown[] }).history = [
+          { year: 1, month: 0, entry: 1, rides: 0, shops: 0, running: 0, wages: 0, net: 1 },
+        ]),
       cash: (doc) => {
         const finance = doc.finance as { cash: number };
         finance.cash += 1;
@@ -761,6 +782,21 @@ describe("migration and the stored hash", () => {
   });
 });
 
+/** A finished month for the history, with any figures overridden. */
+function month(overrides: Partial<MonthRecord> = {}): MonthRecord {
+  return {
+    year: 1,
+    month: 0,
+    entry: 10_00,
+    rides: 0,
+    shops: 0,
+    running: 4_00,
+    wages: 0,
+    net: 6_00,
+    ...overrides,
+  };
+}
+
 /** Ways to break a world that `playedSim` makes (log ids 1 to 4, `nextId` 5, stacks [1, 2] and [3]). */
 const VIOLATIONS: Array<[string, (world: World) => void, RegExp]> = [
   ["a corner above the highest height", (w) => (w.terrain.corners[5] = MAX_HEIGHT + 1), /corner/],
@@ -787,6 +823,32 @@ const VIOLATIONS: Array<[string, (world: World) => void, RegExp]> = [
   ["negative entry income", (w) => (w.park.income.entry = -1), /income\.entry/],
   ["negative wage expenses", (w) => (w.park.expenses.wages = -1), /expenses\.wages/],
   ["negative monthly shop income", (w) => (w.park.monthly.shops = -1), /monthly\.shops/],
+  [
+    "thirteen months of history",
+    (w) => (w.park.history = Array.from({ length: 13 }, (_, i) => month({ month: i % 8 }))),
+    /history holds 13 months, more than 12/,
+  ],
+  ["a history year of 0", (w) => (w.park.history = [month({ year: 0 })]), /history\[0\]\.year/],
+  [
+    "a history month of 8",
+    (w) => (w.park.history = [month(), month({ month: 8 })]),
+    /history\[1\]\.month/,
+  ],
+  [
+    "a history month below 0",
+    (w) => (w.park.history = [month({ month: -1 })]),
+    /history\[0\]\.month/,
+  ],
+  [
+    "negative history income",
+    (w) => (w.park.history = [month({ shops: -1 })]),
+    /history\[0\]\.shops/,
+  ],
+  [
+    "negative history wages",
+    (w) => (w.park.history = [month({ wages: -5 })]),
+    /history\[0\]\.wages/,
+  ],
   [
     "a log id used twice",
     (w) => ((w.log[1] as { id: number }).id = (w.log[0] as { id: number }).id),
@@ -849,6 +911,22 @@ describe("validateWorldInvariants", () => {
     expect(validateWorldInvariants(world)).toBeNull();
   });
 
+  it("accepts twelve months of history, a loss, and the last month of a later year", () => {
+    const world = freshWorld();
+    world.park.history = Array.from({ length: 12 }, (_, i) => month({ year: 2, month: i % 8 }));
+    expect(validateWorldInvariants(world)).toBeNull();
+    world.park.history = [month({ month: 7, net: -4_00, entry: 0, running: 4_00 })];
+    expect(validateWorldInvariants(world)).toBeNull();
+  });
+
+  it("refuses a history figure that is not a whole number of cents", () => {
+    const world = freshWorld();
+    world.park.history = [month({ entry: 1.5 })];
+    expect(validateWorldInvariants(world)).toMatch(/history\[0\]\.entry.*whole number/);
+    world.park.history = [month(), month({ net: Number.NaN })];
+    expect(validateWorldInvariants(world)).toMatch(/history\[1\]\.net/);
+  });
+
   it("allows a stack entry that has no undo data, as a loan does", () => {
     const played = playedSim().world;
     const loan = played.log.find((entry) => entry.name === "finance_take_loan");
@@ -903,8 +981,8 @@ describe("migrate", () => {
   });
 
   it("has a migration for each schema before the current one, and none after", () => {
-    expect(Object.keys(MIGRATIONS).map(Number)).toEqual([1, 2]);
-    expect(SCHEMA_VERSION).toBe(3);
+    expect(Object.keys(MIGRATIONS).map(Number)).toEqual([1, 2, 3]);
+    expect(SCHEMA_VERSION).toBe(4);
   });
 
   it("runs the migration for the document's version and stamps the new schema version", () => {
@@ -915,6 +993,7 @@ describe("migrate", () => {
       },
       1: (doc: unknown) => doc,
       2: (doc: unknown) => doc,
+      3: (doc: unknown) => doc,
     };
     const input = { schemaVersion: 0, title: "Old Park" };
     const out = migrate(input, migrations);
@@ -928,6 +1007,7 @@ describe("migrate", () => {
       0: (doc: unknown) => ({ ...(doc as object), ranZero: true }),
       1: (doc: unknown) => doc,
       2: (doc: unknown) => doc,
+      3: (doc: unknown) => doc,
       [SCHEMA_VERSION]: (doc: unknown) => ({ ...(doc as object), ranCurrent: true }),
     };
     const out = migrate({ schemaVersion: 0 }, migrations) as Record<string, unknown>;
@@ -1012,8 +1092,11 @@ const V1_FIXTURE = fromBase64(
   readFileSync(new URL("./fixtures/sample-v1.park.b64", import.meta.url), "utf8").trim(),
 );
 
-/** The `hashWorld` of the schema 1 fixture, as the current build computes it once it is loaded. */
-const V1_FIXTURE_LOADED_HASH = "9ddd3cf4bd21555d";
+/**
+ * The `hashWorld` of the schema 1 fixture, as the current build computes it once it is loaded.
+ * (Re-pinned for schema 4: the park state the hash covers gained `history`.)
+ */
+const V1_FIXTURE_LOADED_HASH = "e39894caa776ed75";
 
 describe("schema 1 saves", () => {
   it("has a fixture that really is a schema 1 document, without paths or a park", () => {
@@ -1045,6 +1128,7 @@ describe("schema 1 saves", () => {
       income: { entry: 0, rides: 0, shops: 0 },
       expenses: { running: 0, wages: 0 },
       monthly: { entry: 0, rides: 0, shops: 0, running: 0, wages: 0 },
+      history: [],
     });
     expect(world.pathVersion).toBe(0);
     // And it came through the schema 2 to 3 step as well: no guests, and a stream for them.
@@ -1164,8 +1248,11 @@ const V2_FIXTURE = fromBase64(
   readFileSync(new URL("./fixtures/sample-v2.park.b64", import.meta.url), "utf8").trim(),
 );
 
-/** The `hashWorld` of the schema 2 fixture, as the current build computes it once it is loaded. */
-const V2_FIXTURE_LOADED_HASH = "30b12b374ee71f9e";
+/**
+ * The `hashWorld` of the schema 2 fixture, as the current build computes it once it is loaded.
+ * (Re-pinned for schema 4: the park state the hash covers gained `history`.)
+ */
+const V2_FIXTURE_LOADED_HASH = "2696e5afec5cba88";
 
 describe("schema 2 saves", () => {
   it("has a fixture that really is a schema 2 document, with a park but no guests", () => {
@@ -1244,14 +1331,12 @@ describe("MIGRATIONS[2]", () => {
       other: unknown;
     };
     expect(out.other).toEqual({ kept: true });
-    expect(Object.keys(out.guests)).toEqual([
-      "count",
-      "nextGuestId",
-      ...GUEST_ARRAYS.map(([name]) => name),
-    ]);
+    // The arrays schema 3 had: `lostTicks` came with schema 4.
+    const schema3 = GUEST_ARRAYS.filter(([name]) => name !== "lostTicks");
+    expect(Object.keys(out.guests)).toEqual(["count", "nextGuestId", ...schema3.map(([n]) => n)]);
     expect(out.guests.count).toBe(0);
     expect(out.guests.nextGuestId).toBe(1);
-    for (const [name, kind] of GUEST_ARRAYS) {
+    for (const [name, kind] of schema3) {
       expect(out.guests[name], name).toEqual({ $t: kind, $b64: "" });
     }
   });
@@ -1269,11 +1354,12 @@ describe("MIGRATIONS[2]", () => {
     expect(doc).toEqual(v2Doc());
   });
 
-  it("is run by migrate, which stamps schema 3", () => {
-    const out = migrate(v2Doc()) as Record<string, unknown>;
-    expect(out.schemaVersion).toBe(3);
+  it("is run by migrate, which carries on through the later steps to the current schema", () => {
+    const out = migrate({ ...v2Doc(), park: { name: "Old" } }) as Record<string, unknown>;
+    expect(out.schemaVersion).toBe(SCHEMA_VERSION);
     expect(out).toHaveProperty("guests");
     expect(out).toHaveProperty("rngStreams");
+    expect((out.park as { history: unknown }).history).toEqual([]);
   });
 
   it("refuses a document with no usable root generator as corrupt", () => {
@@ -1287,6 +1373,193 @@ describe("MIGRATIONS[2]", () => {
       { schemaVersion: 2, rng: [1, 2, 3] },
       { schemaVersion: 2, rng: [0, 0, 0, 0] },
       { schemaVersion: 2, rng: [1, 2, 3, 2 ** 32] },
+    ]) {
+      expectSaveError(() => migrate(doc), "Save file is corrupt");
+    }
+    expect(() => step(null)).toThrow(SaveError);
+  });
+});
+
+const V3_FIXTURE = fromBase64(
+  readFileSync(new URL("./fixtures/sample-v3.park.b64", import.meta.url), "utf8").trim(),
+);
+
+/** The `hashWorld` of the schema 3 fixture, as the current build computes it once it is loaded. */
+const V3_FIXTURE_LOADED_HASH = "41129abd7995cfb6";
+
+/**
+ * Builds the world the schema 3 fixture was saved from, with the current build: the sample park,
+ * its entrance, a footpath, a $4.00 fee, and 3,000 ticks open.
+ */
+function rebuildV3Fixture(): Sim {
+  const sim = new Sim(createSamplePark(7));
+  for (const [name, input] of [
+    ["park_set_entrance", { x: 40, y: 63 }],
+    ["path_build", { x: 40, y: 50, w: 1, h: 13, kind: "foot" }],
+    ["path_build", { x: 40, y: 50, w: 8, h: 1, kind: "foot" }],
+    ["park_set_entry_fee", { cents: 4_00 }],
+    ["park_rename", { name: "Leafy Lake" }],
+    ["park_open", {}],
+  ] as const) {
+    expect(sim.execute(name, input, "system").ok, name).toBe(true);
+  }
+  sim.step(3000);
+  return sim;
+}
+
+describe("schema 3 saves", () => {
+  it("has a fixture that really is a schema 3 document: no park history, no lost times", () => {
+    const doc = readDoc(V3_FIXTURE);
+    expect(doc.schemaVersion).toBe(3);
+    expect(doc.park as object).not.toHaveProperty("history");
+    const guests = doc.guests as Record<string, unknown>;
+    expect(guests).not.toHaveProperty("lostTicks");
+    expect(guests).toHaveProperty("sinceAction");
+    expect(guests.count).toBe(57);
+    // The hash it carries is the one the schema 3 build computed, which is not ours.
+    expect(doc.hash).toBe("1c4249a9b14da514");
+  });
+
+  it("loads as the current schema with no history and a lost time of zero for every guest", () => {
+    const world = deserializeWorld(V3_FIXTURE);
+    expect(world.meta.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(world.park.history).toEqual([]);
+    expect(world.guests.count).toBe(57);
+    expect(world.guests.lostTicks).toHaveLength(GUEST_CAP);
+    expect(world.guests.lostTicks.every((v) => v === 0)).toBe(true);
+  });
+
+  it("keeps the park, the guests, and the clock it had", () => {
+    const world = deserializeWorld(V3_FIXTURE);
+    expect(world.tick).toBe(3000);
+    expect(world.park).toMatchObject({
+      name: "Leafy Lake",
+      open: true,
+      entryFee: 4_00,
+      entrance: { x: 40, y: 63, side: 2 },
+      rating: 590,
+      guestsInPark: 57,
+      totalAdmissions: 57,
+      income: { entry: 228_00, rides: 0, shops: 0 },
+      monthly: { entry: 228_00, rides: 0, shops: 0, running: 0, wages: 0 },
+    });
+    // Every guest array came across as it was written.
+    const raw = (readDoc(V3_FIXTURE).guests as Record<string, { $b64: string }>)["happiness"];
+    expect(Array.from(world.guests.happiness.subarray(0, 57))).toEqual(
+      Array.from(fromBase64((raw as { $b64: string }).$b64)),
+    );
+    expect(world.guests.nextGuestId).toBe(58);
+  });
+
+  it("loads without comparing the schema 3 hash, and hashes to a pinned value", () => {
+    const world = deserializeWorld(V3_FIXTURE);
+    expect(hashWorld(world)).not.toBe("1c4249a9b14da514");
+    expect(hashWorld(world)).toBe(V3_FIXTURE_LOADED_HASH);
+    expect(hashWorld(deserializeWorld(V3_FIXTURE))).toBe(V3_FIXTURE_LOADED_HASH);
+  });
+
+  it("is the very world the current build makes from the same steps", () => {
+    // Nothing in those 3,000 ticks differs between the builds, so the migrated save and a park
+    // run from scratch have to agree on everything the hash covers.
+    expect(hashWorld(rebuildV3Fixture().world)).toBe(V3_FIXTURE_LOADED_HASH);
+  });
+
+  it("saves again as the current schema and reloads to the same world", () => {
+    const world = deserializeWorld(V3_FIXTURE);
+    const resaved = serializeWorld(world);
+    const doc = readDoc(resaved);
+    expect(doc.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(doc.hash).toBe(V3_FIXTURE_LOADED_HASH);
+    expect((doc.park as { history: unknown }).history).toEqual([]);
+    expect(hashWorld(deserializeWorld(resaved))).toBe(V3_FIXTURE_LOADED_HASH);
+  });
+
+  it("carries on as the original would: the month turns, then the park closes and empties", () => {
+    const loaded = new Sim(deserializeWorld(V3_FIXTURE));
+    const original = rebuildV3Fixture();
+    loaded.step(12_400 - 3000);
+    original.step(12_400 - 3000);
+    expect(loaded.hash()).toBe(original.hash());
+
+    const { park } = loaded.world;
+    expect(park.history).toHaveLength(1);
+    expect(park.history[0]).toMatchObject({ year: 1, month: 0, rides: 0, shops: 0 });
+    // What the first month took is in the book; what the second has taken since is not.
+    expect((park.history[0] as MonthRecord).entry + park.monthly.entry).toBe(park.income.entry);
+
+    expect(loaded.execute("park_close", {}).ok).toBe(true);
+    expect(original.execute("park_close", {}).ok).toBe(true);
+    loaded.step(3000);
+    original.step(3000);
+    expect(loaded.world.guests.count).toBe(0);
+    expect(loaded.world.park.guestsInPark).toBe(0);
+    expect(loaded.hash()).toBe(original.hash());
+  });
+});
+
+describe("MIGRATIONS[3]", () => {
+  const v3Doc = (count = 3) => ({
+    schemaVersion: 3,
+    park: { name: "Old", open: true },
+    guests: { count, nextGuestId: count + 1 },
+    other: { kept: true },
+  });
+
+  it("gives the park an empty history", () => {
+    const out = (MIGRATIONS[3] as Migration)(v3Doc()) as { park: unknown; other: unknown };
+    expect(out.park).toEqual({ name: "Old", open: true, history: [] });
+    expect(out.other).toEqual({ kept: true });
+  });
+
+  it("gives the guests a lost time of zero each: one 32-bit zero per guest", () => {
+    const out = (MIGRATIONS[3] as Migration)(v3Doc(3)) as {
+      guests: { count: number; nextGuestId: number; lostTicks: { $t: string; $b64: string } };
+    };
+    expect(out.guests.count).toBe(3);
+    expect(out.guests.nextGuestId).toBe(4);
+    expect(out.guests.lostTicks.$t).toBe("Int32Array");
+    expect(Array.from(fromBase64(out.guests.lostTicks.$b64))).toEqual(Array(12).fill(0));
+    // No guests: an empty array.
+    const empty = (MIGRATIONS[3] as Migration)(v3Doc(0)) as { guests: { lostTicks: unknown } };
+    expect(empty.guests.lostTicks).toEqual({ $t: "Int32Array", $b64: "" });
+    // A full house.
+    const full = (MIGRATIONS[3] as Migration)(v3Doc(GUEST_CAP)) as {
+      guests: { lostTicks: { $b64: string } };
+    };
+    expect(fromBase64(full.guests.lostTicks.$b64)).toHaveLength(GUEST_CAP * 4);
+  });
+
+  it("leaves the document it was given as it was", () => {
+    const doc = v3Doc();
+    (MIGRATIONS[3] as Migration)(doc);
+    expect(doc).toEqual(v3Doc());
+  });
+
+  it("is run by migrate, which stamps schema 4", () => {
+    const out = migrate(v3Doc()) as Record<string, unknown>;
+    expect(out.schemaVersion).toBe(4);
+    expect((out.park as { history: unknown }).history).toEqual([]);
+    expect(out.guests).toHaveProperty("lostTicks");
+  });
+
+  it("refuses a document with no park, no guest section, or a guest count it cannot use", () => {
+    const step = MIGRATIONS[3] as Migration;
+    const withCount = (count: unknown) => ({ ...v3Doc(), guests: { count } });
+    for (const doc of [
+      null,
+      5,
+      [],
+      { schemaVersion: 3 },
+      { schemaVersion: 3, park: {} },
+      { schemaVersion: 3, guests: { count: 0 } },
+      { ...v3Doc(), park: [] },
+      { ...v3Doc(), guests: 4 },
+      withCount(undefined),
+      withCount("2"),
+      withCount(1.5),
+      withCount(-1),
+      withCount(GUEST_CAP + 1),
+      withCount(Number.NaN),
     ]) {
       expectSaveError(() => migrate(doc), "Save file is corrupt");
     }
@@ -1313,6 +1586,9 @@ describe("guests in a save", () => {
   it("round-trips every guest array, the counters, the stream, and the hash", () => {
     const sim = busyPark();
     const { world } = sim;
+    // Lost times, which nobody in a busy park has.
+    world.guests.lostTicks[2] = 777;
+    world.guests.lostTicks[world.guests.count - 1] = LOST_GIVE_UP - 1;
     expect(world.guests.count).toBeGreaterThan(10);
     expect(world.guests.nextGuestId - 1).toBeGreaterThan(world.guests.count);
     const loaded = deserializeWorld(serializeWorld(world));
@@ -1512,6 +1788,7 @@ const GUEST_VIOLATIONS: Array<[string, (world: World) => void, RegExp]> = [
   ["a guest destination below the sentinels", (w) => (w.guests.dest[1] = -3), /destination/],
   ["a negative idle time", (w) => (w.guests.sinceAction[0] = -1), /sinceAction/],
   ["a negative thought time", (w) => (w.guests.thoughtTick[1] = -1), /thoughtTick/],
+  ["a negative lost time", (w) => (w.guests.lostTicks[0] = -1), /lostTicks/],
 ];
 
 describe("guest invariants", () => {

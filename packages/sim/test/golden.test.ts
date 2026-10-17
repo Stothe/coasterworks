@@ -20,6 +20,11 @@ const scenario = () => parseScenario(JSON.parse(scenarioText));
  *    park is open and runs 2,400 ticks, so guests arrive, pay, walk the path, and think; and
  *    `hashWorld` now covers the guest store and the guests' rng stream. The final 400 ticks run
  *    with the park closed and the guests still inside.
+ *  - Plan D1 Task 4 (park flow): re-recorded. `hashWorld` now covers the park's month-by-month
+ *    history and each guest's lost time, closing the park sends every guest home, and a month
+ *    that has just ended goes into the history. The scenario gains a 31-day `sim_advance` with the
+ *    park open (a month turns in the middle of it), so the final 400 ticks, with the park closed,
+ *    empty the park.
  */
 describe("golden scenario 1", () => {
   it("ends on the recorded hash", () => {
@@ -80,8 +85,8 @@ describe("runScenario", () => {
     const sim = runScenario(scenario());
     expect(sim.world.terrain.width).toBe(32);
     expect(sim.world.meta.name).toBe("golden");
-    // 120 ticks, then 70 days, then 2,400 ticks with the park open, then 400 with it closed.
-    expect(sim.world.tick).toBe(120 + 70 * 400 + 2400 + 400);
+    // 120 ticks, then 70 days, then 2,400 ticks and 31 days with the park open, then 400 shut.
+    expect(sim.world.tick).toBe(120 + 70 * 400 + 2400 + 31 * 400 + 400);
     expect(sim.world.log.some((entry) => entry.name === "undo")).toBe(true);
   });
 
@@ -102,7 +107,12 @@ describe("runScenario", () => {
   });
 
   it("lets guests in, so the hash is guarding the guest system too", () => {
-    const sim = runScenario(scenario());
+    // Everything up to the closing of the park.
+    const steps = scenario().steps;
+    const closing = steps.findIndex((step) => "exec" in step && step.exec[0] === "park_close");
+    expect(closing).toBeGreaterThan(0);
+    const sim = runScenario({ ...scenario(), steps: steps.slice(0, closing) });
+
     const status = sim.query("park_status", {});
     if (!status.ok) throw new Error(status.error);
     const park = status.result as {
@@ -112,8 +122,7 @@ describe("runScenario", () => {
       income: { entry: number };
       open: boolean;
     };
-    // The park was open for 2,400 ticks and shut for 400 after; guests who got in are still there.
-    expect(park.open).toBe(false);
+    expect(park.open).toBe(true);
     expect(park.guestsInPark).toBeGreaterThan(0);
     expect(park.guests).toBe(park.guestsInPark);
     expect(park.totalAdmissions).toBeGreaterThanOrEqual(park.guestsInPark);
@@ -123,6 +132,38 @@ describe("runScenario", () => {
     const g = sim.world.guests;
     expect(Array.from(g.sinceAction.subarray(0, g.count)).some((v) => v > 0)).toBe(true);
     expect(g.nextGuestId - 1).toBeGreaterThanOrEqual(park.totalAdmissions);
+
+    // Closing the park and waiting 400 ticks is the end of the scenario, and empties the park.
+    sim.execute("park_close", {});
+    sim.step(400);
+    expect(sim.world.park.open).toBe(false);
+    expect(sim.world.park.guestsInPark).toBe(0);
+    expect(sim.world.guests.count).toBe(0);
+    expect(sim.hash()).toBe(expectedHash);
+  });
+
+  it("closes the books on three months, so the hash is guarding the history too", () => {
+    const sim = runScenario(scenario());
+    const out = sim.query("finance_summary", {});
+    if (!out.ok) throw new Error(out.error);
+    const summary = out.result as {
+      history: Array<{ year: number; month: number; entry: number; net: number }>;
+      lastMonth: { year: number; month: number; entry: number } | null;
+      thisMonth: { entry: number; net: number };
+    };
+    // March and April ended before the park opened; May ended in the middle of the 31 days.
+    expect(summary.history.map((r) => [r.year, r.month])).toEqual([
+      [1, 0],
+      [1, 1],
+      [1, 2],
+    ]);
+    expect(summary.history.map((r) => r.entry === 0)).toEqual([true, true, false]);
+    expect(summary.lastMonth).toEqual(summary.history[2]);
+    // Every fee taken is in a month's book or in the month under way, and nowhere twice.
+    const booked = summary.history.reduce((total, r) => total + r.entry, 0);
+    expect(booked + summary.thisMonth.entry).toBe(sim.world.park.income.entry);
+    expect(summary.thisMonth.net).toBe(summary.thisMonth.entry);
+    expect(sim.world.park.income.entry).toBe(sim.world.park.totalAdmissions * 300);
   });
 
   it("throws with the step number and the reason when a step fails", () => {

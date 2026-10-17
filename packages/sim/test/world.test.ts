@@ -127,6 +127,20 @@ describe("hashWorld", () => {
       ["monthly shop income", (w) => void (w.park.monthly.shops = 1)],
       ["monthly running costs", (w) => void (w.park.monthly.running = 1)],
       ["monthly wages", (w) => void (w.park.monthly.wages = 1)],
+      [
+        "a month of history",
+        (w) =>
+          void w.park.history.push({
+            year: 1,
+            month: 0,
+            entry: 0,
+            rides: 0,
+            shops: 0,
+            running: 0,
+            wages: 0,
+            net: 0,
+          }),
+      ],
       ["cash", (w) => void (w.finance.cash += 1)],
       ["loan", (w) => void (w.finance.loan = 100)],
       ["month-start cash", (w) => void (w.finance.monthStart.cash = 0)],

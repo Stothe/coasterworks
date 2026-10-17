@@ -20,7 +20,7 @@ import {
 import { catalogListQuery } from "./queries/catalog.js";
 import { guestGet, guestList, guestThoughts } from "./queries/guest.js";
 import { logRecent, undoState } from "./queries/log.js";
-import { parkBounds, parkStatus } from "./queries/park.js";
+import { financeSummary, parkBounds, parkStatus } from "./queries/park.js";
 import { terrainGet } from "./queries/terrain.js";
 
 /** A registry holding every command and query in the sim. */
@@ -44,6 +44,7 @@ export function createDefaultRegistry(): Registry {
   registry.register(financeRepayLoan);
   registry.registerQuery(parkStatus);
   registry.registerQuery(parkBounds);
+  registry.registerQuery(financeSummary);
   registry.registerQuery(terrainGet);
   registry.registerQuery(logRecent);
   registry.registerQuery(undoState);

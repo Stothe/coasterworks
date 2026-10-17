@@ -22,13 +22,14 @@ function setup(opts: { width?: number; height?: number } = {}) {
 }
 
 describe("default registry", () => {
-  it("registers the nine queries, after the commands, with their categories", () => {
+  it("registers the ten queries, after the commands, with their categories", () => {
     const queries = createDefaultRegistry()
       .catalog()
       .filter((e) => e.kind === "query");
     expect(queries.map((e) => [e.name, e.category, e.undoable])).toEqual([
       ["park_status", "park", false],
       ["park_bounds", "park", false],
+      ["finance_summary", "finance", false],
       ["terrain_get", "terrain", false],
       ["log_recent", "sim", false],
       ["undo_state", "sim", false],

@@ -3,7 +3,7 @@ import { RouteCache, UNREACHABLE } from "../paths/routing.js";
 import type { Rng } from "../rng.js";
 import { inBounds, tileBase } from "../terrain/terrain.js";
 import type { World } from "../world/types.js";
-import { TILE_UNITS, laneTileX, laneTileY, removeGuest } from "./guests.js";
+import { TILE_UNITS, forEachGuest, laneTileX, laneTileY, removeGuest } from "./guests.js";
 import { THOUGHT } from "./thoughts.js";
 import {
   DEST_EXIT,
@@ -28,6 +28,12 @@ export const MAX_WAYPOINTS = 32;
 export const LOST_RETRY_INTERVAL = 200;
 /** How far, in tiles, a lost guest looks for a path to walk to. */
 export const LOST_SEARCH_RADIUS = 8;
+/**
+ * A guest that has spent this many ticks lost (six game days) without finding a way to the exit
+ * gives up on the park and is gone: thinking it is going home, and not refunded. Without this a
+ * guest cut off from the gate could be lost for ever, and drag the rating down with it.
+ */
+export const LOST_GIVE_UP = 2400;
 
 /** Ticks between one point of hunger, and of thirst, and of a step of mood. */
 export const HUNGER_INTERVAL = 40;
@@ -423,8 +429,41 @@ function leave(world: World, slot: number, routes: RouteCache): void {
     return;
   }
   const next = routes.nextStep(here, exit);
-  if (next < 0) goLost(world, slot, routes);
-  else setTarget(world, slot, next);
+  if (next < 0) {
+    goLost(world, slot, routes);
+  } else {
+    // There is a way out, so whatever time it spent lost before no longer counts against it.
+    g.lostTicks[slot] = 0;
+    setTarget(world, slot, next);
+  }
+}
+
+/**
+ * Sends every guest inside the park home, as when the park closes: each one wandering, heading
+ * somewhere, or lost starts LEAVING for the entrance, thinking the park is closed. A guest keeps
+ * walking to the tile it is already heading for, and then follows the route out. Guests already
+ * leaving are left alone, and so are guests still outside the gate, who are turned away when they
+ * reach it. Nobody is charged or refunded: ENTERING is the only state that pays. Does nothing if
+ * the park has no entrance to send them to.
+ */
+export function sendGuestsHome(world: World): void {
+  const exit = entranceIndex(world);
+  if (exit < 0) return;
+  const g = world.guests;
+  forEachGuest(world, (slot) => {
+    const state = g.state[slot];
+    if (
+      state !== GuestState.WANDERING &&
+      state !== GuestState.HEADING &&
+      state !== GuestState.LOST
+    ) {
+      return;
+    }
+    g.state[slot] = GuestState.LEAVING;
+    g.dest[slot] = exit;
+    g.lostTicks[slot] = 0;
+    think(world, slot, THOUGHT.PARK_CLOSED);
+  });
 }
 
 /**
@@ -450,8 +489,21 @@ function goLost(world: World, slot: number, routes: RouteCache): void {
   }
 }
 
+/**
+ * A lost guest counts every tick it is lost, and at `LOST_GIVE_UP` it gives up and is removed. The
+ * count is not cleared when it goes back to wandering because it can get about but not out: it is
+ * still cut off, and when it tries to leave it is lost again. It is cleared when the guest finds a
+ * step towards the exit (see `leave`), so a guest that was only lost for a while starts afresh.
+ */
 function lost(world: World, slot: number, routes: RouteCache): void {
   const g = world.guests;
+  const lostFor = (g.lostTicks[slot] as number) + 1;
+  if (lostFor >= LOST_GIVE_UP) {
+    think(world, slot, THOUGHT.GOING_HOME);
+    removeGuest(world, slot);
+    return;
+  }
+  g.lostTicks[slot] = lostFor;
   if (!atTarget(g, slot)) return;
   if ((world.tick + (g.id[slot] as number)) % LOST_RETRY_INTERVAL !== 0) return;
 

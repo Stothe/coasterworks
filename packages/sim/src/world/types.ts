@@ -4,7 +4,7 @@ import type { RouteCache } from "../paths/routing.js";
 import type { Rng } from "../rng.js";
 
 /** Version of the save-file schema. Bump when the serialized world shape changes. */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /** Highest corner height. Heights are integers in half-unit steps, 0..MAX_HEIGHT. */
 export const MAX_HEIGHT = 63;

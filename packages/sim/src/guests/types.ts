@@ -68,6 +68,7 @@ export const GUEST_ARRAYS = [
   ["thought", "Uint8Array"],
   ["thoughtTick", "Int32Array"],
   ["sinceAction", "Int32Array"],
+  ["lostTicks", "Int32Array"],
 ] as const;
 
 export type GuestArrayName = (typeof GUEST_ARRAYS)[number][0];
@@ -131,6 +132,11 @@ export interface GuestStore {
   thoughtTick: Int32Array;
   /** Ticks since the guest last did something that counts: got in, or chose somewhere new to go. */
   sinceAction: Int32Array;
+  /**
+   * Ticks the guest has spent LOST since it last found a way to the exit. At `LOST_GIVE_UP` it
+   * gives up and goes home. 0 for a guest that is not lost.
+   */
+  lostTicks: Int32Array;
 }
 
 /** A set of path tiles the guests choose their walks from. Runtime only. */

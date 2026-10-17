@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sendGuestsHome } from "../guests/behavior.js";
 import { MAX_ENTRY_FEE, type Entrance } from "../park/types.js";
 import { PATH_NONE, edgeSide } from "../paths/paths.js";
 import { inBounds, tileIndex } from "../terrain/terrain.js";
@@ -89,7 +90,8 @@ export const parkOpen = defineCommand({
 
 export const parkClose = defineCommand({
   name: "park_close",
-  description: "Closes the park: no new guests arrive. Closing a closed park changes nothing.",
+  description:
+    "Closes the park: guests arriving at the gate are turned away, and every guest inside starts walking out to the entrance. Nobody is charged again on the way out, even if the park reopens. Reversing it only reopens the park; guests already sent home keep leaving. Closing a closed park only sends home any guests still inside.",
   category: "park",
   input: z.object({}),
   undoable: true,
@@ -97,8 +99,10 @@ export const parkClose = defineCommand({
   apply: (world) => {
     const previous = world.park.open;
     world.park.open = false;
+    sendGuestsHome(world);
     return { previous };
   },
+  // Puts the flag back and nothing else: the guests it sent home keep on leaving.
   revert: (world, _input, undo: { previous: boolean }) => {
     world.park.open = undo.previous;
   },

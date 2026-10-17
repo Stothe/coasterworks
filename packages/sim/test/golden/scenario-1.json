@@ -27,6 +27,7 @@
     { "redo": true },
     { "exec": ["park_set_entry_fee", { "cents": 300 }] },
     { "tick": 2400 },
+    { "exec": ["sim_advance", { "days": 31 }] },
     { "exec": ["park_close", {}] },
     { "tick": 400 }
   ]

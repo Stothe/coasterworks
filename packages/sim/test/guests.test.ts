@@ -69,6 +69,7 @@ describe("the guest store", () => {
     expect(g.thought).toBeInstanceOf(Uint8Array);
     expect(g.thoughtTick).toBeInstanceOf(Int32Array);
     expect(g.sinceAction).toBeInstanceOf(Int32Array);
+    expect(g.lostTicks).toBeInstanceOf(Int32Array);
   });
 
   it("has its own rng stream, forked from the root at creation", () => {
@@ -140,6 +141,7 @@ describe("spawnGuest", () => {
       expect(at(g.name, slot)).toBeLessThan(64 * 32);
       expect(at(g.thought, slot)).toBe(0);
       expect(at(g.sinceAction, slot)).toBe(0);
+      expect(at(g.lostTicks, slot)).toBe(0);
       // It is bound for the entrance tile, (5, 0): index 5 on a map 10 tiles wide.
       expect(at(g.dest, slot)).toBe(5);
       colors.add(at(g.color, slot));

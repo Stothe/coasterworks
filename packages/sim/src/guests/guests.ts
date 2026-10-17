@@ -49,6 +49,7 @@ export function createGuestStore(): GuestStore {
     thought: new Uint8Array(GUEST_CAP),
     thoughtTick: new Int32Array(GUEST_CAP),
     sinceAction: new Int32Array(GUEST_CAP),
+    lostTicks: new Int32Array(GUEST_CAP),
   };
 }
 
@@ -96,6 +97,7 @@ export function spawnGuest(world: World, rng: Rng): number {
   g.thought[slot] = 0;
   g.thoughtTick[slot] = 0;
   g.sinceAction[slot] = 0;
+  g.lostTicks[slot] = 0;
   return slot;
 }
 

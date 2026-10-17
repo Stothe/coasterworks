@@ -49,6 +49,7 @@ describe("park state on a new world", () => {
       income: { entry: 0, rides: 0, shops: 0 },
       expenses: { running: 0, wages: 0 },
       monthly: { entry: 0, rides: 0, shops: 0, running: 0, wages: 0 },
+      history: [],
     });
     expect(world.pathVersion).toBe(0);
     expect(world.terrain.path).toBeInstanceOf(Uint8Array);
