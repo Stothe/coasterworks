@@ -33,5 +33,7 @@ export default defineConfig({
     chunkSizeWarningLimit: 1000,
     rollupOptions,
   },
-  server: { port: 5173 },
+  // `strictPort`: the desktop app's `tauri dev` waits for exactly this address, so a busy port must
+  // be an error here, not a quiet move to 5174 that leaves the app attached to some other server.
+  server: { port: 5173, strictPort: true },
 });

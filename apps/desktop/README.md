@@ -23,8 +23,9 @@ The first run compiles Tauri, which takes several minutes. After that it is seco
 `node` has to be on the `PATH` of whatever starts the app, which it is when you run it from a
 terminal. To use a CLI from somewhere else, set `COASTERWORKS_CLI=/path/to/index.js`.
 
-Port 5173 must be free: `tauri dev` waits for the Vite dev server there, so if `pnpm dev:web` is
-already running, stop it first.
+Port 5173 must be free: `tauri dev` waits for the Vite dev server there, and Vite is set to
+`strictPort`, so if `pnpm dev:web` is already running the second one fails rather than moving to
+another port. Stop the first.
 
 ## What it does
 
@@ -37,10 +38,13 @@ already running, stop it first.
    `window.__COASTERWORKS__ = { wsUrl, token, mcpUrl }`. The web client reads that ahead of its
    `?ws=&token=` query string, so the URL bar stays clean and the token stays out of it.
 5. On quit, or when the last window closes, sends the sidecar SIGTERM so it writes the park, and
-   kills it only if it has not exited after 5 s.
+   kills it only if it has not exited after 5 s. If the window cannot be opened, the sidecar is
+   stopped the same way before the app exits 1 (a failed startup runs no exit handler).
 
 The sidecar also saves after every change a window or an agent makes, so the park on disk is
-current even if the app is killed.
+current even if the app is killed. And it does not outlive a killed app: the shell holds the other
+end of the sidecar's stdin, and `--exit-on-stdin-eof` makes `serve` stop, with its usual save, when
+that stream ends, however the shell went away (SIGKILL, SIGHUP, a crash).
 
 ## Menu
 

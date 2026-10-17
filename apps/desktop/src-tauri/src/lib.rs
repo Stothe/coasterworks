@@ -6,7 +6,9 @@ pub mod sidecar;
 use std::sync::Mutex;
 
 use tauri::menu::{Menu, MenuBuilder, MenuEvent, MenuItemBuilder, SubmenuBuilder};
-use tauri::{AppHandle, Emitter, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, Wry};
+use tauri::{
+    AppHandle, Emitter, Manager, RunEvent, Runtime, WebviewUrl, WebviewWindowBuilder, Wry,
+};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
 use sidecar::Sidecar;
@@ -74,7 +76,7 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
 }
 
 /// Stops the sidecar if there is one, and only once: it is taken out of its slot.
-fn stop_sidecar(app: &AppHandle) {
+fn stop_sidecar<R: Runtime>(app: &AppHandle<R>) {
     let Some(slot) = app.try_state::<SidecarSlot>() else {
         return;
     };
@@ -85,6 +87,22 @@ fn stop_sidecar(app: &AppHandle) {
     if let Some(sidecar) = taken {
         sidecar.kill();
     }
+}
+
+/// Puts a started sidecar in the app's state and opens the window with `open_window`, which is
+/// given the script that tells the page where the sidecar is.
+///
+/// If the window cannot be opened the sidecar is stopped before the error is returned. Nothing
+/// else would stop it: a failed startup ends the process without `ExitRequested` or `Exit`, so the
+/// handler below never runs, and the sidecar would be left holding its port and the park.
+fn start_with<R: Runtime>(
+    app: &AppHandle<R>,
+    sidecar: Sidecar,
+    open_window: impl FnOnce(&str) -> Result<(), Box<dyn std::error::Error>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let init_script = sidecar.ready.init_script();
+    app.manage::<SidecarSlot>(Mutex::new(Some(sidecar)));
+    open_window(&init_script).inspect_err(|_| stop_sidecar(app))
 }
 
 pub fn run() {
@@ -101,18 +119,23 @@ pub fn run() {
                     std::process::exit(1);
                 }
             };
-            let init_script = sidecar.ready.init_script();
-            app.manage::<SidecarSlot>(Mutex::new(Some(sidecar)));
-
             // `WebviewUrl::default()` is the dev server under `tauri dev` and the built web
             // client otherwise. The window is made here, not in tauri.conf.json, because the page
             // needs the sidecar's address in place before it loads.
-            WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
-                .title("Coasterworks")
-                .inner_size(1400.0, 900.0)
-                .min_inner_size(1100.0, 700.0)
-                .initialization_script(init_script)
-                .build()?;
+            let opened = start_with(app.handle(), sidecar, |init_script| {
+                WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
+                    .title("Coasterworks")
+                    .inner_size(1400.0, 900.0)
+                    .min_inner_size(1100.0, 700.0)
+                    .initialization_script(init_script)
+                    .build()?;
+                Ok(())
+            });
+            if let Err(err) = opened {
+                // The sidecar is already stopped. Returning the error would make Tauri panic.
+                eprintln!("coasterworks: could not open the window: {err}");
+                std::process::exit(1);
+            }
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -123,4 +146,164 @@ pub fn run() {
             stop_sidecar(app);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+    use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime};
+
+    /// A stand-in for `coasterworks serve`: quits on SIGTERM, and also when its stdin ends, as the
+    /// real one does with `--exit-on-stdin-eof`. It says it is ready last, as the real one does,
+    /// so that a signal sent on seeing the line finds its handler in place.
+    const WELL_BEHAVED: &str = r#"
+        process.on("SIGTERM", () => process.exit(0));
+        process.stdin.on("end", () => process.exit(0));
+        process.stdin.resume();
+        setInterval(() => {}, 1000);
+        console.log(JSON.stringify({ wsUrl: "ws://127.0.0.1:1/ws", mcpUrl: "http://127.0.0.1:1/mcp", port: 1, token: "t" }));
+    "#;
+    /// One that ignores SIGTERM and does not watch stdin, which only SIGKILL stops.
+    const STUBBORN: &str = r#"
+        process.on("SIGTERM", () => {});
+        setInterval(() => {}, 1000);
+        console.log(JSON.stringify({ wsUrl: "ws://127.0.0.1:1/ws", mcpUrl: "http://127.0.0.1:1/mcp", port: 1, token: "t" }));
+    "#;
+    /// One that is ready and then exits on its own.
+    const SHORT_LIVED: &str = r#"
+        console.log(JSON.stringify({ wsUrl: "ws://127.0.0.1:1/ws", mcpUrl: "http://127.0.0.1:1/mcp", port: 1, token: "t" }));
+        setTimeout(() => process.exit(0), 50);
+    "#;
+
+    fn app() -> tauri::App<MockRuntime> {
+        mock_builder()
+            .plugin(tauri_plugin_shell::init())
+            .build(mock_context(noop_assets()))
+            .expect("a mock app")
+    }
+
+    fn fake(app: &AppHandle<MockRuntime>, script: &str) -> Sidecar {
+        sidecar::launch(app, "node", vec!["-e".into(), script.into()]).expect("the fake is ready")
+    }
+
+    /// Whether a process with this pid exists. A child that has been waited for does not.
+    fn alive(pid: u32) -> bool {
+        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+    }
+
+    fn eventually(what: &str, mut check: impl FnMut() -> bool) {
+        let start = Instant::now();
+        while !check() {
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "timed out: {what}"
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn slot_is_empty(app: &AppHandle<MockRuntime>) -> bool {
+        app.state::<SidecarSlot>().lock().unwrap().is_none()
+    }
+
+    #[test]
+    fn a_window_that_cannot_be_opened_stops_the_sidecar() {
+        let app = app();
+        let handle = app.handle();
+        let sidecar = fake(handle, WELL_BEHAVED);
+        let pid = sidecar.pid();
+        assert!(alive(pid));
+
+        let mut offered = None;
+        let result = start_with(handle, sidecar, |script| {
+            offered = Some(script.to_owned());
+            Err("the window could not be created".into())
+        });
+
+        // The error still goes up, the window was offered the address, and nothing is left running.
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "the window could not be created"
+        );
+        assert!(offered.unwrap().starts_with("window.__COASTERWORKS__ = "));
+        assert!(!alive(pid), "the sidecar outlived the failed startup");
+        assert!(slot_is_empty(handle));
+    }
+
+    #[test]
+    fn an_opened_window_leaves_the_sidecar_running_until_it_is_stopped() {
+        let app = app();
+        let handle = app.handle();
+        let sidecar = fake(handle, WELL_BEHAVED);
+        let pid = sidecar.pid();
+
+        start_with(handle, sidecar, |_| Ok(())).expect("startup succeeds");
+        assert!(alive(pid));
+        assert!(!slot_is_empty(handle));
+
+        stop_sidecar(handle);
+        assert!(!alive(pid));
+        assert!(slot_is_empty(handle));
+        // ExitRequested and then Exit both stop it; the second finds nothing to do.
+        stop_sidecar(handle);
+    }
+
+    #[test]
+    fn stopping_without_a_sidecar_does_nothing() {
+        let app = app();
+        // Nothing was ever managed, as when startup failed before the sidecar existed.
+        stop_sidecar(app.handle());
+    }
+
+    #[test]
+    fn a_sidecar_that_ignores_sigterm_is_killed_after_the_wait() {
+        let app = app();
+        let sidecar = fake(app.handle(), STUBBORN);
+        let pid = sidecar.pid();
+        let start = Instant::now();
+        sidecar.kill_within(Duration::from_millis(300));
+        assert!(!alive(pid));
+        assert!(
+            start.elapsed() >= Duration::from_millis(300),
+            "it was not given the wait"
+        );
+    }
+
+    #[test]
+    fn a_sidecar_that_quits_on_sigterm_is_not_waited_on_for_long() {
+        let app = app();
+        let sidecar = fake(app.handle(), WELL_BEHAVED);
+        let pid = sidecar.pid();
+        let start = Instant::now();
+        sidecar.kill_within(Duration::from_secs(30));
+        assert!(!alive(pid));
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "it took the whole wait"
+        );
+    }
+
+    #[test]
+    fn a_sidecar_that_has_already_exited_is_left_alone() {
+        let app = app();
+        let sidecar = fake(app.handle(), SHORT_LIVED);
+        let pid = sidecar.pid();
+        eventually("the short-lived sidecar to exit", || !alive(pid));
+        // Its pid is free to be someone else's now: kill must not signal it, and must not hang.
+        let start = Instant::now();
+        sidecar.kill();
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn losing_the_shell_ends_the_sidecars_stdin_so_it_can_stop_itself() {
+        let app = app();
+        let sidecar = fake(app.handle(), WELL_BEHAVED);
+        let pid = sidecar.pid();
+        assert!(alive(pid));
+        // What a killed shell does without meaning to: its end of the sidecar's stdin closes.
+        drop(sidecar);
+        eventually("the sidecar to see its stdin end and exit", || !alive(pid));
+    }
 }

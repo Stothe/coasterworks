@@ -5,6 +5,8 @@ import { request } from "node:http";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { PassThrough } from "node:stream";
+import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -81,7 +83,10 @@ interface ServeInfo {
 }
 
 /** Starts `serve` in the background; `stop` aborts it, as SIGINT does, and waits for exit. */
-async function startServe(...args: string[]) {
+const startServe = (...args: string[]) => startServeWith({}, ...args);
+
+/** `startServe` with more of `CliIO` than the output and the signal, such as a `stdin`. */
+async function startServeWith(extra: Partial<CliIO>, ...args: string[]) {
   const out: string[] = [];
   const err: string[] = [];
   const abort = new AbortController();
@@ -94,6 +99,7 @@ async function startServe(...args: string[]) {
     },
     stderr: (s) => err.push(s),
     signal: abort.signal,
+    ...extra,
   };
   const done = main(["serve", ...args], io);
   const printed = await Promise.race([
@@ -106,6 +112,8 @@ async function startServe(...args: string[]) {
   const server = {
     info,
     http: `http://127.0.0.1:${info.port}`,
+    /** The exit code, once `serve` has stopped for any reason. */
+    exited: done,
     stderr: () => err.join(""),
     async stop(): Promise<Outcome> {
       abort.abort();
@@ -657,6 +665,102 @@ describe("serve usage and errors", () => {
   });
 });
 
+describe("serve --exit-on-stdin-eof", () => {
+  /** A stdin the test controls; `end()` is the shell going away. */
+  const stdinOf = () => new PassThrough();
+
+  it("stops as SIGINT does when stdin ends: closes windows, writes --out, resolves 0", async () => {
+    const file = await makePark();
+    const out = join(dir, "eof.park");
+    const stdin = stdinOf();
+    const server = await startServeWith(
+      { stdin },
+      "--save",
+      file,
+      "--out",
+      out,
+      "--token",
+      "t",
+      "--exit-on-stdin-eof",
+    );
+    const peer = await Peer.connect(tokenUrl(server.info));
+    await peer.hello();
+    const id = peer.send({
+      t: "command",
+      name: "terrain_raise",
+      input: { x: 0, y: 0, w: 2, h: 2 },
+    });
+    await peer.json("result", (j) => j.id === id);
+
+    stdin.end();
+    expect(await server.exited).toBe(0);
+    expect(server.stderr()).toBe("");
+    expect(await peer.closed).toBe(1001);
+    expect((await readPark(out)).log).toHaveLength(1);
+    expect((await readdir(dir)).filter((name) => name.includes(".tmp-"))).toEqual([]);
+  });
+
+  it("stops when stdin was already at its end before serve started", async () => {
+    const file = await makePark();
+    const stdin = stdinOf();
+    stdin.end();
+    stdin.resume();
+    await once(stdin, "end");
+    const server = await startServeWith(
+      { stdin },
+      "--save",
+      file,
+      "--token",
+      "t",
+      "--exit-on-stdin-eof",
+    );
+    expect(await server.exited).toBe(0);
+  });
+
+  it("also stops when stdin errors, as a pipe whose reader is gone does", async () => {
+    const file = await makePark();
+    const stdin = stdinOf();
+    const server = await startServeWith({ stdin }, "--save", file, "--exit-on-stdin-eof");
+    stdin.destroy(new Error("read ECONNRESET"));
+    expect(await server.exited).toBe(0);
+  });
+
+  it("lets go of stdin when something else stops it", async () => {
+    const file = await makePark();
+    const stdin = stdinOf();
+    const server = await startServeWith({ stdin }, "--save", file, "--exit-on-stdin-eof");
+    expect(stdin.listenerCount("end")).toBeGreaterThan(0);
+    expect((await server.stop()).code).toBe(0);
+    for (const event of ["end", "close"]) expect(stdin.listenerCount(event)).toBe(0);
+    // A late error is still caught, and the stream is paused: a real stdin no longer keeps the
+    // process alive.
+    expect(() => stdin.emit("error", new Error("late"))).not.toThrow();
+    expect(stdin.isPaused()).toBe(true);
+  });
+
+  it("keeps serving when stdin ends and the flag was not given", async () => {
+    const file = await makePark();
+    const stdin = stdinOf();
+    const server = await startServeWith({ stdin }, "--save", file);
+    // Not read at all: nothing is listening to it.
+    for (const event of ["end", "close", "error"]) expect(stdin.listenerCount(event)).toBe(0);
+    stdin.end();
+    stdin.resume();
+    await once(stdin, "end");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect((await fetch(`${server.http}/health`)).status).toBe(200);
+    expect((await server.stop()).code).toBe(0);
+  });
+
+  it("is a usage error without a stdin to watch", async () => {
+    const file = await makePark();
+    const result = await cli("serve", "--save", file, "--exit-on-stdin-eof");
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("error: --exit-on-stdin-eof needs a stdin to watch");
+    expect(result.stdout).toBe("");
+  });
+});
+
 describe("bin serve", () => {
   const dist = resolve(dirname(fileURLToPath(import.meta.url)), "../dist/index.js");
 
@@ -694,5 +798,61 @@ describe("bin serve", () => {
     expect(await peer.closed).toBe(1001);
     expect((await readPark(out)).log).toHaveLength(1);
     expect((await readdir(dir)).filter((name) => name.includes(".tmp-"))).toEqual([]);
+  });
+
+  it("with --exit-on-stdin-eof, stops when its stdin closes, as it does if the shell is killed", async (ctx) => {
+    if (!existsSync(dist)) ctx.skip(`${dist} is missing; run \`pnpm build\` to enable this test`);
+    const file = await makePark();
+    const out = join(dir, "bin-eof.park");
+    const child = spawn(
+      process.execPath,
+      [dist, "serve", "--save", file, "--out", out, "--token", "t", "--exit-on-stdin-eof"],
+      { stdio: "pipe" },
+    );
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+    child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
+    const exited = new Promise<number | null>((resolve) => child.on("close", resolve));
+    stoppers.push(async () => child.kill("SIGKILL"));
+
+    const info = JSON.parse(
+      await eventually(() => (stdout.includes("\n") ? stdout : undefined)),
+    ) as ServeInfo;
+    const peer = await Peer.connect(tokenUrl(info));
+    await peer.hello();
+    const id = peer.send({
+      t: "command",
+      name: "terrain_raise",
+      input: { x: 0, y: 0, w: 2, h: 2 },
+    });
+    await peer.json("result", (j) => j.id === id);
+
+    // Nothing is sent, and the process stays up: only the end of stdin stops it.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(child.exitCode).toBeNull();
+    child.stdin.end();
+    expect(await exited).toBe(0);
+    expect(stderr).toBe("");
+    expect(await peer.closed).toBe(1001);
+    expect((await readPark(out)).log).toHaveLength(1);
+  });
+
+  it("with --exit-on-stdin-eof, still exits on SIGINT with stdin open", async (ctx) => {
+    if (!existsSync(dist)) ctx.skip(`${dist} is missing; run \`pnpm build\` to enable this test`);
+    const file = await makePark();
+    const child = spawn(
+      process.execPath,
+      [dist, "serve", "--save", file, "--token", "t", "--exit-on-stdin-eof"],
+      { stdio: "pipe" },
+    );
+    let stdout = "";
+    child.stdout.setEncoding("utf8").on("data", (chunk: string) => (stdout += chunk));
+    const exited = new Promise<number | null>((resolve) => child.on("close", resolve));
+    stoppers.push(async () => child.kill("SIGKILL"));
+    await eventually(() => (stdout.includes("\n") ? stdout : undefined));
+    child.kill("SIGINT");
+    // Stdin is still open here, and the watch must not keep the process alive after the stop.
+    expect(await exited).toBe(0);
   });
 });

@@ -2,7 +2,7 @@
 //! and how it is stopped. The shell holds no game logic; everything the player does goes over the
 //! socket this process opens.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::json;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use tauri_plugin_shell::ShellExt;
 
@@ -71,9 +71,19 @@ pub struct Sidecar {
 }
 
 impl Sidecar {
+    /// The sidecar's process id.
+    pub fn pid(&self) -> u32 {
+        self.child.pid()
+    }
+
     /// Stops the sidecar. It is asked to quit with SIGTERM, which makes it close its windows and
     /// write the park, and is killed outright only if it has not gone within `STOP_TIMEOUT`.
     pub fn kill(self) {
+        self.kill_within(STOP_TIMEOUT);
+    }
+
+    /// `kill`, with the wait for a graceful exit set by the caller.
+    pub fn kill_within(self, wait: Duration) {
         #[cfg(unix)]
         {
             // Already gone (or its output reader is): there is nothing to signal, and its pid
@@ -81,19 +91,32 @@ impl Sidecar {
             if !matches!(self.exited.try_recv(), Err(mpsc::TryRecvError::Empty)) {
                 return;
             }
-            // SAFETY: `kill(2)` takes two integers and reads no memory.
-            let sent = unsafe { libc::kill(self.child.pid() as libc::pid_t, libc::SIGTERM) } == 0;
-            if sent
-                && !matches!(
-                    self.exited.recv_timeout(STOP_TIMEOUT),
-                    Err(RecvTimeoutError::Timeout)
-                )
-            {
-                return;
+            if let Some(pid) = as_pid(self.child.pid()) {
+                // SAFETY: `kill(2)` takes two integers and reads no memory.
+                let sent = unsafe { libc::kill(pid, libc::SIGTERM) } == 0;
+                if sent
+                    && !matches!(
+                        self.exited.recv_timeout(wait),
+                        Err(RecvTimeoutError::Timeout)
+                    )
+                {
+                    return;
+                }
             }
+            // A pid that does not fit, a signal that could not be sent, or one that was ignored:
+            // fall through to the plugin's kill, which is SIGKILL.
         }
+        #[cfg(not(unix))]
+        let _ = wait;
         let _ = self.child.kill();
     }
+}
+
+/// `pid` as the type `kill(2)` takes, or `None` if it does not fit: a plain `as` would wrap a
+/// large value to a negative one, which `kill(2)` reads as a process group.
+#[cfg(unix)]
+fn as_pid(pid: u32) -> Option<libc::pid_t> {
+    libc::pid_t::try_from(pid).ok()
 }
 
 /// The CLI to run with `node`: `COASTERWORKS_CLI`, else the one built in this repository. The
@@ -114,7 +137,7 @@ fn cli_entry() -> Result<PathBuf, String> {
 }
 
 /// `<app data dir>/parks/current.park`, with the directory made.
-fn park_path(app: &AppHandle) -> Result<PathBuf, String> {
+fn park_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let dir = app
         .path()
         .app_data_dir()
@@ -148,27 +171,42 @@ fn ensure_park(cli: &Path, park: &Path) -> Result<(), String> {
     }
 }
 
+/// What `node` is given to run the sidecar. `--exit-on-stdin-eof` ties its life to ours: the shell
+/// holds the other end of its stdin, so if the shell is killed and cannot stop it, it stops itself.
+fn serve_args(cli: &Path, park: &Path) -> Vec<OsString> {
+    vec![
+        cli.as_os_str().to_owned(),
+        "serve".into(),
+        "--save".into(),
+        park.as_os_str().to_owned(),
+        "--out".into(),
+        park.as_os_str().to_owned(),
+        "--port".into(),
+        "0".into(),
+        "--exit-on-stdin-eof".into(),
+    ]
+}
+
 /// Starts `coasterworks serve` on a free port and waits for it to say where it is listening.
 /// The park is `current.park` in the app data directory, made on the first run; the sidecar
 /// writes it as the player edits.
-pub fn spawn(app: &AppHandle) -> Result<Sidecar, String> {
+pub fn spawn<R: Runtime>(app: &AppHandle<R>) -> Result<Sidecar, String> {
     let cli = cli_entry()?;
     let park = park_path(app)?;
     ensure_park(&cli, &park)?;
+    launch(app, "node", serve_args(&cli, &park))
+}
 
-    let args: Vec<OsString> = vec![
-        cli.into_os_string(),
-        "serve".into(),
-        "--save".into(),
-        park.clone().into_os_string(),
-        "--out".into(),
-        park.into_os_string(),
-        "--port".into(),
-        "0".into(),
-    ];
+/// Runs `program args` as the sidecar and waits for its ready line. Apart from `spawn` it is what
+/// the tests use, with stand-ins for `coasterworks serve`.
+pub(crate) fn launch<R: Runtime>(
+    app: &AppHandle<R>,
+    program: impl AsRef<OsStr>,
+    args: Vec<OsString>,
+) -> Result<Sidecar, String> {
     let (mut events, child) = app
         .shell()
-        .command("node")
+        .command(program)
         .args(args)
         .spawn()
         .map_err(|err| format!("could not start node (is it on PATH?): {err}"))?;
@@ -317,5 +355,109 @@ mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn the_sidecar_is_told_to_exit_when_its_stdin_ends() {
+        let args = serve_args(
+            Path::new("/cli/index.js"),
+            Path::new("/data/parks/current.park"),
+        );
+        let args: Vec<&str> = args.iter().map(|arg| arg.to_str().unwrap()).collect();
+        assert_eq!(
+            args,
+            [
+                "/cli/index.js",
+                "serve",
+                "--save",
+                "/data/parks/current.park",
+                "--out",
+                "/data/parks/current.park",
+                "--port",
+                "0",
+                "--exit-on-stdin-eof",
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_pid_that_does_not_fit_is_not_signalled() {
+        assert_eq!(as_pid(1234), Some(1234));
+        assert_eq!(as_pid(i32::MAX as u32), Some(i32::MAX));
+        // `as` would wrap these to negative numbers, which `kill(2)` reads as process groups.
+        assert_eq!(as_pid(i32::MAX as u32 + 1), None);
+        assert_eq!(as_pid(u32::MAX), None);
+    }
+
+    /// Runs `script` the way the webview does (a function body that sees `window`) in node, and
+    /// gives back what it left in `window`, so what is checked is the JavaScript itself.
+    fn run_in_node(script: &str) -> serde_json::Value {
+        use std::io::Write;
+        use std::process::Stdio;
+        let mut node = StdCommand::new("node")
+            .args([
+                "-e",
+                r#"const window = {};
+                   new Function("window", require("fs").readFileSync(0, "utf8"))(window);
+                   process.stdout.write(JSON.stringify(window));"#,
+            ])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("node is on PATH");
+        node.stdin
+            .take()
+            .unwrap()
+            .write_all(script.as_bytes())
+            .unwrap();
+        let output = node.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "node rejected the script: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).expect("node printed JSON")
+    }
+
+    #[test]
+    fn the_init_script_stays_one_statement_with_a_hostile_token() {
+        // A quote, a backslash, a line break (both kinds), an HTML end tag, and U+2028, which
+        // JSON allows raw and older JavaScript did not.
+        let token = "q\"uote \\back\nline\r</script>\u{2028}end";
+        let ready = Ready {
+            token: token.to_owned(),
+            ..ready()
+        };
+        let script = ready.init_script();
+
+        // The escaped forms are what is in the text, and there is no raw line break.
+        for escaped in [r#"q\"uote"#, r"\\back", r"\nline", r"\r"] {
+            assert!(
+                script.contains(escaped),
+                "{escaped} is missing from {script}"
+            );
+        }
+        assert!(
+            !script.contains('\n') && !script.contains('\r'),
+            "a raw line break in {script}"
+        );
+        assert!(script.starts_with("window.__COASTERWORKS__ = {") && script.ends_with("};"));
+
+        // It parses as JSON and gives the token back exactly...
+        let json = script
+            .strip_prefix("window.__COASTERWORKS__ = ")
+            .and_then(|rest| rest.strip_suffix(';'))
+            .expect("one assignment");
+        let parsed: serde_json::Value = serde_json::from_str(json).expect("the value is JSON");
+        assert_eq!(parsed["token"], token);
+
+        // ...and so does JavaScript, which sets nothing on `window` but the one name.
+        let window = run_in_node(&script);
+        assert_eq!(window.as_object().unwrap().len(), 1, "{window}");
+        assert_eq!(window["__COASTERWORKS__"]["token"], token);
+        assert_eq!(window["__COASTERWORKS__"]["wsUrl"], ready.ws_url);
+        assert_eq!(window["__COASTERWORKS__"]["mcpUrl"], ready.mcp_url);
     }
 }

@@ -8,7 +8,7 @@ import { SimHostServer, type HostTimers, type Speed } from "@coasterworks/protoc
 import { Sim } from "@coasterworks/sim";
 import { WebSocketServer, type WebSocket } from "ws";
 import { UsageError, integerOption, parseOrUsage, requireOption } from "../args.js";
-import { printJson, readPark, untilAborted, writePark, type CliIO } from "../io.js";
+import { abortWhenEnded, printJson, readPark, untilAborted, writePark, type CliIO } from "../io.js";
 import { resolveToken } from "../token.js";
 import { createWriteQueue } from "../write-queue.js";
 import { wsTransport } from "../ws-transport.js";
@@ -89,6 +89,10 @@ async function closeWindows(wss: WebSocketServer): Promise<void> {
  *
  * `--speed` is the speed the clock starts at: 0 (paused), 1, 2, 4 or 8. The window can change it.
  *
+ * `--exit-on-stdin-eof` is for the desktop shell, which keeps the other end of this process's stdin
+ * open for as long as it lives. When that stream ends, because the shell quit or was killed, the
+ * server stops exactly as it does on Ctrl-C, so a dead shell never leaves it running.
+ *
  * With `--out` the park is written when a command, undo or redo changes it, from the window or an
  * agent, and once more on the way out. Time passing is not such a change, so a clock that only
  * ticks writes nothing until the next one. Writes that pile up while one is running become one.
@@ -105,6 +109,7 @@ export async function serveCommand(args: string[], io: CliIO): Promise<number> {
         token: { type: "string" },
         "allow-files": { type: "boolean" },
         speed: { type: "string" },
+        "exit-on-stdin-eof": { type: "boolean" },
       },
       allowPositionals: false,
     }),
@@ -115,6 +120,9 @@ export async function serveCommand(args: string[], io: CliIO): Promise<number> {
   if (host === "") throw new UsageError("--host must not be empty");
   const { token } = resolveToken(values.token);
   const port = integerOption("port", values.port, { min: 0, max: 65535 }) ?? 0;
+  if (values["exit-on-stdin-eof"] === true && io.stdin === undefined) {
+    throw new UsageError("--exit-on-stdin-eof needs a stdin to watch");
+  }
 
   const sim = new Sim(await readPark(save));
 
@@ -202,6 +210,18 @@ export async function serveCommand(args: string[], io: CliIO): Promise<number> {
   const bound = (server.address() as AddressInfo).port;
   allowedHosts = allowedHostsFor(host, bound);
 
+  // Watched from here on, so the shell going away at any point after the server is up stops it.
+  const stdinWatch =
+    values["exit-on-stdin-eof"] === true && io.stdin !== undefined
+      ? abortWhenEnded(io.stdin)
+      : undefined;
+  const stopRequested =
+    stdinWatch === undefined
+      ? io.signal
+      : io.signal === undefined
+        ? stdinWatch.signal
+        : AbortSignal.any([io.signal, stdinWatch.signal]);
+
   hostServer.setSpeed(speed);
   hostServer.start();
   try {
@@ -212,8 +232,9 @@ export async function serveCommand(args: string[], io: CliIO): Promise<number> {
       port: bound,
       token,
     });
-    await untilAborted(io.signal);
+    await untilAborted(stopRequested);
   } finally {
+    stdinWatch?.release();
     closing = true;
     hostServer.stop();
     // Stop listening first, so nothing new arrives while the windows are told to go.

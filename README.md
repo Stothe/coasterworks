@@ -79,7 +79,7 @@ Configuration for an MCP client that speaks Streamable HTTP, such as a project's
 node /absolute/path/to/apps/cli/dist/index.js serve --save /absolute/path/my.park --out /absolute/path/my.park --token <a-secret-you-choose>
 ```
 
-It prints one line of JSON once it is listening, `{"wsUrl":"ws://127.0.0.1:<port>/ws","mcpUrl":"http://127.0.0.1:<port>/mcp","port":<port>,"token":"<token>"}`, and runs until Ctrl-C. The token comes from `--token`, `COASTERWORKS_MCP_TOKEN`, or a random one made for you, as for `mcp --http`; agents send it as a bearer token to `mcpUrl`, and the window passes it as `?token=<token>` on `wsUrl`. `--port` (default `0`, any free port), `--host` (default `127.0.0.1`), `--speed` (`0`, `1`, `2`, `4` or `8`; default `1`) and `--allow-files` are the other options, and `GET /health` answers `{"ok":true,"name":...,"tick":...}`.
+It prints one line of JSON once it is listening, `{"wsUrl":"ws://127.0.0.1:<port>/ws","mcpUrl":"http://127.0.0.1:<port>/mcp","port":<port>,"token":"<token>"}`, and runs until Ctrl-C. The token comes from `--token`, `COASTERWORKS_MCP_TOKEN`, or a random one made for you, as for `mcp --http`; agents send it as a bearer token to `mcpUrl`, and the window passes it as `?token=<token>` on `wsUrl`. `--port` (default `0`, any free port), `--host` (default `127.0.0.1`), `--speed` (`0`, `1`, `2`, `4` or `8`; default `1`), `--allow-files` and `--exit-on-stdin-eof` (stop, saving as Ctrl-C does, when stdin ends, so a program that started `serve` and then dies does not leave it running; the desktop app passes it) are the other options, and `GET /health` answers `{"ok":true,"name":...,"tick":...}`.
 
 To point the web app at the sidecar, start it with `pnpm dev:web` and open `http://localhost:5173/?ws=<wsUrl>&token=<token>`.
 

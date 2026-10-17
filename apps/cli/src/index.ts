@@ -25,7 +25,7 @@ Commands:
   undo     --save <file> --out <file>
   redo     --save <file> --out <file>
   mcp      --save <file> [--out <file>] [--http <port> [--token <token>] [--allow-files]]
-  serve    --save <file> [--out <file>] [--port <n>] [--host <addr>] [--token <token>] [--allow-files] [--speed <0|1|2|4|8>]
+  serve    --save <file> [--out <file>] [--port <n>] [--host <addr>] [--token <token>] [--allow-files] [--speed <0|1|2|4|8>] [--exit-on-stdin-eof]
 
 Output is one line of JSON on stdout. Exit codes: 0 ok, 1 failed, 2 bad usage.
 Without --out, run and exec do not modify the save.
@@ -42,6 +42,8 @@ serve hosts the park for the desktop app: WebSocket at /ws, MCP at /mcp; prints 
   It listens on 127.0.0.1 (--host), on --port 0 (a free port) unless told otherwise, and runs the clock at
   --speed (default 1) until Ctrl-C. The token works as for mcp --http, and /ws takes it as ?token=<token>.
   With --out the park is written after every command, from the window or an agent, and on the way out.
+  --exit-on-stdin-eof stops it as Ctrl-C does when its stdin ends: the desktop app passes it, so that a
+  killed app does not leave the server running.
 `;
 
 type Command = (args: string[], io: CliIO) => Promise<number>;
@@ -101,6 +103,8 @@ if (isEntryPoint()) {
     for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => stop.abort());
     io.signal = stop.signal;
   }
+  // Only `serve` watches stdin (`--exit-on-stdin-eof`), and only then is it read.
+  if (argv[0] === "serve") io.stdin = process.stdin;
   // `exitCode`, not `exit()`, so output piped to a slow reader is not cut off.
   process.exitCode = await main(argv, io);
 }

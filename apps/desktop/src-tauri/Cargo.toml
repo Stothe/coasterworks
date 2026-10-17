@@ -23,3 +23,7 @@ serde_json = "1"
 # SIGTERM for the sidecar, which `CommandChild::kill` cannot send: it always sends SIGKILL.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# The mock runtime, so the shell's startup and shutdown can be tested without a window.
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }

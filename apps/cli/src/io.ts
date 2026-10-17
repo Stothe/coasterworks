@@ -14,6 +14,11 @@ export interface CliIO {
   stderr: (text: string) => void;
   /** Aborts when the user asks a long-running command, such as `mcp`, to stop. */
   signal?: AbortSignal;
+  /**
+   * The input stream, for `serve --exit-on-stdin-eof`, which stops when the program that started
+   * it goes away. The bin passes `process.stdin` for `serve`; no other command reads it.
+   */
+  stdin?: NodeJS.ReadableStream;
 }
 
 /** Writes `value` to stdout as one line of JSON. Every successful command's output is this. */
@@ -28,6 +33,38 @@ export function untilAborted(signal: AbortSignal | undefined): Promise<void> {
     if (signal.aborted) resolve();
     else signal.addEventListener("abort", () => resolve(), { once: true });
   });
+}
+
+/**
+ * Aborts `signal` when `stream` ends, closes, or fails: for a pipe from a parent process, that is
+ * the parent exiting, however it exited. `release` stops watching and pauses the stream, so that a
+ * stdin we were reading does not keep the process alive once the command is done.
+ */
+export function abortWhenEnded(stream: NodeJS.ReadableStream): {
+  signal: AbortSignal;
+  release: () => void;
+} {
+  const gone = new AbortController();
+  const onGone = () => gone.abort();
+  // An `end` that happened before we listened will not be announced again.
+  const state = stream as { readableEnded?: boolean; destroyed?: boolean };
+  if (state.readableEnded === true || state.destroyed === true) {
+    gone.abort();
+    return { signal: gone.signal, release: () => {} };
+  }
+  const events = ["end", "close", "error"] as const;
+  for (const event of events) stream.once(event, onGone);
+  // `end` is only emitted to a stream that is being read.
+  stream.resume();
+  return {
+    signal: gone.signal,
+    release: () => {
+      for (const event of events) stream.off(event, onGone);
+      // A late error on a stream nobody reads from any more must not be an uncaught exception.
+      stream.on("error", () => {});
+      stream.pause();
+    },
+  };
 }
 
 /** Runs a query and returns its result, or throws the query's error. */
