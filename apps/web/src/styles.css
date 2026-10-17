@@ -1,0 +1,68 @@
+@import "tailwindcss";
+
+/* Colors and font as Tailwind theme values: `text-ink`, `text-muted`, `bg-accent`, `text-success`. */
+@theme static {
+  --color-ink: #f2f4f7;
+  --color-muted: #9aa4b2;
+  --color-accent: #3b82f6;
+  --color-success: #7ee2a0;
+  --font-sans: system-ui, -apple-system, sans-serif;
+}
+
+/* The dark glass the panels float on over the 3D view. */
+:root {
+  color-scheme: dark;
+  --glass-bg: rgb(18 22 28 / 0.74);
+  --glass-blur: 14px;
+  --glass-border: 1px solid rgb(255 255 255 / 0.09);
+  --glass-radius: 12px;
+  --glass-shadow: 0 8px 30px rgb(0 0 0 / 0.25);
+  /* The smallest a control may be, so it can be hit with a finger as well as a pointer. */
+  --hit-target: 32px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: #0d1117;
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+.glass {
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur));
+  border: var(--glass-border);
+  border-radius: var(--glass-radius);
+  box-shadow: var(--glass-shadow);
+}
+
+@layer components {
+  /* A button inside a glass panel. Utilities set its colors and padding. */
+  .hud-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: var(--hit-target);
+    cursor: pointer;
+    transition: background-color 120ms;
+
+    &:hover:not(:disabled, [aria-pressed="true"]) {
+      background: rgb(255 255 255 / 0.08);
+    }
+    &:focus-visible {
+      outline: 2px solid var(--color-accent);
+      outline-offset: 1px;
+    }
+    &:disabled {
+      cursor: not-allowed;
+      opacity: 0.4;
+    }
+  }
+}

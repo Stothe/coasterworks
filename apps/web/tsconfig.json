@@ -1,0 +1,21 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // The app is bundled by Vite, so imports resolve the way a bundler resolves them.
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["vite/client"],
+    "jsx": "react-jsx",
+    // Type-check only. Vite emits the app; the packages it references emit their own declarations.
+    "composite": false,
+    "declaration": false,
+    "noEmit": true
+  },
+  "include": ["src"],
+  "references": [
+    { "path": "../../packages/sim" },
+    { "path": "../../packages/protocol" },
+    { "path": "../../packages/render" }
+  ]
+}

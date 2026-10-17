@@ -60,8 +60,6 @@ export interface SceneHandle {
   dispose(): void;
 }
 
-/** Vertical field of view of the camera, in degrees. */
-const FOV_DEG = 35;
 /** Side of the square the sun's shadow map covers around the camera target, in world units. */
 const SHADOW_SIZE = 64;
 /** How far the sun light sits from the target along the sun direction. */
@@ -74,6 +72,8 @@ interface Chunk {
   terrain: Mesh;
   water: Mesh | null;
 }
+
+const radiansToDegrees = (radians: number) => (radians * 180) / Math.PI;
 
 /** The sRGB color floats of a chunk converted to linear light, which is what vertex colors are read as. */
 function linearColors(colors: Float32Array): Float32Array {
@@ -140,8 +140,8 @@ export function createScene(canvas: HTMLCanvasElement, opts: SceneOptions = {}):
   const fog = new Fog(0x9fd3f2, 22, 48);
   scene.fog = fog;
 
-  const camera = new PerspectiveCamera(FOV_DEG, 1, 0.5, 1500);
   const rig = new CameraRig();
+  const camera = new PerspectiveCamera(radiansToDegrees(rig.fovY), 1, 0.5, 1500);
 
   const hemisphere = new HemisphereLight(0xdcefff, 0x5c8a3a, 0.75);
   scene.add(hemisphere);
@@ -324,6 +324,14 @@ export function createScene(canvas: HTMLCanvasElement, opts: SceneOptions = {}):
 
   function render(): void {
     if (disposed) return;
+    // The target cannot leave the map, however the rig was moved since the last frame.
+    if (terrain) rig.clampTarget(terrain.width, terrain.height);
+    // The rig owns the field of view; follow it if it changed.
+    const fov = radiansToDegrees(rig.fovY);
+    if (camera.fov !== fov) {
+      camera.fov = fov;
+      camera.updateProjectionMatrix();
+    }
     rig.applyTo(camera);
 
     // The sun and its shadow box follow the target.
@@ -349,7 +357,7 @@ export function createScene(canvas: HTMLCanvasElement, opts: SceneOptions = {}):
     if (rect.width <= 0 || rect.height <= 0) return null;
     const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
     const ndcY = 1 - ((clientY - rect.top) / rect.height) * 2;
-    const ray = rayFromCamera(rig, ndcX, ndcY, camera.aspect, (camera.fov * Math.PI) / 180);
+    const ray = rayFromCamera(rig, ndcX, ndcY, camera.aspect, rig.fovY);
     const hit = pickTile(ray, terrain);
     return hit ? { x: hit.x, y: hit.y } : null;
   }

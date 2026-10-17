@@ -77,17 +77,26 @@ describe("CameraRig", () => {
     expect(rig.distance).toBe(33);
   });
 
+  it("has a 35 degree vertical field of view, settable", () => {
+    const rig = new CameraRig();
+    expect(rig.fovY).toBeCloseTo((35 * Math.PI) / 180, 12);
+    rig.fovY = Math.PI / 2;
+    expect(rig.fovY).toBe(Math.PI / 2);
+  });
+
   it("pans along the ground-projected right and forward vectors", () => {
     const rig = new CameraRig();
     rig.yaw = 0;
     rig.distance = 40;
-    // 40 / 1000 * 2 = 0.08 world units per screen pixel.
+    // The screen is 2 * 40 * tan(fovY / 2) world units tall at the target, over 1000 pixels.
+    const perPixel = (40 * 2 * Math.tan(rig.fovY / 2)) / 1000;
+    expect(perPixel).toBeCloseTo(0.025224, 6);
     rig.pan(100, 0, 1000);
-    expect(rig.target.x).toBeCloseTo(8, 9);
+    expect(rig.target.x).toBeCloseTo(100 * perPixel, 9);
     expect(rig.target.z).toBeCloseTo(0, 9);
     rig.pan(0, 100, 1000);
-    expect(rig.target.x).toBeCloseTo(8, 9);
-    expect(rig.target.z).toBeCloseTo(-8, 9);
+    expect(rig.target.x).toBeCloseTo(100 * perPixel, 9);
+    expect(rig.target.z).toBeCloseTo(-100 * perPixel, 9);
     expect(rig.target.y).toBe(0);
 
     const turned = new CameraRig();
@@ -95,13 +104,23 @@ describe("CameraRig", () => {
     turned.distance = 40;
     turned.pan(100, 0, 1000); // right at yaw 90 degrees is -Z
     expect(turned.target.x).toBeCloseTo(0, 9);
-    expect(turned.target.z).toBeCloseTo(-8, 9);
+    expect(turned.target.z).toBeCloseTo(-100 * perPixel, 9);
     turned.pan(0, 100, 1000); // forward at yaw 90 degrees is -X
-    expect(turned.target.x).toBeCloseTo(-8, 9);
-    expect(turned.target.z).toBeCloseTo(-8, 9);
+    expect(turned.target.x).toBeCloseTo(-100 * perPixel, 9);
+    expect(turned.target.z).toBeCloseTo(-100 * perPixel, 9);
   });
 
-  it("pans further per pixel when zoomed out", () => {
+  it("pans a screen-height drag across exactly the world height the screen shows at the target", () => {
+    const rig = new CameraRig();
+    rig.yaw = 0;
+    rig.distance = 25;
+    rig.fovY = Math.PI / 3;
+    // Dragging the full viewport height moves the ground by the view's height at the target.
+    rig.pan(500, 0, 500);
+    expect(rig.target.x).toBeCloseTo(2 * 25 * Math.tan(Math.PI / 6), 9);
+  });
+
+  it("pans further per pixel when zoomed out, or with a wider field of view", () => {
     const near = new CameraRig();
     near.distance = 10;
     near.yaw = 0;
@@ -111,6 +130,16 @@ describe("CameraRig", () => {
     near.pan(50, 0, 500);
     far.pan(50, 0, 500);
     expect(far.target.x).toBeCloseTo(near.target.x * 10, 9);
+
+    const narrow = new CameraRig();
+    narrow.yaw = 0;
+    narrow.fovY = Math.PI / 6;
+    const wide = new CameraRig();
+    wide.yaw = 0;
+    wide.fovY = Math.PI / 2;
+    narrow.pan(50, 0, 500);
+    wide.pan(50, 0, 500);
+    expect(wide.target.x).toBeGreaterThan(narrow.target.x);
   });
 
   it("keeps the target inside the map", () => {

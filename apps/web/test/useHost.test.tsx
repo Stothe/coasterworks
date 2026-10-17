@@ -1,0 +1,258 @@
+import { SimClient, SimHostServer, createLinkedTransports } from "@coasterworks/protocol";
+import type { HostTimers, MessageTransport } from "@coasterworks/protocol";
+import { Sim, createWorld } from "@coasterworks/sim";
+import { StrictMode, type ReactNode } from "react";
+import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi, type Mock } from "vitest";
+import { useHost } from "../src/state/useHost";
+
+interface Rig {
+  sim: Sim;
+  host: SimHostServer;
+  clientEnd: MessageTransport;
+  /** A `connect` for `useHost` over an in-memory pair; counts how often it is called. */
+  connect: Mock<() => Promise<{ client: SimClient }>>;
+  clients: SimClient[];
+  /** Runs one timer callback, as the host's loop would. */
+  runLoop: () => void;
+  advance: (ms: number) => void;
+}
+
+function makeRig(): Rig {
+  const sim = new Sim(createWorld({ width: 8, height: 8, seed: 3, name: "Hook Test" }));
+  let now = 0;
+  let loop: (() => void) | undefined;
+  const timers: HostTimers = {
+    setInterval: (fn) => {
+      loop = fn;
+      return 1;
+    },
+    clearInterval: () => {
+      loop = undefined;
+    },
+    now: () => now,
+  };
+  const host = new SimHostServer(sim, { timers });
+  const [clientEnd, hostEnd] = createLinkedTransports();
+  host.attach(hostEnd);
+  host.start();
+  const clients: SimClient[] = [];
+  const connect = vi.fn(async () => {
+    const client = new SimClient(clientEnd);
+    clients.push(client);
+    return { client };
+  });
+  return {
+    sim,
+    host,
+    clientEnd,
+    connect,
+    clients,
+    runLoop: () => loop?.(),
+    advance: (ms) => {
+      now += ms;
+    },
+  };
+}
+
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
+
+describe("useHost", () => {
+  it("goes from connecting to ready, and the first snapshot brings the terrain", async () => {
+    const rig = makeRig();
+    const { result } = renderHook(() => useHost(rig.connect));
+    expect(result.current.status).toBe("connecting");
+    expect(result.current.terrain).toBeNull();
+    expect(result.current.snapshot).toBeNull();
+    expect(result.current.client).toBeNull();
+    expect(result.current.halted).toBe(false);
+
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(result.current.client).toBe(rig.clients[0]);
+    expect(result.current.snapshot?.header.width).toBe(8);
+    expect(result.current.snapshot?.header.cash).toBe(10_000_00);
+    expect(result.current.error).toBeUndefined();
+
+    const terrain = result.current.terrain;
+    expect(terrain?.width).toBe(8);
+    expect(terrain?.height).toBe(8);
+    expect(terrain?.corners.length).toBe(81);
+    expect(terrain?.corners[0]).toBe(8);
+    expect(terrain?.surface.length).toBe(64);
+    expect(terrain?.water.length).toBe(64);
+  });
+
+  it("keeps the old terrain arrays when a snapshot comes without terrain", async () => {
+    const rig = makeRig();
+    const { result } = renderHook(() => useHost(rig.connect));
+    await waitFor(() => expect(result.current.terrain).not.toBeNull());
+    const first = result.current.terrain;
+    const firstTick = result.current.snapshot?.header.tick;
+
+    // A tick of the sim makes a snapshot without terrain: no terrain change, only time passing.
+    act(() => {
+      rig.advance(1000);
+      rig.runLoop();
+    });
+    await waitFor(() =>
+      expect(result.current.snapshot?.header.tick).toBeGreaterThan(firstTick ?? 0),
+    );
+    expect(result.current.snapshot?.header.hasTerrain).toBe(false);
+    expect(result.current.snapshot?.terrain).toBeUndefined();
+    expect(result.current.terrain).toBe(first);
+  });
+
+  it("replaces the terrain when a command changes it, and records the event", async () => {
+    const rig = makeRig();
+    const { result } = renderHook(() => useHost(rig.connect));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    const before = result.current.terrain;
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.client?.command("terrain_raise", {
+        x: 1,
+        y: 1,
+        w: 1,
+        h: 1,
+      });
+    });
+    expect(outcome).toMatchObject({ ok: true, cost: 4 * 50_00 });
+
+    await waitFor(() => expect(result.current.terrain).not.toBe(before));
+    expect(result.current.terrain?.corners[1 * 9 + 1]).toBe(9);
+    expect(result.current.snapshot?.header.cash).toBe(10_000_00 - 4 * 50_00);
+    expect(result.current.events).toHaveLength(1);
+    expect(result.current.events[0]).toMatchObject({
+      t: "event",
+      kind: "log",
+      entry: { client: "player", name: "terrain_raise" },
+    });
+  });
+
+  it("keeps only the last 50 events", async () => {
+    const rig = makeRig();
+    const { result } = renderHook(() => useHost(rig.connect));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    for (let i = 0; i < 55; i++) {
+      await act(async () => {
+        // A tile's surface, flipped each time: $10 a command, so the cash never runs out.
+        await result.current.client?.command("terrain_set_surface", {
+          x: 0,
+          y: 0,
+          w: 1,
+          h: 1,
+          surface: 1 + (i % 2),
+        });
+      });
+    }
+    await waitFor(() => expect(result.current.events).toHaveLength(50));
+    const ids = result.current.events.map((e) => e.entry.id);
+    expect(ids[ids.length - 1]).toBe(55);
+    expect(ids[0]).toBe(6);
+  });
+
+  it("sets error when the host reports one that is not about a request", async () => {
+    const rig = makeRig();
+    const { result } = renderHook(() => useHost(rig.connect));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+
+    // A binary frame to the host is answered with an error that has no request id.
+    act(() => {
+      rig.clientEnd.send(new Uint8Array([1, 2, 3]));
+    });
+    await waitFor(() => expect(result.current.error).toBe("Expected a text frame"));
+    expect(result.current.halted).toBe(false);
+    expect(result.current.status).toBe("ready");
+  });
+
+  it("flags halted when the simulation faults", async () => {
+    const rig = makeRig();
+    rig.sim.systems.push({
+      name: "boom",
+      tick() {
+        throw new Error("kaboom");
+      },
+    });
+    const { result } = renderHook(() => useHost(rig.connect));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+
+    act(() => {
+      rig.advance(1000);
+      rig.runLoop();
+    });
+    await waitFor(() => expect(result.current.halted).toBe(true));
+    expect(result.current.error).toBe("Simulation halted: kaboom");
+    expect(result.current.snapshot?.header.speed).toBe(0);
+  });
+
+  it("reports a connection that fails", async () => {
+    const connect = vi.fn(async () => {
+      throw new Error("no route to host");
+    });
+    const { result } = renderHook(() => useHost(connect));
+    await waitFor(() => expect(result.current.status).toBe("error"));
+    expect(result.current.error).toBe("no route to host");
+    expect(result.current.client).toBeNull();
+  });
+
+  it("reports a host that refuses the hello", async () => {
+    const [clientEnd, hostEnd] = createLinkedTransports();
+    // A peer that answers hello with an id-less error, the way a host refuses a bad protocol.
+    hostEnd.onMessage(() => {
+      hostEnd.send(JSON.stringify({ t: "error", message: "Unsupported protocol version" }));
+    });
+    const connect = async () => ({ client: new SimClient(clientEnd) });
+    const { result } = renderHook(() => useHost(connect));
+    await waitFor(() => expect(result.current.status).toBe("error"));
+    expect(result.current.error).toBe("Unsupported protocol version");
+  });
+
+  it("connects once under React strict mode, and closes the client on unmount", async () => {
+    const rig = makeRig();
+    const wrapper = ({ children }: { children: ReactNode }) => <StrictMode>{children}</StrictMode>;
+    const { result, unmount } = renderHook(() => useHost(rig.connect), { wrapper });
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(rig.connect).toHaveBeenCalledTimes(1);
+
+    const client = result.current.client as SimClient;
+    // The client works: it is still connected after strict mode's mount, unmount, mount.
+    await expect(
+      client.command("terrain_raise", { x: 0, y: 0, w: 1, h: 1 }),
+    ).resolves.toMatchObject({
+      ok: true,
+    });
+
+    unmount();
+    // Closing is deferred a moment so strict mode's trial unmount does not close a live client.
+    await waitFor(async () => {
+      await expect(client.command("terrain_raise", { x: 0, y: 0, w: 1, h: 1 })).rejects.toThrow(
+        /closed/i,
+      );
+    });
+  });
+
+  it("closes a client that finishes connecting after the component is gone", async () => {
+    const rig = makeRig();
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slow = vi.fn(async () => {
+      await gate;
+      return rig.connect();
+    });
+    const { unmount } = renderHook(() => useHost(slow));
+    unmount();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    release();
+    await waitFor(() => expect(rig.clients).toHaveLength(1));
+    const client = rig.clients[0] as SimClient;
+    await waitFor(async () => {
+      await expect(client.requestSnapshot()).rejects.toThrow(/closed/i);
+    });
+  });
+});

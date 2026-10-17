@@ -18,6 +18,8 @@ export class CameraRig {
   distance = 40;
   yaw = Math.PI / 4;
   pitch = 0.6;
+  /** Vertical field of view in radians. The scene's camera follows it, and `pan` is scaled by it. */
+  fovY = (35 * Math.PI) / 180;
   readonly limits = {
     pitch: [0.26, 1.4],
     distance: [4, 200],
@@ -36,12 +38,13 @@ export class CameraRig {
 
   /**
    * Moves the target across the ground by a screen-space offset in pixels. `dxScreen` goes along the
-   * camera's right vector and `dyScreen` along its ground-projected forward vector, scaled so a pixel
-   * covers the same world distance at the target whatever the zoom. A caller that drags the ground
-   * with the pointer passes `-dx` and `+dy`.
+   * camera's right vector and `dyScreen` along its ground-projected forward vector. A pixel is
+   * scaled to the world distance it spans at the target (`distance * 2 * tan(fovY / 2)` over the
+   * viewport's height), so a drag that passes `-dx` and `+dy` moves the ground under the cursor by
+   * the same screen distance, whatever the zoom.
    */
   pan(dxScreen: number, dyScreen: number, viewportHeight: number): void {
-    const scale = (this.distance / viewportHeight) * 2;
+    const scale = (this.distance * 2 * Math.tan(this.fovY / 2)) / viewportHeight;
     const sin = Math.sin(this.yaw);
     const cos = Math.cos(this.yaw);
     this.target.x += (cos * dxScreen - sin * dyScreen) * scale;
