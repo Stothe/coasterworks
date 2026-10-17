@@ -80,9 +80,12 @@ export function planCommand(
   }
 }
 
-const TICKS_PER_MONTH = TICKS_PER_DAY * DAYS_PER_MONTH;
+/** One day-night cycle runs once a month. */
+const CYCLE = TICKS_PER_DAY * DAYS_PER_MONTH;
+/** Where in the cycle tick 0 falls, so that a new park opens in the morning rather than at night. */
+const START_OFFSET = 0.3;
 
 /** Where in the visual day a tick falls, 0 to 1: a whole day-night cycle runs once a month. */
 export function timeOfDay(tick: number): number {
-  return (tick % TICKS_PER_MONTH) / TICKS_PER_MONTH;
+  return ((tick + START_OFFSET * CYCLE) % CYCLE) / CYCLE;
 }

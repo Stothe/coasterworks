@@ -1,11 +1,18 @@
-import { request } from "node:http";
+import { createServer, request } from "node:http";
+import type { AddressInfo } from "node:net";
 import { networkInterfaces } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { Sim, createWorld } from "@coasterworks/sim";
-import { serveHttp, type HttpServer } from "../src/index.js";
+import {
+  allowedHostsFor,
+  createMcpRequestHandler,
+  serveHttp,
+  tokenMatches,
+  type HttpServer,
+} from "../src/index.js";
 
 const TOKEN = "s3cret-token";
 
@@ -272,5 +279,138 @@ describe("DNS rebinding protection", () => {
     } finally {
       await bound.close();
     }
+  });
+});
+
+describe("tokenMatches", () => {
+  it("accepts only the same text, whatever the lengths", () => {
+    expect(tokenMatches("s3cret", "s3cret")).toBe(true);
+    expect(tokenMatches("s3cret", "s3cre")).toBe(false);
+    expect(tokenMatches("s3cret", "s3crets")).toBe(false);
+    expect(tokenMatches("s3cret", "S3CRET")).toBe(false);
+    expect(tokenMatches("s3cret", "")).toBe(false);
+    expect(tokenMatches("", "")).toBe(true);
+    expect(tokenMatches("é", "é")).toBe(true);
+  });
+});
+
+describe("allowedHostsFor", () => {
+  it("names loopback and the listen address, bare and with the port", () => {
+    expect(allowedHostsFor("127.0.0.1", 80)).toEqual([
+      "127.0.0.1",
+      "127.0.0.1:80",
+      "localhost",
+      "localhost:80",
+    ]);
+    expect(allowedHostsFor("0.0.0.0", 80)).toEqual([
+      "127.0.0.1",
+      "127.0.0.1:80",
+      "localhost",
+      "localhost:80",
+    ]);
+    expect(allowedHostsFor("::1", 80)).toContain("[::1]:80");
+    expect(allowedHostsFor("10.0.0.5", 80)).toContain("10.0.0.5:80");
+  });
+});
+
+describe("createMcpRequestHandler", () => {
+  let other: ReturnType<typeof createServer>;
+  let base: string;
+  let hosts: string[];
+
+  beforeEach(async () => {
+    hosts = [];
+    const handle = createMcpRequestHandler(sim, { token: TOKEN, allowedHosts: () => hosts });
+    // A server of the caller's own: the handler takes `/mcp` and leaves everything else to it.
+    other = createServer((req, res) => {
+      handle(req, res).then(
+        (handled) => {
+          if (handled) return;
+          res.writeHead(418, { "content-type": "text/plain" });
+          res.end("the caller's own page");
+        },
+        () => res.destroy(),
+      );
+    });
+    await new Promise<void>((resolve) => other.listen(0, "127.0.0.1", resolve));
+    const { port } = other.address() as AddressInfo;
+    hosts.push(`127.0.0.1:${port}`);
+    base = `http://127.0.0.1:${port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => {
+      other.close(() => resolve());
+      other.closeAllConnections();
+    });
+  });
+
+  it("returns false for any other path and writes nothing, whatever the method or token", async () => {
+    for (const path of ["/", "/health", "/mcp/", "/mcpx", "/ws"]) {
+      const response = await fetch(base + path, { method: "POST" });
+      expect(response.status, path).toBe(418);
+      expect(await response.text()).toBe("the caller's own page");
+    }
+  });
+
+  it("returns true for /mcp, ignoring a query string, and answers it itself", async () => {
+    const unauthorized = await fetch(`${base}/mcp?x=1`, { method: "POST" });
+    expect(unauthorized.status).toBe(401);
+    expect(await unauthorized.json()).toEqual({ error: "unauthorized" });
+    const wrongMethod = await fetch(`${base}/mcp`, { method: "PUT" });
+    expect(wrongMethod.status).toBe(405);
+    expect(wrongMethod.headers.get("allow")).toBe("POST, GET, DELETE");
+  });
+
+  it("serves the tools to a client with the bearer token, over the caller's own server", async () => {
+    const client = await connectTo(`${base}/mcp`, TOKEN);
+    const names = (await client.listTools()).tools.map((t) => t.name);
+    expect(names).toContain("terrain_raise");
+    await client.callTool({ name: "terrain_raise", arguments: { x: 0, y: 0, w: 2, h: 2 } });
+    expect(sim.world.finance.cash).toBe(955_000);
+  });
+
+  it("reads the allowed hosts for every request, so they may be filled in after listening", async () => {
+    const bearer = { authorization: `Bearer ${TOKEN}` };
+    const { port } = other.address() as AddressInfo;
+    const call = () =>
+      postWithHost(`127.0.0.1:${port}`, bearer, INITIALIZE, { address: "127.0.0.1", port });
+    expect((await call()).status).toBe(200);
+    hosts.splice(0, hosts.length, "other.example");
+    expect((await call()).status).toBe(403);
+  });
+
+  it("answers 500 rather than skip the Host check when it has no allowed hosts", async () => {
+    const bearer = { authorization: `Bearer ${TOKEN}` };
+    const { port } = other.address() as AddressInfo;
+    hosts.length = 0;
+    const response = await postWithHost(`127.0.0.1:${port}`, bearer, INITIALIZE, {
+      address: "127.0.0.1",
+      port,
+    });
+    expect(response.status).toBe(500);
+    expect(JSON.parse(response.text)).toEqual({ error: "internal error" });
+  });
+
+  it("refuses an empty token", () => {
+    expect(() => createMcpRequestHandler(sim, { token: "", allowedHosts: () => [] })).toThrow(
+      /non-empty token/,
+    );
+  });
+
+  it("passes its options to the MCP server", async () => {
+    const calls: unknown[] = [];
+    const handle = createMcpRequestHandler(sim, {
+      token: TOKEN,
+      allowedHosts: () => hosts,
+      allowFiles: true,
+      onMutate: () => void calls.push("mutated"),
+    });
+    other.removeAllListeners("request");
+    other.on("request", (req, res) => void handle(req, res));
+    const client = await connectTo(`${base}/mcp`, TOKEN);
+    expect((await client.listTools()).tools.map((t) => t.name)).toContain("save_write");
+    await client.callTool({ name: "terrain_raise", arguments: { x: 0, y: 0, w: 1, h: 1 } });
+    expect(calls).toEqual(["mutated"]);
   });
 });

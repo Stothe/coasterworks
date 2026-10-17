@@ -21,6 +21,15 @@ export function printJson(io: CliIO, value: unknown): void {
   io.stdout(`${JSON.stringify(value)}\n`);
 }
 
+/** Resolves when `signal` aborts, or never if there is no signal. */
+export function untilAborted(signal: AbortSignal | undefined): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal === undefined) return;
+    if (signal.aborted) resolve();
+    else signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+}
+
 /** Runs a query and returns its result, or throws the query's error. */
 export function queryOrThrow(sim: Sim, name: string, input: unknown): unknown {
   const result = sim.query(name, input);

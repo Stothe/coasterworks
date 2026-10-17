@@ -71,12 +71,24 @@ Configuration for an MCP client that speaks Streamable HTTP, such as a project's
 }
 ```
 
+### Run the sidecar
+
+`serve` hosts the park for the desktop app: a WebSocket at `/ws` for the window and the MCP endpoint at `/mcp` for agents, on one port, with the clock running. What an agent builds shows up in the window as it happens, and `--out` saves the park whenever a command changes it and once more on the way out.
+
+```bash
+node /absolute/path/to/apps/cli/dist/index.js serve --save /absolute/path/my.park --out /absolute/path/my.park --token <a-secret-you-choose>
+```
+
+It prints one line of JSON once it is listening, `{"wsUrl":"ws://127.0.0.1:<port>/ws","mcpUrl":"http://127.0.0.1:<port>/mcp","port":<port>,"token":"<token>"}`, and runs until Ctrl-C. The token comes from `--token`, `COASTERWORKS_MCP_TOKEN`, or a random one made for you, as for `mcp --http`; agents send it as a bearer token to `mcpUrl`, and the window passes it as `?token=<token>` on `wsUrl`. `--port` (default `0`, any free port), `--host` (default `127.0.0.1`), `--speed` (`0`, `1`, `2`, `4` or `8`; default `1`) and `--allow-files` are the other options, and `GET /health` answers `{"ok":true,"name":...,"tick":...}`.
+
+To point the web app at the sidecar, start it with `pnpm dev:web` and open `http://localhost:5173/?ws=<wsUrl>&token=<token>`.
+
 ## What's here
 
 - `packages/sim`: the deterministic simulation core: world, commands, queries, undo, and the save format (`@coasterworks/sim`)
 - `packages/mcp`: the MCP server that exposes sim commands to agents over stdio and HTTP (`@coasterworks/mcp`)
 - `packages/protocol`: the wire between a running sim and its clients: messages, binary snapshots, `SimHostServer` and `SimClient` (`@coasterworks/protocol`)
-- `apps/cli`: the `coasterworks` command line app: `new`, `run`, `inspect`, `exec`, `query`, `undo`, `redo`, and `mcp`
+- `apps/cli`: the `coasterworks` command line app: `new`, `run`, `inspect`, `exec`, `query`, `undo`, `redo`, `mcp`, and `serve`
 
 ## Determinism
 

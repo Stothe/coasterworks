@@ -1,21 +1,10 @@
-import { randomBytes } from "node:crypto";
 import { parseArgs } from "node:util";
 import { serveHttp, serveStdio, type McpServerOptions } from "@coasterworks/mcp";
 import { Sim } from "@coasterworks/sim";
 import { UsageError, integerOption, parseOrUsage, requireOption } from "../args.js";
-import { printJson, readPark, writePark, type CliIO } from "../io.js";
-
-/** Resolves when `signal` aborts, or never if there is no signal. */
-function untilAborted(signal: AbortSignal | undefined): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal === undefined) return;
-    if (signal.aborted) resolve();
-    else signal.addEventListener("abort", () => resolve(), { once: true });
-  });
-}
-
-/** The environment variable that supplies the HTTP bearer token when `--token` is not given. */
-const TOKEN_ENV = "COASTERWORKS_MCP_TOKEN";
+import { printJson, readPark, untilAborted, writePark, type CliIO } from "../io.js";
+import { resolveToken } from "../token.js";
+import { createWriteQueue } from "../write-queue.js";
 
 /**
  * `mcp --save <file> [--out <file>] [--http <port> [--token <token>] [--allow-files]]`: serves the
@@ -53,25 +42,15 @@ export async function mcpCommand(args: string[], io: CliIO): Promise<number> {
   if (values.http === undefined && values.token !== undefined) {
     throw new UsageError("--token needs --http");
   }
-  if (values.token === "") throw new UsageError("--token must not be empty");
-  // An empty variable counts as unset, as a shell's `FOO= cmd` usually means it.
-  const envToken = process.env[TOKEN_ENV];
-  const given = values.token ?? (envToken === "" ? undefined : envToken);
-  const generated = values.http !== undefined && given === undefined;
-  const token = generated ? randomBytes(32).toString("base64url") : given;
+  // Stdio has no token to make or print.
+  const { token, generated } =
+    values.http === undefined ? { token: undefined, generated: false } : resolveToken(values.token);
   const port = integerOption("http", values.http, { min: 0, max: 65535 });
 
   const sim = new Sim(await readPark(save));
 
-  // One write at a time: they share a temporary file, and a later one has the newer park anyway.
-  // `--out` and the `save_write` tool both go through this queue, so a client that writes to the
-  // `--out` path itself cannot race the writes that follow its own commands.
-  let writing: Promise<void> = Promise.resolve();
-  const enqueue = (task: () => Promise<void>): Promise<void> => {
-    const next = writing.then(task);
-    writing = next.catch(() => {});
-    return next;
-  };
+  // `--out` and the `save_write` tool both go through this queue; see `createWriteQueue`.
+  const { enqueue } = createWriteQueue();
 
   // Stdio always has the file tools. Over HTTP they are opt-in; see the doc comment above.
   const options: McpServerOptions = {

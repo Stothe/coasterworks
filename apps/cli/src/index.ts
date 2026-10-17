@@ -9,6 +9,7 @@ import { mcpCommand } from "./commands/mcp.js";
 import { newCommand } from "./commands/new.js";
 import { queryCommand } from "./commands/query.js";
 import { runCommand } from "./commands/run.js";
+import { serveCommand } from "./commands/serve.js";
 import type { CliIO } from "./io.js";
 
 export type { CliIO } from "./io.js";
@@ -24,6 +25,7 @@ Commands:
   undo     --save <file> --out <file>
   redo     --save <file> --out <file>
   mcp      --save <file> [--out <file>] [--http <port> [--token <token>] [--allow-files]]
+  serve    --save <file> [--out <file>] [--port <n>] [--host <addr>] [--token <token>] [--allow-files] [--speed <0|1|2|4|8>]
 
 Output is one line of JSON on stdout. Exit codes: 0 ok, 1 failed, 2 bad usage.
 Without --out, run and exec do not modify the save.
@@ -36,6 +38,10 @@ Stdio carries only the protocol; HTTP prints {"url","port"} once it is listening
 --allow-files adds the save_write and save_load file tools over HTTP; stdio always has them.
   They take only paths that end in .park.
   Warning: it lets any holder of the token read and write files as you.
+serve hosts the park for the desktop app: WebSocket at /ws, MCP at /mcp; prints a JSON line with the URLs and token.
+  It listens on 127.0.0.1 (--host), on --port 0 (a free port) unless told otherwise, and runs the clock at
+  --speed (default 1) until Ctrl-C. The token works as for mcp --http, and /ws takes it as ?token=<token>.
+  With --out the park is written after every command, from the window or an agent, and on the way out.
 `;
 
 type Command = (args: string[], io: CliIO) => Promise<number>;
@@ -49,6 +55,7 @@ const COMMANDS = new Map<string, Command>([
   ["undo", undoCommand],
   ["redo", redoCommand],
   ["mcp", mcpCommand],
+  ["serve", serveCommand],
 ]);
 
 /** Runs the CLI and returns its exit code: 0 on success, 1 on failure, 2 on a usage error. */
@@ -87,9 +94,9 @@ if (isEntryPoint()) {
     stderr: (text) => process.stderr.write(text),
   };
   const argv = process.argv.slice(2);
-  // Only `mcp` handles Ctrl-C itself, to save the park and close cleanly. A second Ctrl-C, with
-  // the handler spent, ends the process as usual.
-  if (argv[0] === "mcp") {
+  // Only `mcp` and `serve` handle Ctrl-C themselves, to save the park and close cleanly. A second
+  // Ctrl-C, with the handler spent, ends the process as usual.
+  if (argv[0] === "mcp" || argv[0] === "serve") {
     const stop = new AbortController();
     for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => stop.abort());
     io.signal = stop.signal;

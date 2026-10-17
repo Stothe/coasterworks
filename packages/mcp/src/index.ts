@@ -1,5 +1,5 @@
-export { serveHttp } from "./http.js";
-export type { HttpOptions, HttpServer } from "./http.js";
+export { allowedHostsFor, createMcpRequestHandler, serveHttp, tokenMatches } from "./http.js";
+export type { HttpOptions, HttpServer, McpRequestHandlerOptions } from "./http.js";
 export { createMcpServer } from "./server.js";
 export type { McpServerOptions } from "./server.js";
 export { serveStdio } from "./stdio.js";

@@ -53,9 +53,10 @@ export function App() {
   );
 
   // Hotkeys read the latest of everything through one ref, so the listener is added once.
-  const keys = useRef({ speed, changeSpeed, client, onResult, brush });
+  const { halted } = host;
+  const keys = useRef({ speed, changeSpeed, client, onResult, brush, halted });
   useEffect(() => {
-    keys.current = { speed, changeSpeed, client, onResult, brush };
+    keys.current = { speed, changeSpeed, client, onResult, brush, halted };
   });
 
   useEffect(() => {
@@ -83,15 +84,16 @@ export function App() {
         case " ":
           // On a focused button Space presses the button, which is what a keyboard user wants.
           if (isButton(e.target)) return;
-          now.changeSpeed(current === 0 ? resumeSpeed.current : 0);
+          // A halted sim stays stopped: the speed buttons are disabled, and so are the keys.
+          if (!now.halted) now.changeSpeed(current === 0 ? resumeSpeed.current : 0);
           break;
         case "+":
         case "=":
-          now.changeSpeed(stepSpeed(current, resumeSpeed.current, 1));
+          if (!now.halted) now.changeSpeed(stepSpeed(current, resumeSpeed.current, 1));
           break;
         case "-":
         case "_":
-          now.changeSpeed(stepSpeed(current, resumeSpeed.current, -1));
+          if (!now.halted) now.changeSpeed(stepSpeed(current, resumeSpeed.current, -1));
           break;
         case "r":
         case "l":

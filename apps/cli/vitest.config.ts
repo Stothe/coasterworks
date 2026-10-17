@@ -10,6 +10,7 @@ export default defineConfig({
     alias: {
       "@coasterworks/sim": source("../../packages/sim/src/index.ts"),
       "@coasterworks/mcp": source("../../packages/mcp/src/index.ts"),
+      "@coasterworks/protocol": source("../../packages/protocol/src/index.ts"),
     },
   },
   test: {

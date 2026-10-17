@@ -137,12 +137,26 @@ describe("planCommand", () => {
 });
 
 describe("timeOfDay", () => {
-  it("runs 0 to 1 over a month of ticks, then starts again", () => {
-    const month = 400 * 31;
-    expect(timeOfDay(0)).toBe(0);
-    expect(timeOfDay(month / 2)).toBe(0.5);
-    expect(timeOfDay(month)).toBe(0);
-    expect(timeOfDay(month + month / 4)).toBe(0.25);
-    expect(timeOfDay(month - 1)).toBeLessThan(1);
+  const cycle = 400 * 31;
+
+  it("opens a fresh park mid-morning rather than at night", () => {
+    expect(timeOfDay(0)).toBeCloseTo(0.3, 10);
+  });
+
+  it("runs once around per month of ticks, 0 to 1, and starts again", () => {
+    expect(timeOfDay(cycle / 2)).toBeCloseTo(0.8, 10);
+    // 0.7 of the way in, the offset day has gone all the way round.
+    expect(timeOfDay((cycle * 7) / 10)).toBeCloseTo(0, 10);
+    expect(timeOfDay((cycle * 7) / 10 + cycle / 4)).toBeCloseTo(0.25, 10);
+    expect(timeOfDay(cycle)).toBeCloseTo(timeOfDay(0), 10);
+    expect(timeOfDay(cycle * 5 + 123)).toBeCloseTo(timeOfDay(123), 10);
+  });
+
+  it("stays from 0 up to but not including 1", () => {
+    for (const tick of [0, 1, 1234, (cycle * 7) / 10 - 1, (cycle * 7) / 10, cycle - 1, cycle]) {
+      const t = timeOfDay(tick);
+      expect(t).toBeGreaterThanOrEqual(0);
+      expect(t).toBeLessThan(1);
+    }
   });
 });
