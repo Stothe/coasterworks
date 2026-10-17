@@ -181,6 +181,28 @@ describe("IconButton", () => {
     const tooltip = await screen.findByRole("tooltip");
     expect(tooltip.textContent).toBe("Undo");
   });
+
+  it("shows the tooltip text it is given instead of its label", async () => {
+    render(<IconButton label="Assistant" tooltip="Ask for help" icon="?" onClick={() => {}} />);
+    act(() => screen.getByRole("button", { name: "Assistant" }).focus());
+    expect((await screen.findByRole("tooltip")).textContent).toBe("Ask for help");
+  });
+
+  it("shows a tooltip on a disabled button, from the span around it", async () => {
+    render(
+      <IconButton label="Assistant" tooltip="Coming soon" icon="?" onClick={() => {}} disabled />,
+    );
+    const button = screen.getByRole("button", { name: "Assistant" }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    // The disabled button itself hears no pointer; its wrapper does.
+    fireEvent.pointerMove(button.parentElement as HTMLElement);
+    expect((await screen.findByRole("tooltip")).textContent).toBe("Coming soon");
+  });
+
+  it("is not wrapped in a span unless it is disabled", () => {
+    render(<IconButton label="Undo" tooltip="Undo it" icon="↶" onClick={() => {}} />);
+    expect(screen.getByRole("button", { name: "Undo" }).parentElement?.tagName).toBe("DIV");
+  });
 });
 
 describe("Field", () => {

@@ -169,11 +169,36 @@ describe("Inspector: the park", () => {
     expect(screen.getAllByText("Coming with guests")).toHaveLength(2);
   });
 
-  it("Timeline holds its place until the next update", () => {
+  it("Timeline says so when nothing has happened", () => {
     store().openInspector("timeline");
     renderInspector();
     expect(selectedTab()).toBe("Timeline");
-    expect(screen.getByText("Timeline arrives in the next update")).toBeTruthy();
+    expect(screen.getByText("Nothing has happened yet.")).toBeTruthy();
+  });
+
+  it("Timeline lists the events it is given, and a click on one with an area focuses it", () => {
+    store().openInspector("timeline");
+    const focusTile = vi.fn();
+    renderInspector({
+      events: [
+        {
+          t: "event",
+          kind: "log",
+          entry: {
+            id: 1,
+            tick: 0,
+            client: "agent",
+            name: "terrain_raise",
+            input: { x: 1, y: 2, w: 3, h: 4 },
+            cost: 400,
+          },
+        },
+      ],
+      focusTile,
+    });
+    expect(within(inspector()).getByText("Agent")).toBeTruthy();
+    fireEvent.click(within(inspector()).getByRole("button", { name: /Raise terrain/ }));
+    expect(focusTile).toHaveBeenCalledWith({ x: 1, y: 2, w: 3, h: 4 });
   });
 
   it("a tab click shows that tab and remembers it in the store, still on the park", async () => {

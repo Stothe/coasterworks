@@ -6,12 +6,23 @@ import {
   type TerrainData,
 } from "@coasterworks/render";
 import type { ExecResult } from "@coasterworks/sim";
-import { useEffect, useRef } from "react";
+import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
 import { CLASSIC_VIEW_EVENT, onShellEvent } from "../host/shell";
+import { settingsStore, useSettings } from "../state/settings";
 import { uiStore, useUiStore } from "../state/uiStore";
 import { brushRect, planPlacement, timeOfDay } from "./brush";
 import { classicCycle, onClassicViewRequest } from "./classicView";
 import { framingDistance } from "./framing";
+
+/** What the app can ask of the view. */
+export interface ViewportHandle {
+  /**
+   * Moves the camera over the area of `w` by `h` tiles at (`x`, `y`): its target goes to the center
+   * of the area, kept on the map. The distance, yaw and pitch stay as they are, and the target's
+   * height follows the ground there.
+   */
+  focusTile(x: number, y: number, w: number, h: number): void;
+}
 
 export interface ViewportProps {
   terrain: TerrainData | null;
@@ -28,7 +39,12 @@ export interface ViewportProps {
     tile: { x: number; y: number },
     point: { clientX: number; clientY: number },
   ): void;
+  /** Filled with the view's handle while the view is up. */
+  ref?: Ref<ViewportHandle>;
 }
+
+/** How often the frame rate is worked out, in milliseconds. */
+const FPS_SAMPLE_MS = 500;
 
 /** Pointer travel in pixels past which a right press is an orbit and no longer a click. */
 const CLICK_SLOP = 4;
@@ -64,20 +80,41 @@ function failure(error: unknown): ExecResult {
  */
 export function Viewport(props: ViewportProps) {
   const placement = useUiStore((state) => state.placement);
+  const showFps = useSettings((state) => state.showFps);
+  const [fps, setFps] = useState<number | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const live = useRef<Live | null>(null);
   const hover = useRef<{ x: number; y: number } | null>(null);
   const outlineRef = useRef<(() => void) | null>(null);
   // The scene outlives renders, so its handlers read the current props through this.
-  const latest = useRef({ ...props, placement });
+  const latest = useRef({ ...props, placement, showFps });
   useEffect(() => {
-    latest.current = { ...props, placement };
+    latest.current = { ...props, placement, showFps };
   });
+
+  useImperativeHandle(
+    props.ref,
+    () => ({
+      focusTile(x, y, w, h) {
+        const scene = live.current?.scene;
+        if (!scene) return;
+        const { rig } = scene;
+        rig.target.x = x + w / 2;
+        rig.target.z = y + h / 2;
+        // The area may reach past the edge; the target stays over the map. Its height is left to the
+        // rig, which settles it onto the ground under it on the next frame.
+        const { terrain } = latest.current;
+        if (terrain) rig.clampTarget(terrain.width, terrain.height);
+      },
+    }),
+    [],
+  );
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const scene = createScene(canvas);
+    // Read when the scene is made: a change to the cap applies the next time the park loads.
+    const scene = createScene(canvas, { pixelRatioCap: settingsStore.getState().pixelRatioCap });
     const mine: Live = { scene, hasTerrain: false };
     live.current = mine;
     show(mine, latest.current.terrain);
@@ -154,8 +191,23 @@ export function Viewport(props: ViewportProps) {
     const observer = new ResizeObserver(() => scene.resize());
     observer.observe(canvas);
 
-    let frame = requestAnimationFrame(function draw() {
+    // The frame rate is counted over half a second, and only while it is shown.
+    let counted = 0;
+    let since: number | undefined;
+    let frame = requestAnimationFrame(function draw(now) {
       scene.render();
+      if (latest.current.showFps) {
+        since ??= now;
+        counted++;
+        if (now - since >= FPS_SAMPLE_MS) {
+          setFps(Math.round((counted * 1000) / (now - since)));
+          counted = 0;
+          since = now;
+        }
+      } else {
+        counted = 0;
+        since = undefined;
+      }
       frame = requestAnimationFrame(draw);
     });
 
@@ -189,11 +241,27 @@ export function Viewport(props: ViewportProps) {
     outlineRef.current?.();
   }, [placement]);
 
+  // A counter that is turned off and on again starts from nothing, not from the last number.
+  useEffect(() => {
+    if (!showFps) setFps(null);
+  }, [showFps]);
+
   return (
-    <canvas
-      ref={canvasRef}
-      aria-label="Park view"
-      className="absolute inset-0 block h-full w-full touch-none"
-    />
+    <>
+      <canvas
+        ref={canvasRef}
+        aria-label="Park view"
+        className="absolute inset-0 block h-full w-full touch-none"
+      />
+      {showFps && (
+        // A readout for the player's eye: not announced, and it never takes the pointer.
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute bottom-3.5 left-3.5 rounded-md bg-black/50 px-2 py-0.5 text-[11px] tabular-nums text-muted"
+        >
+          {fps ?? "…"} FPS
+        </div>
+      )}
+    </>
   );
 }

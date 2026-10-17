@@ -1,5 +1,5 @@
 import { SimClient, SimHostServer, createLinkedTransports } from "@coasterworks/protocol";
-import type { HostTimers, MessageTransport } from "@coasterworks/protocol";
+import type { EventMessage, HostTimers, MessageTransport } from "@coasterworks/protocol";
 import { Sim, createWorld } from "@coasterworks/sim";
 import { StrictMode, type ReactNode } from "react";
 import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
@@ -52,6 +52,37 @@ function makeRig(): Rig {
     advance: (ms) => {
       now += ms;
     },
+  };
+}
+
+/** A log event, as the host would send it. */
+function logEvent(id: number, over: Partial<EventMessage["entry"]> = {}): EventMessage {
+  return {
+    t: "event",
+    kind: "log",
+    entry: { id, tick: id, client: "player", name: "terrain_raise", input: {}, cost: 0, ...over },
+  };
+}
+
+/** `useHost` over a client that does nothing but connect, and hands back a way to send it events. */
+async function withStubClient() {
+  let handler: ((event: EventMessage) => void) | undefined;
+  const client = {
+    onSnapshot: () => () => {},
+    onEvent: (fn: (event: EventMessage) => void) => {
+      handler = fn;
+      return () => {};
+    },
+    onError: () => () => {},
+    onClose: () => () => {},
+    connect: async () => ({ halted: false }),
+    close: () => {},
+  } as unknown as SimClient;
+  const hook = renderHook(() => useHost(async () => ({ client })));
+  await waitFor(() => expect(hook.result.current.status).toBe("ready"));
+  return {
+    result: hook.result,
+    emit: (event: EventMessage) => handler?.(event),
   };
 }
 
@@ -133,26 +164,47 @@ describe("useHost", () => {
     });
   });
 
-  it("keeps only the last 50 events", async () => {
-    const rig = makeRig();
-    const { result } = renderHook(() => useHost(rig.connect));
-    await waitFor(() => expect(result.current.status).toBe("ready"));
-    for (let i = 0; i < 55; i++) {
-      await act(async () => {
-        // A tile's surface, flipped each time: $10 a command, so the cash never runs out.
-        await result.current.client?.command("terrain_set_surface", {
-          x: 0,
-          y: 0,
-          w: 1,
-          h: 1,
-          surface: 1 + (i % 2),
-        });
-      });
-    }
-    await waitFor(() => expect(result.current.events).toHaveLength(50));
+  it("keeps only the last 200 events", async () => {
+    const { result, emit } = await withStubClient();
+    act(() => {
+      for (let id = 1; id <= 205; id++) emit(logEvent(id));
+    });
+    expect(result.current.events).toHaveLength(200);
     const ids = result.current.events.map((e) => e.entry.id);
-    expect(ids[ids.length - 1]).toBe(55);
     expect(ids[0]).toBe(6);
+    expect(ids[ids.length - 1]).toBe(205);
+  });
+
+  it("replaces an event whose id it already has, rather than adding a second", async () => {
+    const { result, emit } = await withStubClient();
+    act(() => {
+      emit(logEvent(1, { cost: 100 }));
+      emit(logEvent(2, { cost: 200 }));
+      emit(logEvent(2, { cost: 999, undoneBy: 3 }));
+    });
+    expect(result.current.events.map((e) => e.entry.id)).toEqual([1, 2]);
+    expect(result.current.events[1]?.entry).toMatchObject({ cost: 999, undoneBy: 3 });
+    expect(result.current.events[0]?.entry.cost).toBe(100);
+  });
+
+  it("keeps events in id order, however they arrive", async () => {
+    const { result, emit } = await withStubClient();
+    act(() => {
+      emit(logEvent(3));
+      emit(logEvent(1));
+      emit(logEvent(2));
+    });
+    expect(result.current.events.map((e) => e.entry.id)).toEqual([1, 2, 3]);
+  });
+
+  it("does not count a replaced event twice against the cap", async () => {
+    const { result, emit } = await withStubClient();
+    act(() => {
+      for (let id = 1; id <= 200; id++) emit(logEvent(id));
+      for (let again = 0; again < 10; again++) emit(logEvent(200, { cost: again }));
+    });
+    expect(result.current.events).toHaveLength(200);
+    expect(result.current.events[0]?.entry.id).toBe(1);
   });
 
   it("sets error when the host reports one that is not about a request", async () => {

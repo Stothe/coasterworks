@@ -1,24 +1,27 @@
 import type { SimClient, Speed } from "@coasterworks/protocol";
 import type { ExecResult } from "@coasterworks/sim";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { UiActionDeps } from "./actions/registry";
+import { humanizeName, type UiActionDeps } from "./actions/registry";
 import type { Action, ActionContext } from "./actions/types";
 import { useActions } from "./actions/useActions";
 import { bindingFor, stepSpeed } from "./state/keys";
 import { uiStore, useUiStore } from "./state/uiStore";
 import { useHost } from "./state/useHost";
+import { useNotifications } from "./state/useNotifications";
+import { useTimeline, type TileRect } from "./state/useTimeline";
 import { useToasts } from "./state/useToasts";
 import { Banner } from "./ui/Banner";
 import { CommandBar } from "./ui/CommandBar";
 import { Dock } from "./ui/Dock";
+import { HelpOverlay } from "./ui/HelpOverlay";
 import { Inspector } from "./ui/Inspector";
-import { IconButton } from "./ui/kit";
 import { StatusPills } from "./ui/StatusPills";
 import { TileContextMenu, type TileMenuHandle } from "./ui/TileContextMenu";
 import { Toast } from "./ui/Toast";
+import { TopRight } from "./ui/TopRight";
 import { Tray } from "./ui/Tray";
 import { requestClassicView } from "./viewport/classicView";
-import { Viewport, type ViewportProps } from "./viewport/Viewport";
+import { Viewport, type ViewportHandle, type ViewportProps } from "./viewport/Viewport";
 import { BRUSH_SIZES } from "./viewport/terrainTools";
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -43,6 +46,7 @@ export function App() {
   const inspectorOpen = useUiStore((state) => state.inspector.open);
   const [lastCharge, setLastCharge] = useState<number | null>(null);
   const tileMenu = useRef<TileMenuHandle>(null);
+  const viewport = useRef<ViewportHandle>(null);
 
   const { client } = host;
   const speed: Speed = host.snapshot?.header.speed ?? 1;
@@ -98,6 +102,11 @@ export function App() {
   /** The viewport's right click: the tile menu opens at the pointer. */
   const openTileMenu = useCallback<NonNullable<ViewportProps["onSecondaryClick"]>>(
     (tile, point) => tileMenu.current?.openAt(tile, point),
+    [],
+  );
+  /** Looks at an area of the map: a timeline entry's, or a toast's. */
+  const focusRect = useCallback(
+    ({ x, y, w, h }: TileRect) => viewport.current?.focusTile(x, y, w, h),
     [],
   );
   // The newest event the host has seen. The inspector looks at the park again after each one.
@@ -223,21 +232,40 @@ export function App() {
   };
 
   // What the host reports shows for a moment. A halt and a lost connection have their banners.
+  const reportedError =
+    host.error && host.status === "ready" && host.error !== host.haltMessage
+      ? host.error
+      : undefined;
   useEffect(() => {
-    if (host.error && host.status === "ready" && host.error !== host.haltMessage) {
-      push(host.error, { kind: "error" });
-    }
-  }, [host.error, host.haltMessage, host.status, push]);
+    if (reportedError !== undefined) push(reportedError, { kind: "error" });
+  }, [reportedError, push]);
 
-  // Whatever an agent does shows up as it happens.
+  // What the bell counts: an agent's commands, and the errors above, since it was last opened.
+  const notifications = useNotifications(host.events, reportedError);
+  const { clear: clearNotifications } = notifications;
+  const openNotifications = useCallback(() => {
+    uiStore.getState().openInspector("timeline");
+    clearNotifications();
+  }, [clearNotifications]);
+
+  // Whatever an agent does shows up as it happens, and a click on it goes to where it happened.
+  const timeline = useTimeline(host.events);
   const seenEvent = useRef(0);
   useEffect(() => {
+    const entries = new Map(timeline.map((entry) => [entry.id, entry]));
     for (const { entry } of host.events) {
       if (entry.id <= seenEvent.current) continue;
       seenEvent.current = entry.id;
-      if (entry.client === "agent") push(`Agent: ${entry.name}`);
+      if (entry.client !== "agent") continue;
+      const found = entries.get(entry.id);
+      const title = found?.title ?? humanizeName(entry.name);
+      const rect = found?.rect;
+      push(
+        `Agent: ${title}`,
+        rect ? { action: { label: `Jump to ${title}`, run: () => focusRect(rect) } } : {},
+      );
     }
-  }, [host.events, push]);
+  }, [host.events, timeline, push, focusRect]);
 
   // Tells the smoke test, and anyone with a console, that the page has a sim to talk to.
   useEffect(() => {
@@ -258,6 +286,7 @@ export function App() {
         disabled={disconnected}
       >
         <Viewport
+          ref={viewport}
           terrain={host.terrain}
           tick={host.snapshot?.header.tick ?? 0}
           client={client}
@@ -307,11 +336,11 @@ export function App() {
             )
           )}
         </div>
-        <div className="glass pointer-events-auto absolute top-3.5 right-3.5 p-[3px]">
-          <IconButton
-            label="Open command bar"
-            icon={<SearchIcon />}
-            onClick={() => uiStore.getState().openCommandBar()}
+        <div className="pointer-events-auto absolute top-3.5 right-3.5">
+          <TopRight
+            unread={notifications.count}
+            onOpenNotifications={openNotifications}
+            onOpenSearch={() => uiStore.getState().openCommandBar()}
             disabled={disconnected}
           />
         </div>
@@ -322,9 +351,12 @@ export function App() {
           ctx={ctx}
           execute={execute}
           notify={push}
+          events={host.events}
+          focusTile={focusRect}
           {...(lastEventId !== undefined && { lastEventId })}
         />
         <Toast toasts={toasts} onDismiss={dismiss} besideInspector={inspectorOpen} />
+        <HelpOverlay byId={byId} />
         {(host.status === "connecting" || host.status === "error") && (
           <div className="absolute inset-0 grid place-items-center">
             <p role="status" className="glass px-4 py-2 text-sm">
@@ -344,14 +376,5 @@ export function App() {
         {...(catalogError !== undefined && { catalogError })}
       />
     </div>
-  );
-}
-
-function SearchIcon() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <circle cx="7" cy="7" r="4.5" stroke="currentColor" strokeWidth="1.5" />
-      <path d="M10.5 10.5 14 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
   );
 }

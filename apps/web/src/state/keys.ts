@@ -122,6 +122,34 @@ function parse(combo: string): ParsedCombo {
   return result;
 }
 
+/** What a key that is not a single character is called on a key cap. */
+const KEY_NAMES: ReadonlyMap<string, string> = new Map([
+  ["escape", "Esc"],
+  ["space", "Space"],
+  ["home", "Home"],
+]);
+
+/**
+ * A combo as it is written on key caps. On a Mac the modifiers are symbols run together with the
+ * key (`⇧⌘Z`); elsewhere they are words joined with `+` (`Ctrl+Shift+Z`). `mod` is Command or Ctrl.
+ */
+export function formatCombo(combo: string, mac: boolean = isMac()): string {
+  const { key, mod, ctrl, meta, alt, shift } = parse(combo);
+  const name = KEY_NAMES.get(key) ?? key.toUpperCase();
+  if (mac) {
+    // Apple's order: Control, Option, Shift, Command.
+    const symbols = `${ctrl ? "⌃" : ""}${alt ? "⌥" : ""}${shift ? "⇧" : ""}${mod || meta ? "⌘" : ""}`;
+    return `${symbols}${name}`;
+  }
+  const words = [
+    ...(ctrl || mod ? ["Ctrl"] : []),
+    ...(alt ? ["Alt"] : []),
+    ...(shift ? ["Shift"] : []),
+    ...(meta ? ["Win"] : []),
+  ];
+  return [...words, name].join("+");
+}
+
 /** `Escape` is `escape`, a space is `space`, `Z` is `z`. */
 function keyName(key: string): string {
   return key === " " ? "space" : key.toLowerCase();

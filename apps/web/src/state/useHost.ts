@@ -15,7 +15,10 @@ export interface HostState {
   snapshot: DecodedSnapshot | null;
   /** The latest terrain. A snapshot without terrain leaves it as it was. */
   terrain: TerrainData | null;
-  /** The last 50 log events, oldest first. */
+  /**
+   * The last 200 log events, oldest first and in id order. An event whose id is already here
+   * replaces that entry, so no id appears twice.
+   */
   events: EventMessage[];
   client: SimClient | null;
   /** Why the connection failed or was lost, or the last error the host reported. */
@@ -32,7 +35,7 @@ export interface HostState {
 /** What `useHost` needs from a connection. `connectHost` provides it; tests provide their own. */
 export type ConnectFn = () => Promise<{ client: SimClient }>;
 
-const MAX_EVENTS = 50;
+const MAX_EVENTS = 200;
 
 /** What the host's error starts with when it has stopped the simulation. */
 const HALT_PREFIX = "Simulation halted";
@@ -69,6 +72,20 @@ function withSnapshot(state: HostState, snapshot: DecodedSnapshot): HostState {
   return next;
 }
 
+/**
+ * `events` with `event` in it. The newest id is the common case and is added at the end; an id the
+ * list already has is replaced in place, and an older one is put where its id belongs.
+ */
+function withEvent(events: EventMessage[], event: EventMessage): EventMessage[] {
+  const { id } = event.entry;
+  const last = events.at(-1);
+  if (!last || id > last.entry.id) return [...events, event].slice(-MAX_EVENTS);
+  const at = events.findIndex((known) => known.entry.id >= id);
+  const next = events.slice();
+  next.splice(at, events[at]?.entry.id === id ? 1 : 0, event);
+  return next.slice(-MAX_EVENTS);
+}
+
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -94,7 +111,7 @@ function open(connect: ConnectFn, setState: (update: (state: HostState) => HostS
       // Everything is subscribed before hello: the host sends its first snapshot with the welcome.
       client.onSnapshot((snapshot) => setState((state) => withSnapshot(state, snapshot)));
       client.onEvent((event) =>
-        setState((state) => ({ ...state, events: [...state.events, event].slice(-MAX_EVENTS) })),
+        setState((state) => ({ ...state, events: withEvent(state.events, event) })),
       );
       client.onError((message) =>
         setState((state) =>

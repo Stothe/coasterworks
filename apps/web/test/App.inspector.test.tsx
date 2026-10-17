@@ -163,7 +163,7 @@ describe("the status pills open the inspector", () => {
     press("7");
     fireEvent.click(screen.getByRole("button", { name: "Timeline" }));
     expect(store().selection).toEqual({ kind: "park" });
-    expect(await screen.findByText("Timeline arrives in the next update")).toBeTruthy();
+    expect(await screen.findByText("Nothing has happened yet.")).toBeTruthy();
   });
 });
 

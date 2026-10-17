@@ -8,6 +8,8 @@ export interface PushOptions {
   kind?: ToastItem["kind"];
   /** Stays until dismissed. */
   sticky?: boolean;
+  /** Turns the message into a button that does this when pressed, named `label`. */
+  action?: ToastItem["action"];
 }
 
 /** The messages on screen, each gone after 3 seconds unless it was pushed sticky. */
@@ -25,7 +27,9 @@ export function useToasts() {
   const push = useCallback(
     (text: string, options: PushOptions = {}) => {
       const id = nextId.current++;
-      setToasts((current) => [...current, { id, text, kind: options.kind ?? "info" }]);
+      const toast: ToastItem = { id, text, kind: options.kind ?? "info" };
+      if (options.action) toast.action = options.action;
+      setToasts((current) => [...current, toast]);
       if (!options.sticky)
         timers.current.set(
           id,

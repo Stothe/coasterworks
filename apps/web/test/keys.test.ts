@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 import { buildActions, type UiActionDeps } from "../src/actions/registry";
-import { KEYMAP, bindingFor, matchCombo, type KeyLike } from "../src/state/keys";
+import { KEYMAP, bindingFor, formatCombo, matchCombo, type KeyLike } from "../src/state/keys";
 
 const key = (key: string, mods: Partial<Omit<KeyLike, "key">> = {}): KeyLike => ({
   key,
@@ -189,5 +189,47 @@ describe("KEYMAP", () => {
   it("lets only Escape work while typing", () => {
     const always = KEYMAP.filter((binding) => binding.when === "always");
     expect(always.map((binding) => binding.combo)).toEqual(["escape"]);
+  });
+});
+
+describe("formatCombo", () => {
+  it("writes mod as Ctrl on a PC and Command on a Mac", () => {
+    expect(formatCombo("mod+k", false)).toBe("Ctrl+K");
+    expect(formatCombo("mod+k", true)).toBe("⌘K");
+  });
+
+  it("writes shift with it: Ctrl+Shift+Z, and ⇧⌘Z", () => {
+    expect(formatCombo("mod+shift+z", false)).toBe("Ctrl+Shift+Z");
+    expect(formatCombo("mod+shift+z", true)).toBe("⇧⌘Z");
+  });
+
+  it("names the modifiers it is given: alt, ctrl and meta", () => {
+    expect(formatCombo("alt+x", false)).toBe("Alt+X");
+    expect(formatCombo("alt+x", true)).toBe("⌥X");
+    expect(formatCombo("ctrl+x", true)).toBe("⌃X");
+    expect(formatCombo("meta+x", false)).toBe("Win+X");
+    expect(formatCombo("meta+x", true)).toBe("⌘X");
+  });
+
+  it("names the keys that are not a character", () => {
+    expect(formatCombo("escape", false)).toBe("Esc");
+    expect(formatCombo("space", false)).toBe("Space");
+    expect(formatCombo("home", false)).toBe("Home");
+  });
+
+  it("shows a letter in capitals and a symbol as it is, including +", () => {
+    expect(formatCombo("r", false)).toBe("R");
+    expect(formatCombo("1", false)).toBe("1");
+    expect(formatCombo("?", false)).toBe("?");
+    expect(formatCombo("[", false)).toBe("[");
+    expect(formatCombo("+", false)).toBe("+");
+    expect(formatCombo("+", true)).toBe("+");
+  });
+
+  it("has something to show for every combo of the map", () => {
+    for (const { combo } of KEYMAP) {
+      expect(formatCombo(combo, false).length, combo).toBeGreaterThan(0);
+      expect(formatCombo(combo, true).length, combo).toBeGreaterThan(0);
+    }
   });
 });

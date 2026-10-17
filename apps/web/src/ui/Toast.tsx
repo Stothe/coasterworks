@@ -4,6 +4,8 @@ export interface ToastItem {
   id: number;
   text: string;
   kind: "info" | "error";
+  /** Makes the message a button: what it is called to assistive technology, and what it does. */
+  action?: { label: string; run(): void };
 }
 
 export interface ToastProps {
@@ -13,7 +15,7 @@ export interface ToastProps {
   besideInspector?: boolean;
 }
 
-/** The stack of messages at the top right, under the command bar button. */
+/** The stack of messages at the top right, under the buttons. One with an action jumps on a click. */
 export function Toast({ toasts, onDismiss, besideInspector = false }: ToastProps) {
   return (
     <div
@@ -27,9 +29,15 @@ export function Toast({ toasts, onDismiss, besideInspector = false }: ToastProps
           role={toast.kind === "error" ? "alert" : "status"}
           className="glass pointer-events-auto flex items-start gap-2 py-1.5 pr-1.5 pl-3 text-sm"
         >
-          <span className={`flex-1 py-1 ${toast.kind === "error" ? "text-[#ffb4b4]" : ""}`}>
-            {toast.text}
-          </span>
+          {toast.action ? (
+            <JumpButton action={toast.action} onDone={() => onDismiss(toast.id)}>
+              {toast.text}
+            </JumpButton>
+          ) : (
+            <span className={`flex-1 py-1 ${toast.kind === "error" ? "text-[#ffb4b4]" : ""}`}>
+              {toast.text}
+            </span>
+          )}
           <button
             type="button"
             aria-label="Dismiss"
@@ -41,5 +49,30 @@ export function Toast({ toasts, onDismiss, besideInspector = false }: ToastProps
         </div>
       ))}
     </div>
+  );
+}
+
+/** The text of a message that does something when pressed, and is gone once it has. */
+function JumpButton({
+  action,
+  onDone,
+  children,
+}: {
+  action: NonNullable<ToastItem["action"]>;
+  onDone(): void;
+  children: string;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={action.label}
+      onClick={() => {
+        action.run();
+        onDone();
+      }}
+      className="hud-button flex-1 justify-start rounded-lg py-1 text-left"
+    >
+      {children}
+    </button>
   );
 }

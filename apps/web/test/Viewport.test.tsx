@@ -2,31 +2,46 @@ import type { SimClient } from "@coasterworks/protocol";
 import type { ControlHandlers, TerrainData } from "@coasterworks/render";
 import type { ExecResult } from "@coasterworks/sim";
 import { act, cleanup, render } from "@testing-library/react";
+import { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { settingsStore } from "../src/state/settings";
 import { uiStore } from "../src/state/uiStore";
-import { Viewport, type ViewportProps } from "../src/viewport/Viewport";
+import { Viewport, type ViewportHandle, type ViewportProps } from "../src/viewport/Viewport";
 
 // No WebGL in jsdom: the scene is a stand-in, and the controls hand over the handlers the viewport
 // gave them, so that a test can click as the controls would.
 const fake = vi.hoisted(() => ({
   handlers: null as unknown,
+  /** What the scene was created with. */
+  options: undefined as unknown,
+  rig: null as unknown as {
+    distance: number;
+    limits: { distance: [number, number] };
+    yaw: number;
+    setClassic(): void;
+    target: { x: number; y: number; z: number };
+    clampTarget: (width: number, height: number) => void;
+  },
   pickAt: ((_x: number, _y: number) => null) as (
     x: number,
     y: number,
   ) => { x: number; y: number } | null,
 }));
 vi.mock("@coasterworks/render", () => ({
-  createScene: () => ({
-    rig: { distance: 10, limits: { distance: [1, 200] }, yaw: 0, setClassic: () => {} },
-    setTerrain: () => {},
-    updateTerrain: () => {},
-    setTimeOfDay: () => {},
-    highlightTile: () => {},
-    pickAt: (x: number, y: number) => fake.pickAt(x, y),
-    resize: () => {},
-    render: () => {},
-    dispose: () => {},
-  }),
+  createScene: (_canvas: unknown, options: unknown) => {
+    fake.options = options;
+    return {
+      rig: fake.rig,
+      setTerrain: () => {},
+      updateTerrain: () => {},
+      setTimeOfDay: () => {},
+      highlightTile: () => {},
+      pickAt: (x: number, y: number) => fake.pickAt(x, y),
+      resize: () => {},
+      render: () => {},
+      dispose: () => {},
+    };
+  },
   attachControls: (_canvas: unknown, _rig: unknown, handlers: unknown) => {
     fake.handlers = handlers;
     return () => {};
@@ -46,13 +61,25 @@ const client = { command } as unknown as SimClient;
 
 beforeEach(() => {
   uiStore.setState(uiStore.getInitialState(), true);
+  settingsStore.setState(settingsStore.getInitialState(), true);
   command.mockResolvedValue(OK);
   fake.pickAt = () => ({ x: 2, y: 5 });
+  fake.options = undefined;
+  fake.rig = {
+    distance: 10,
+    limits: { distance: [1, 200] },
+    yaw: 0,
+    setClassic: () => {},
+    target: { x: 4, y: 3, z: 4 },
+    clampTarget: vi.fn(),
+  };
 });
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   command.mockReset();
   uiStore.setState(uiStore.getInitialState(), true);
+  settingsStore.setState(settingsStore.getInitialState(), true);
 });
 
 function mount(over: Partial<ViewportProps> = {}) {
@@ -216,5 +243,96 @@ describe("Viewport: a right click", () => {
     pointer(canvas, "pointerdown", { button: 2, x: 5, y: 5 });
     pointer(canvas, "pointerup", { button: 2, x: 5, y: 5 });
     expect(onSecondaryClick).not.toHaveBeenCalled();
+  });
+});
+
+describe("Viewport: focusTile", () => {
+  function mountWithHandle(over: Partial<ViewportProps> = {}) {
+    const ref = createRef<ViewportHandle>();
+    const props: ViewportProps = { terrain, tick: 0, client, onResult: vi.fn(), ...over };
+    render(<Viewport {...props} ref={ref} />);
+    return ref;
+  }
+
+  it("puts the target over the center of the area, and keeps the way the camera looks", () => {
+    const ref = mountWithHandle();
+    fake.rig.yaw = 1.25;
+    ref.current?.focusTile(2, 3, 4, 2);
+    expect(fake.rig.target.x).toBe(4);
+    expect(fake.rig.target.z).toBe(4);
+    expect(fake.rig.distance).toBe(10);
+    expect(fake.rig.yaw).toBe(1.25);
+  });
+
+  it("centers on the middle of a single tile", () => {
+    const ref = mountWithHandle();
+    ref.current?.focusTile(5, 1, 1, 1);
+    expect(fake.rig.target.x).toBe(5.5);
+    expect(fake.rig.target.z).toBe(1.5);
+  });
+
+  it("leaves the height to the camera, which follows the ground", () => {
+    const ref = mountWithHandle();
+    ref.current?.focusTile(0, 0, 2, 2);
+    expect(fake.rig.target.y).toBe(3);
+  });
+
+  it("keeps the target over the map", () => {
+    const ref = mountWithHandle();
+    ref.current?.focusTile(6, 6, 2, 2);
+    expect(fake.rig.clampTarget).toHaveBeenCalledWith(8, 8);
+  });
+
+  it("does nothing before there is a scene to move", () => {
+    const ref = createRef<ViewportHandle>();
+    const { unmount } = render(
+      <Viewport terrain={terrain} tick={0} client={client} onResult={vi.fn()} ref={ref} />,
+    );
+    unmount();
+    expect(() => ref.current?.focusTile(1, 1, 1, 1)).not.toThrow();
+  });
+});
+
+describe("Viewport: the pixel ratio cap", () => {
+  it("creates the scene with the cap the settings hold", () => {
+    settingsStore.getState().setPixelRatioCap(1.5);
+    mount();
+    expect(fake.options).toEqual({ pixelRatioCap: 1.5 });
+  });
+
+  it("creates it with 2, the default cap", () => {
+    mount();
+    expect(fake.options).toEqual({ pixelRatioCap: 2 });
+  });
+});
+
+describe("Viewport: the FPS counter", () => {
+  const counter = () => document.body.textContent?.match(/(\d+|…) FPS/)?.[0] ?? null;
+
+  it("is not there unless Show FPS is on", () => {
+    mount();
+    expect(counter()).toBeNull();
+  });
+
+  it("is there when Show FPS is on, and counts the frames of the draw loop", () => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+    act(() => settingsStore.getState().setShowFps(true));
+    mount();
+    expect(counter()).toBe("… FPS");
+    // Fake frames come every 16ms, which is 62 or 63 a second.
+    act(() => {
+      vi.advanceTimersByTime(1100);
+    });
+    const fps = Number(counter()?.split(" ")[0]);
+    expect(fps).toBeGreaterThanOrEqual(55);
+    expect(fps).toBeLessThanOrEqual(65);
+  });
+
+  it("goes away when Show FPS is turned off", () => {
+    act(() => settingsStore.getState().setShowFps(true));
+    mount();
+    expect(counter()).not.toBeNull();
+    act(() => settingsStore.getState().setShowFps(false));
+    expect(counter()).toBeNull();
   });
 });
