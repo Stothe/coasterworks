@@ -33,6 +33,7 @@ describe("SimClient", () => {
       height: 8,
       name: "Test Park",
       speed: 1,
+      halted: false,
     });
   });
 
@@ -351,6 +352,118 @@ describe("SimClient", () => {
     expect(messages).toEqual(["Simulation halted: boom"]);
   });
 
+  it("connect() to a halted host resolves with halted, and onError and onSnapshot hear why", async () => {
+    const { sim, clock, host, client } = setup();
+    sim.systems.push({
+      name: "boom",
+      tick: () => {
+        throw new Error("boom");
+      },
+    });
+    host.start();
+    clock.advance(25);
+    clock.fire();
+
+    const messages: string[] = [];
+    const snapshots: DecodedSnapshot[] = [];
+    client.onError((message) => messages.push(message));
+    client.onSnapshot((snapshot) => snapshots.push(snapshot));
+    const welcome = await client.connect();
+
+    expect(welcome.halted).toBe(true);
+    expect(messages).toEqual(["Simulation halted: boom"]);
+    expect(snapshots.map((snapshot) => snapshot.header.halted)).toEqual([true]);
+  });
+
+  it("setSpeed() resumes a halted host, and the next snapshot says halted is over", async () => {
+    const { sim, clock, host, client } = setup();
+    await client.connect();
+    sim.systems.push({
+      name: "boom",
+      tick: () => {
+        throw new Error("boom");
+      },
+    });
+    host.start();
+    clock.advance(25);
+    clock.fire();
+    sim.systems.pop();
+    const flags: boolean[] = [];
+    client.onSnapshot((snapshot) => flags.push(snapshot.header.halted));
+
+    await client.setSpeed(1);
+
+    expect(flags).toEqual([false]);
+    expect(host.halted).toBe(false);
+    expect(clock.active()).toEqual([25]);
+  });
+
+  describe("onClose", () => {
+    it("fires once, with the reason the transport gives", () => {
+      const closers: Array<(reason?: string) => void> = [];
+      const client = new SimClient({
+        send: () => {},
+        onMessage: () => {},
+        onClose: (handler) => closers.push(handler),
+        close: () => {},
+      });
+      const reasons: string[] = [];
+      client.onClose((reason) => reasons.push(reason));
+
+      closers[0]?.("WebSocket closed (code 1006)");
+      closers[0]?.("again");
+
+      expect(reasons).toEqual(["WebSocket closed (code 1006)"]);
+    });
+
+    it("says Connection closed when the transport gives no reason", async () => {
+      const { client, hostSide } = setup();
+      await client.connect();
+      const reasons: string[] = [];
+      client.onClose((reason) => reasons.push(reason));
+      hostSide.close();
+      expect(reasons).toEqual(["Connection closed"]);
+    });
+
+    it("fires once for close() too, and not again when the transport then reports its close", async () => {
+      const { client } = setup();
+      await client.connect();
+      const reasons: string[] = [];
+      client.onClose((reason) => reasons.push(reason));
+      client.close();
+      client.close();
+      expect(reasons).toEqual(["Connection closed"]);
+    });
+
+    it("stops calling a handler that was removed, and one that throws does not stop the others", async () => {
+      const { client, hostSide } = setup();
+      await client.connect();
+      const heard: string[] = [];
+      const stop = client.onClose(() => heard.push("removed"));
+      client.onClose(() => {
+        throw new Error("handler failed");
+      });
+      client.onClose((reason) => heard.push(reason));
+      stop();
+      hostSide.close();
+      expect(heard).toEqual(["Connection closed"]);
+    });
+
+    it("calls a handler added after the connection ended, at once, with the reason", () => {
+      const closers: Array<(reason?: string) => void> = [];
+      const client = new SimClient({
+        send: () => {},
+        onMessage: () => {},
+        onClose: (handler) => closers.push(handler),
+        close: () => {},
+      });
+      closers[0]?.("the host went away");
+      const reasons: string[] = [];
+      client.onClose((reason) => reasons.push(reason));
+      expect(reasons).toEqual(["the host went away"]);
+    });
+  });
+
   it("a handler that throws does not keep the next one from running", async () => {
     const [server, clientSide] = createLinkedTransports();
     const client = new SimClient(clientSide);
@@ -373,6 +486,7 @@ describe("SimClient", () => {
       encodeSnapshot({
         tick: 7,
         speed: 1,
+        halted: false,
         cash: 0,
         loan: 0,
         date: "March 1, Year 1",

@@ -1,5 +1,5 @@
 import type { Speed, SimClient } from "@coasterworks/protocol";
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { useHost, type HostState } from "../src/state/useHost";
@@ -17,6 +17,7 @@ function hostAt(speed: Speed, halted: boolean): HostState {
       header: {
         tick: 0,
         speed,
+        halted,
         cash: 1_000_000,
         loan: 0,
         date: "March 1, Year 1",
@@ -30,6 +31,7 @@ function hostAt(speed: Speed, halted: boolean): HostState {
     events: [],
     client: { setSpeed } as unknown as SimClient,
     halted,
+    ...(halted ? { haltMessage: "Simulation halted: boom" } : {}),
   };
 }
 
@@ -66,15 +68,21 @@ describe("speed hotkeys", () => {
     expect(setSpeed).not.toHaveBeenCalled();
   });
 
-  it("work again once the host has been restarted", () => {
+  it("work again once Resume has restarted the host", () => {
     vi.mocked(useHost).mockReturnValue(hostAt(0, true));
     const { rerender } = render(<App />);
     press(" ");
     expect(setSpeed).not.toHaveBeenCalled();
 
-    vi.mocked(useHost).mockReturnValue(hostAt(0, false));
+    // The real path: Resume asks the host for speed 1, and the host's next snapshot says that it
+    // is running and no longer halted.
+    fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+    expect(setSpeed.mock.calls).toEqual([[1]]);
+    vi.mocked(useHost).mockReturnValue(hostAt(1, false));
     rerender(<App />);
+    expect(screen.queryByRole("button", { name: "Resume" })).toBeNull();
+
     press(" ");
-    expect(setSpeed).toHaveBeenCalledWith(1);
+    expect(setSpeed.mock.calls).toEqual([[1], [0]]);
   });
 });

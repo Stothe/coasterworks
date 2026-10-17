@@ -120,7 +120,7 @@ describe("wsTransport over a real socket", () => {
 
       const received: Frame[] = [];
       peer.onMessage((frame) => received.push(frame));
-      const closed = new Promise<void>((resolve) => peer.onClose(resolve));
+      const closed = new Promise<void>((resolve) => peer.onClose(() => resolve()));
 
       peer.send("text");
       peer.send(new Uint8Array([7, 8, 9]));

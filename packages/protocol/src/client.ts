@@ -18,6 +18,9 @@ interface Pending<T> {
   reject(error: Error): void;
 }
 
+/** What a closed connection is called when its transport does not say why. */
+const DEFAULT_CLOSE_REASON = "Connection closed";
+
 const closedError = () => new ProtocolError("Connection closed");
 
 /** Calls every handler with `value`. One that throws must not keep the rest from hearing it. */
@@ -51,15 +54,17 @@ export class SimClient {
   private readonly snapshotHandlers = new Set<(snapshot: DecodedSnapshot) => void>();
   private readonly eventHandlers = new Set<(event: EventMessage) => void>();
   private readonly errorHandlers = new Set<(message: string) => void>();
+  private readonly closeHandlers = new Set<(reason: string) => void>();
   private nextId = 1;
   private connecting: Promise<WelcomeMessage> | undefined;
   private helloPending: Pending<WelcomeMessage> | undefined;
   private closed = false;
+  private closeReason = DEFAULT_CLOSE_REASON;
 
   constructor(transport: MessageTransport) {
     this.transport = transport;
     transport.onMessage((frame) => this.handleFrame(frame));
-    transport.onClose(() => this.handleClose());
+    transport.onClose((reason) => this.handleClose(reason));
   }
 
   /** Says hello and resolves with the host's welcome. Rejects if the host refuses. */
@@ -119,6 +124,23 @@ export class SimClient {
    */
   onError(handler: (message: string) => void): () => void {
     return subscribe(this.errorHandlers, handler);
+  }
+
+  /**
+   * Calls `handler` once with the reason, when the connection ends: the host went away, the
+   * transport failed, or `close()` was called (the reason is then "Connection closed"). A handler
+   * added after the connection has ended is called at once. Returns the function that removes it.
+   */
+  onClose(handler: (reason: string) => void): () => void {
+    if (this.closed) {
+      try {
+        handler(this.closeReason);
+      } catch {
+        // The handler's failure is its own business.
+      }
+      return () => {};
+    }
+    return subscribe(this.closeHandlers, handler);
   }
 
   /** Closes the transport. Requests still waiting for an answer reject. */
@@ -187,11 +209,15 @@ export class SimClient {
     }
   }
 
-  private handleClose(): void {
+  private handleClose(reason?: string): void {
+    if (this.closed) return;
     this.closed = true;
+    this.closeReason = reason !== undefined && reason !== "" ? reason : DEFAULT_CLOSE_REASON;
     const waiting = [...this.pending.values(), ...(this.helloPending ? [this.helloPending] : [])];
     this.pending.clear();
     this.helloPending = undefined;
     for (const entry of waiting) entry.reject(closedError());
+    notify(this.closeHandlers, this.closeReason);
+    this.closeHandlers.clear();
   }
 }

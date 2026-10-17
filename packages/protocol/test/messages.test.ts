@@ -28,7 +28,8 @@ const ENTRY: LogEntryPublic = {
 };
 
 const HOST_MESSAGES: HostMessage[] = [
-  { t: "welcome", protocol: 1, width: 16, height: 16, name: "Park", speed: 1 },
+  { t: "welcome", protocol: 1, width: 16, height: 16, name: "Park", speed: 1, halted: false },
+  { t: "welcome", protocol: 1, width: 16, height: 16, name: "Park", speed: 0, halted: true },
   { t: "result", id: 1, result: { ok: true, id: 7, cost: 800 } },
   { t: "result", id: 2, result: { ok: false, error: "Nothing to undo" } },
   { t: "result", id: 3, result: { ok: true, result: { name: "Park", tick: 0 } } },
@@ -142,6 +143,14 @@ describe("host messages", () => {
     expect(parseHostMessage("{")).toHaveProperty("error");
     expect(parseHostMessage('{"t":"dance"}')).toEqual({ error: "Unknown message type: dance" });
     expect(parseHostMessage('{"t":"undo","id":1}')).toHaveProperty("error");
+  });
+
+  it("needs a boolean halted in a welcome", () => {
+    const welcome = { t: "welcome", protocol: 1, width: 16, height: 16, name: "Park", speed: 1 };
+    expect(parseHostMessage(JSON.stringify(welcome))).toEqual({
+      error: "Invalid welcome message at halted",
+    });
+    expect(parseHostMessage(JSON.stringify({ ...welcome, halted: "no" }))).toHaveProperty("error");
   });
 
   it("returns an error for a result with no id or a malformed outcome", () => {

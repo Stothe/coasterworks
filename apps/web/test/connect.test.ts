@@ -47,9 +47,9 @@ class FakeWebSocket {
   receive(data: string | ArrayBuffer): void {
     this.emit("message", { data });
   }
-  drop(): void {
+  drop(code = 1006, reason = ""): void {
     this.readyState = FakeWebSocket.CLOSED;
-    this.emit("close", {});
+    this.emit("close", { code, reason });
   }
   private emit(type: string, event: object): void {
     for (const listener of this.listeners.get(type) ?? []) listener(event as never);
@@ -209,6 +209,7 @@ describe("connectHost", () => {
         height: 4,
         name: "Test",
         speed: 1,
+        halted: false,
       }),
     );
     expect((await connecting).name).toBe("Test");
@@ -274,6 +275,19 @@ describe("WsTransport", () => {
     second.transport.close();
     expect(second.socket.closed).toBe(true);
     expect(closed).toBe(1);
+  });
+
+  it("says why it closed: the server's words, else the close code", () => {
+    const named = connected();
+    const reasons: Array<string | undefined> = [];
+    named.transport.onClose((reason) => reasons.push(reason));
+    named.socket.open();
+    named.socket.drop(1011, "  the park crashed ");
+    const bare = connected();
+    bare.transport.onClose((reason) => reasons.push(reason));
+    bare.socket.open();
+    bare.socket.drop(1006);
+    expect(reasons).toEqual(["the park crashed", "WebSocket closed (code 1006)"]);
   });
 
   it("does not send into a socket that has closed", () => {
@@ -359,11 +373,11 @@ describe("WorkerTransport", () => {
 
   it("reports a worker that crashes as closed", () => {
     const { worker, transport } = started();
-    let closes = 0;
-    transport.onClose(() => closes++);
+    const reasons: Array<string | undefined> = [];
+    transport.onClose((reason) => reasons.push(reason));
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     worker.crash("module failed to load");
-    expect(closes).toBe(1);
+    expect(reasons).toEqual(["The sim worker failed: module failed to load"]);
     expect(error).toHaveBeenCalled();
     error.mockRestore();
   });

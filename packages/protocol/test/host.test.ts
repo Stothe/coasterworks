@@ -40,11 +40,13 @@ describe("handshake", () => {
       height: 8,
       name: "Test Park",
       speed: 1,
+      halted: false,
     });
     const snapshot = peer.lastSnapshot();
     expect(snapshot.header).toMatchObject({
       tick: 0,
       speed: 1,
+      halted: false,
       date: "March 1, Year 1",
       cash: sim.world.finance.cash,
       loan: sim.world.finance.loan,
@@ -675,6 +677,20 @@ describe("start and stop", () => {
     expect(clock.started).toBe(2);
   });
 
+  it("can be started again after a stop, without scheduling twice", () => {
+    const { sim, clock, host } = setup();
+    host.start();
+    host.stop();
+    expect(clock.active()).toEqual([]);
+    host.start();
+    host.start();
+    expect(clock.active()).toEqual([25]);
+    expect(clock.started).toBe(2);
+    clock.advance(25);
+    clock.fire();
+    expect(sim.world.tick).toBe(1);
+  });
+
   it("ticks at least as often as it sends snapshots", () => {
     const { clock, host } = setup({ snapshotIntervalMs: 10 });
     host.start();
@@ -994,6 +1010,159 @@ describe("a fault in the sim", () => {
     sim.systems.push(boom);
     clock.advance(25);
     expect(() => host.tick()).toThrow("boom");
+  });
+
+  it("says halted in the snapshot it sends with the error, and keeps the reason", () => {
+    const { sim, clock, host } = setup();
+    const peer = joined(host);
+    expect(host.halted).toBe(false);
+    expect(host.haltReason).toBeUndefined();
+    sim.systems.push(boom);
+    host.start();
+    clock.advance(25);
+    clock.fire();
+
+    expect(host.halted).toBe(true);
+    expect(host.haltReason).toBe("boom");
+    expect(peer.lastSnapshot().header).toMatchObject({ halted: true, speed: 0 });
+  });
+
+  it("tells a client that joins late, with the welcome and the error before its snapshot", () => {
+    const { sim, clock, host } = setup();
+    sim.systems.push(boom);
+    host.start();
+    clock.advance(25);
+    clock.fire();
+
+    const late = connectPeer(host);
+    late.hello();
+    expect(late.kinds()).toEqual(["welcome", "error", "snapshot"]);
+    expect(late.messages("welcome")[0]).toMatchObject({ halted: true, speed: 0 });
+    expect(late.messages("error")).toEqual([{ t: "error", message: "Simulation halted: boom" }]);
+    expect(late.lastSnapshot().header).toMatchObject({ halted: true, speed: 0 });
+  });
+
+  it("sends no halt error to a client that joins a healthy host", () => {
+    const { host } = setup();
+    const peer = connectPeer(host);
+    peer.hello();
+    expect(peer.kinds()).toEqual(["welcome", "snapshot"]);
+    expect(peer.messages("welcome")[0]?.halted).toBe(false);
+  });
+
+  it("is resumed by a speed message above 0: the halt clears, the loop restarts, time advances", () => {
+    const { sim, clock, host } = setup();
+    const peer = joined(host);
+    sim.systems.push(boom);
+    host.start();
+    clock.advance(25);
+    clock.fire();
+    expect(clock.active()).toEqual([]);
+    sim.systems.pop();
+    peer.clear();
+    const haltedAt = sim.world.tick;
+
+    peer.send({ t: "speed", id: 1, speed: 1 });
+
+    expect(peer.messages("result")).toEqual([{ t: "result", id: 1, result: { ok: true } }]);
+    expect(peer.lastSnapshot().header).toMatchObject({ halted: false, speed: 1 });
+    expect(host.halted).toBe(false);
+    expect(host.haltReason).toBeUndefined();
+    expect(host.speed).toBe(1);
+    expect(clock.active()).toEqual([25]);
+    expect(clock.started).toBe(2);
+
+    clock.advance(25);
+    clock.fire();
+    host.tick();
+    expect(sim.world.tick).toBeGreaterThan(haltedAt);
+  });
+
+  it("resumes at the speed asked for, and a late joiner then hears nothing of the halt", () => {
+    const { sim, clock, host } = setup();
+    const peer = joined(host);
+    sim.systems.push(boom);
+    host.start();
+    clock.advance(25);
+    clock.fire();
+    sim.systems.pop();
+
+    peer.send({ t: "speed", id: 1, speed: 4 });
+    expect(host.speed).toBe(4);
+    expect(host.halted).toBe(false);
+
+    const late = connectPeer(host);
+    late.hello();
+    expect(late.kinds()).toEqual(["welcome", "snapshot"]);
+    expect(late.messages("welcome")[0]).toMatchObject({ halted: false, speed: 4 });
+  });
+
+  it("stays halted for a speed message of 0, which is answered ok and starts nothing", () => {
+    const { sim, clock, host } = setup();
+    const peer = joined(host);
+    sim.systems.push(boom);
+    host.start();
+    clock.advance(25);
+    clock.fire();
+    const started = clock.started;
+    peer.clear();
+
+    peer.send({ t: "speed", id: 1, speed: 0 });
+
+    expect(peer.messages("result")).toEqual([{ t: "result", id: 1, result: { ok: true } }]);
+    expect(peer.lastSnapshot().header).toMatchObject({ halted: true, speed: 0 });
+    expect(host.halted).toBe(true);
+    expect(host.speed).toBe(0);
+    expect(clock.active()).toEqual([]);
+    expect(clock.started).toBe(started);
+  });
+
+  it("halts again, and tells everyone again, when the fault is still there after a resume", () => {
+    const { sim, clock, host } = setup();
+    const peer = joined(host);
+    sim.systems.push(boom);
+    host.start();
+    clock.advance(25);
+    clock.fire();
+    expect(peer.messages("error")).toHaveLength(1);
+
+    peer.send({ t: "speed", id: 1, speed: 1 });
+    expect(host.halted).toBe(false);
+    clock.advance(25);
+    expect(() => clock.fire()).not.toThrow();
+
+    expect(host.halted).toBe(true);
+    expect(clock.active()).toEqual([]);
+    expect(peer.messages("error")).toHaveLength(2);
+    expect(peer.lastSnapshot().header).toMatchObject({ halted: true, speed: 0 });
+  });
+
+  it("is resumed by setSpeed too, and setSpeed(0) leaves it halted", () => {
+    const { sim, clock, host } = setup();
+    sim.systems.push(boom);
+    host.start();
+    clock.advance(25);
+    clock.fire();
+    sim.systems.pop();
+
+    host.setSpeed(0);
+    expect(host.halted).toBe(true);
+    expect(clock.active()).toEqual([]);
+
+    host.setSpeed(2);
+    expect(host.halted).toBe(false);
+    expect(host.speed).toBe(2);
+    expect(clock.active()).toEqual([25]);
+  });
+
+  it("does not halt on a speed message while healthy, and does not restart a loop that runs", () => {
+    const { clock, host } = setup();
+    const peer = joined(host);
+    host.start();
+    peer.send({ t: "speed", id: 1, speed: 2 });
+    expect(host.halted).toBe(false);
+    expect(clock.started).toBe(1);
+    expect(peer.lastSnapshot().header).toMatchObject({ halted: false, speed: 2 });
   });
 
   it("halts on anything thrown, not only an Error", () => {

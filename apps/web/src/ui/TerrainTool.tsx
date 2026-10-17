@@ -17,6 +17,8 @@ export interface TerrainToolProps {
   onBrushChange(size: BrushSize): void;
   /** What the last command cost, in cents; negative for an undo's refund; null before any. */
   lastCharge: number | null;
+  /** Turns every button off, for a park that can no longer be edited. */
+  disabled?: boolean;
 }
 
 function Charge({ cents }: { cents: number | null }) {
@@ -36,6 +38,7 @@ export function TerrainTool({
   brush,
   onBrushChange,
   lastCharge,
+  disabled = false,
 }: TerrainToolProps) {
   return (
     <div role="toolbar" aria-label="Terrain tools" className="glass flex items-center gap-3 p-1.5">
@@ -46,6 +49,7 @@ export function TerrainTool({
             type="button"
             aria-pressed={tool === option.id}
             aria-keyshortcuts={option.key}
+            disabled={disabled}
             onClick={() => onToolChange(option.id)}
             className="hud-button gap-1.5 rounded-lg px-3 text-sm font-medium text-muted aria-pressed:bg-accent aria-pressed:text-white"
           >
@@ -64,6 +68,7 @@ export function TerrainTool({
             type="button"
             aria-label={`Brush size ${size}`}
             aria-pressed={brush === size}
+            disabled={disabled}
             onClick={() => onBrushChange(size)}
             className="hud-button min-w-8 rounded-lg text-sm font-medium text-muted aria-pressed:bg-white/15 aria-pressed:text-ink"
           >

@@ -14,6 +14,7 @@ function header(over: Partial<SnapshotHeader> = {}): SnapshotHeader {
   return {
     tick: 1234,
     speed: 4,
+    halted: false,
     cash: 1_000_000,
     loan: 500_000,
     date: "March 4, Year 1",
@@ -149,6 +150,15 @@ describe("snapshot decoding", () => {
     expect(() => decodeSnapshot(bytes.subarray(0, bytes.length - 1))).toThrow(/length mismatch/);
   });
 
+  it("carries halted, true or false", () => {
+    for (const halted of [true, false]) {
+      const decoded = decodeSnapshot(encodeSnapshot(header({ halted, speed: 0 }), terrain()));
+      expect(decoded.header.halted).toBe(halted);
+      const plain = decodeSnapshot(encodeSnapshot(header({ halted, hasTerrain: false })));
+      expect(plain.header.halted).toBe(halted);
+    }
+  });
+
   it("throws ProtocolError on extra bytes", () => {
     const bytes = encodeSnapshot(header(), terrain());
     const longer = new Uint8Array(bytes.length + 1);
@@ -169,6 +179,10 @@ describe("snapshot decoding", () => {
   it("throws ProtocolError when the header is not valid JSON or not a header", () => {
     expect(() => decodeSnapshot(frameWithHeader("{nope"))).toThrow(ProtocolError);
     expect(() => decodeSnapshot(frameWithHeader('{"tick":1}'))).toThrow(/header is invalid/);
+    const { halted: _halted, ...withoutHalted } = header();
+    expect(() => decodeSnapshot(frameWithHeader(JSON.stringify(withoutHalted)))).toThrow(
+      /header is invalid/,
+    );
     expect(() =>
       decodeSnapshot(frameWithHeader(JSON.stringify(header({ speed: 3 as never })))),
     ).toThrow(ProtocolError);

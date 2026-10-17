@@ -18,6 +18,8 @@ const PREFIX_BYTES = 8;
 export interface SnapshotHeader {
   tick: number;
   speed: Speed;
+  /** True while the host has the sim stopped after a fault; a `speed` above 0 resumes it. */
+  halted: boolean;
   /** Integer cents. */
   cash: number;
   /** Integer cents. */
@@ -46,6 +48,7 @@ export interface DecodedSnapshot {
 const SnapshotHeaderSchema = z.object({
   tick: z.number().int().nonnegative(),
   speed: SpeedSchema,
+  halted: z.boolean(),
   cash: z.number().int(),
   loan: z.number().int(),
   date: z.string(),

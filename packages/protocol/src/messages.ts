@@ -82,6 +82,8 @@ export const WelcomeMessageSchema = z.object({
   height: z.number().int().positive(),
   name: z.string(),
   speed: SpeedSchema,
+  /** True when the host stopped the sim after a fault; a client that joins late learns it here. */
+  halted: z.boolean(),
 });
 
 /** What a `result` carries: a command's `ExecResult`, a query's `QueryResult`, or a bare ack. */

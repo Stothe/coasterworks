@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { isButton, isTyping, stepSpeed } from "./state/keys";
 import { useHost } from "./state/useHost";
 import { useToasts } from "./state/useToasts";
+import { Banner } from "./ui/Banner";
 import { StatusPills } from "./ui/StatusPills";
 import { Toast } from "./ui/Toast";
 import { BRUSH_SIZES, TERRAIN_TOOLS, TerrainTool } from "./ui/TerrainTool";
@@ -52,17 +53,25 @@ export function App() {
     [client, push],
   );
 
+  /** The banner's button: asks the host to run again. The speed buttons and keys stay off until it does. */
+  const resume = useCallback(() => {
+    client?.setSpeed(1).catch((error: unknown) => push(messageOf(error), { kind: "error" }));
+  }, [client, push]);
+
   // Hotkeys read the latest of everything through one ref, so the listener is added once.
   const { halted } = host;
-  const keys = useRef({ speed, changeSpeed, client, onResult, brush, halted });
+  const disconnected = host.status === "disconnected";
+  const keys = useRef({ speed, changeSpeed, client, onResult, brush, halted, disconnected });
   useEffect(() => {
-    keys.current = { speed, changeSpeed, client, onResult, brush, halted };
+    keys.current = { speed, changeSpeed, client, onResult, brush, halted, disconnected };
   });
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (isTyping(e.target)) return;
       const now = keys.current;
+      // Nobody is there to answer: the keys do nothing until the app is restarted.
+      if (now.disconnected) return;
       const current = requested.current ?? now.speed;
       const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
 
@@ -84,7 +93,7 @@ export function App() {
         case " ":
           // On a focused button Space presses the button, which is what a keyboard user wants.
           if (isButton(e.target)) return;
-          // A halted sim stays stopped: the speed buttons are disabled, and so are the keys.
+          // A halted sim stays stopped until Resume: the speed buttons are disabled, and so are the keys.
           if (!now.halted) now.changeSpeed(current === 0 ? resumeSpeed.current : 0);
           break;
         case "+":
@@ -124,12 +133,12 @@ export function App() {
     if (e.detail > 0) (e.target as Element).closest("button")?.blur();
   };
 
-  // What the host reports: a halt stays up, anything else for a moment.
+  // What the host reports shows for a moment. A halt and a lost connection have their banners.
   useEffect(() => {
-    if (host.error && host.status !== "error") {
-      push(host.error, { kind: "error", sticky: host.halted });
+    if (host.error && host.status === "ready" && host.error !== host.haltMessage) {
+      push(host.error, { kind: "error" });
     }
-  }, [host.error, host.halted, host.status, push]);
+  }, [host.error, host.haltMessage, host.status, push]);
 
   // Whatever an agent does shows up as it happens.
   const seenEvent = useRef(0);
@@ -168,7 +177,7 @@ export function App() {
               date={host.snapshot.header.date}
               speed={speed}
               onSpeedChange={changeSpeed}
-              speedDisabled={host.halted}
+              speedDisabled={host.halted || disconnected}
             />
           )}
         </div>
@@ -179,10 +188,23 @@ export function App() {
             brush={brush}
             onBrushChange={setBrush}
             lastCharge={lastCharge}
+            disabled={disconnected}
           />
         </div>
+        <div className="pointer-events-none absolute inset-x-4 top-16 flex justify-center">
+          {disconnected ? (
+            <Banner text="Lost the connection to the park. Restart Coasterworks." />
+          ) : (
+            host.halted && (
+              <Banner
+                text={host.haltMessage ?? "Simulation halted"}
+                action={{ label: "Resume", onClick: resume, disabled: !client }}
+              />
+            )
+          )}
+        </div>
         <Toast toasts={toasts} onDismiss={dismiss} />
-        {host.status !== "ready" && (
+        {(host.status === "connecting" || host.status === "error") && (
           <div className="absolute inset-0 grid place-items-center">
             <p role="status" className="glass px-4 py-2 text-sm">
               {host.status === "error"

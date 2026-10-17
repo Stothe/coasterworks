@@ -66,6 +66,11 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** The id-less error that tells clients the sim stopped, and why. */
+function haltMessage(reason: string | undefined): string {
+  return `Simulation halted: ${reason ?? "unknown error"}`;
+}
+
 /**
  * Runs a sim and serves it to any number of clients. Socket clients act as the `"player"`; an MCP
  * server acts as the `"agent"` by calling the sim directly, and the host notices through
@@ -79,6 +84,9 @@ export class SimHostServer {
   private readonly onMutate: ((world: World) => void) | undefined;
   private readonly clients = new Map<MessageTransport, ClientState>();
   private currentSpeed: Speed = 1;
+  /** Set when a fault stopped the sim, until a client or `setSpeed` resumes it. */
+  private isHalted = false;
+  private lastHaltReason: string | undefined;
   /** Bumped by every mutation; a client holding an older version needs the terrain again. */
   private terrainVersion = 0;
   /** Where the scheduler's accounting of real time stands; see `advance`. */
@@ -117,9 +125,24 @@ export class SimHostServer {
     return this.currentSpeed;
   }
 
-  /** Sets the speed and tells every client. */
+  /** True from a fault in the sim until the sim is resumed; see `setSpeed`. */
+  get halted(): boolean {
+    return this.isHalted;
+  }
+
+  /** What stopped the sim, while `halted` is true. */
+  get haltReason(): string | undefined {
+    return this.lastHaltReason;
+  }
+
+  /**
+   * Sets the speed and tells every client. While the sim is halted, a speed above 0 resumes it:
+   * the halt is cleared and the loop is started again, as a client's `speed` message does. The
+   * fault that caused the halt may still be there; if it is, the next tick halts the sim again,
+   * and the clients are told again.
+   */
   setSpeed(speed: Speed): void {
-    this.applySpeed(speed);
+    this.changeSpeed(speed);
     this.publish(() => this.broadcastSnapshot());
   }
 
@@ -176,8 +199,8 @@ export class SimHostServer {
 
   /**
    * What the timer runs. A fault in the sim must not kill the page or the process, nor leave a
-   * broken sim running: the host halts it, tells the clients, and stays up for queries and a later
-   * `start()`.
+   * broken sim running: the host halts it, tells the clients, and stays up for queries. A client's
+   * `speed` message above 0 resumes it, and so does `setSpeed`.
    */
   private runLoop(): void {
     try {
@@ -190,7 +213,9 @@ export class SimHostServer {
   private halt(error: unknown): void {
     this.stop();
     this.applySpeed(0);
-    const message = `Simulation halted: ${errorText(error)}`;
+    this.isHalted = true;
+    this.lastHaltReason = errorText(error);
+    const message = haltMessage(this.lastHaltReason);
     this.publish(() => {
       this.broadcast({ t: "error", message });
       this.broadcastSnapshot();
@@ -202,6 +227,24 @@ export class SimHostServer {
       throw new Error("SimHostServer needs the timers option to run the tick loop");
     }
     return this.timers;
+  }
+
+  /**
+   * The speed change behind `setSpeed` and the `speed` message. A halted sim stays stopped at
+   * speed 0, which changes nothing; any other speed resumes it. The loop is restarted before the
+   * halt is cleared, so a host that cannot run one (no timers) stays halted and says why.
+   */
+  private changeSpeed(speed: Speed): void {
+    if (!this.isHalted) {
+      this.applySpeed(speed);
+      return;
+    }
+    if (!SPEEDS.includes(speed)) throw new RangeError(`Unknown speed: ${speed}`);
+    if (speed === 0) return;
+    this.start();
+    this.isHalted = false;
+    this.lastHaltReason = undefined;
+    this.applySpeed(speed);
   }
 
   private applySpeed(speed: Speed): void {
@@ -277,7 +320,7 @@ export class SimHostServer {
         return;
       }
       case "speed":
-        this.applySpeed(msg.speed);
+        this.changeSpeed(msg.speed);
         this.reply(client, msg.id, { ok: true });
         this.publish(() => this.broadcastSnapshot());
         return;
@@ -309,7 +352,10 @@ export class SimHostServer {
       height: terrain.height,
       name: meta.name,
       speed: this.currentSpeed,
+      halted: this.isHalted,
     });
+    // A client that joins after the fault never heard the broadcast, so it is told here.
+    if (this.isHalted) this.sendError(client, haltMessage(this.lastHaltReason));
     this.sendSnapshot(client);
   }
 
@@ -375,6 +421,7 @@ export class SimHostServer {
       {
         tick,
         speed: this.currentSpeed,
+        halted: this.isHalted,
         cash: finance.cash,
         loan: finance.loan,
         date: formatDate(dateOf(tick)),

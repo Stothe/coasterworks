@@ -12,7 +12,12 @@ export interface MessageTransport {
    */
   send(frame: Frame): void;
   onMessage(handler: (frame: Frame) => void): void;
-  onClose(handler: () => void): void;
+  /**
+   * Calls `handler` once, when the link ends for any reason. A transport that knows why, such as
+   * a WebSocket with its close code, passes that as `reason`; the handler then has something to
+   * show the player.
+   */
+  onClose(handler: (reason?: string) => void): void;
   close(): void;
 }
 

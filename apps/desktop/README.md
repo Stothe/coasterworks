@@ -33,13 +33,20 @@ another port. Stop the first.
 2. Makes `~/Library/Application Support/com.coasterworks.app/parks/current.park` with
    `coasterworks new` if it is not there yet.
 3. Runs `node <cli> serve --save <park> --out <park> --port 0` and reads its stdout until the ready
-   line arrives (10 s limit, otherwise it prints the sidecar's stderr and exits 1).
+   line arrives (10 s limit, otherwise it shows a dialog with the sidecar's stderr and exits 1).
 4. Opens the `main` window (1400x900, minimum 1100x700) with an initialization script that sets
    `window.__COASTERWORKS__ = { wsUrl, token, mcpUrl }`. The web client reads that ahead of its
    `?ws=&token=` query string, so the URL bar stays clean and the token stays out of it.
 5. On quit, or when the last window closes, sends the sidecar SIGTERM so it writes the park, and
    kills it only if it has not exited after 5 s. If the window cannot be opened, the sidecar is
    stopped the same way before the app exits 1 (a failed startup runs no exit handler).
+
+If the app cannot start (no CLI, a park file that will not load, a window that will not open) a
+native dialog says what went wrong, names the park file and says to move or delete it to start
+fresh, and the app exits 1 when it is dismissed. If the sidecar dies while the app is running, the
+page shows that it lost the connection, a dialog says "The park process stopped unexpectedly.
+Coasterworks will quit.", and the app exits 1. A stop the shell asked for is not reported. The
+dialogs are shown from Rust with `tauri-plugin-dialog`, which needs no capability.
 
 The sidecar also saves after every change a window or an agent makes, so the park on disk is
 current even if the app is killed. And it does not outlive a killed app: the shell holds the other
@@ -74,10 +81,11 @@ undo hotkey saw it.
 
 ## Capabilities
 
-`src-tauri/capabilities/default.json` grants the window `core:default` only. Spawning the sidecar
-and writing the clipboard happen in Rust, and capabilities gate only what a page may ask for over
-IPC. So the page is not given `shell:allow-spawn` (a `node` scope with any arguments would let
-anything running in the page run arbitrary code) or the clipboard plugin's permissions.
+`src-tauri/capabilities/default.json` grants the window `core:default` only. Spawning the sidecar,
+writing the clipboard and showing the error dialogs happen in Rust, and capabilities gate only
+what a page may ask for over IPC. So the page is not given `shell:allow-spawn` (a `node` scope
+with any arguments would let anything running in the page run arbitrary code) or the clipboard and
+dialog plugins' permissions.
 
 When the sidecar becomes a compiled binary, spawn it with `app.shell().sidecar(...)` and keep the
 page out of the shell plugin.

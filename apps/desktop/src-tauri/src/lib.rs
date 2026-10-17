@@ -3,6 +3,7 @@
 
 pub mod sidecar;
 
+use std::path::Path;
 use std::sync::Mutex;
 
 use tauri::menu::{Menu, MenuBuilder, MenuEvent, MenuItemBuilder, SubmenuBuilder};
@@ -10,6 +11,7 @@ use tauri::{
     AppHandle, Emitter, Manager, RunEvent, Runtime, WebviewUrl, WebviewWindowBuilder, Wry,
 };
 use tauri_plugin_clipboard_manager::ClipboardExt;
+use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
 use sidecar::Sidecar;
 
@@ -17,6 +19,62 @@ const COPY_MCP_CONFIG: &str = "copy-mcp-config";
 const CLASSIC_VIEW: &str = "classic-view";
 /// The event the web client listens for to put the camera back at the first classic angle.
 const CLASSIC_VIEW_EVENT: &str = "coasterworks://classic-view";
+
+/// What the native dialogs are titled.
+const DIALOG_TITLE: &str = "Coasterworks";
+/// Said when the sidecar dies while the app is running: nothing can be played without it.
+const SIDECAR_STOPPED_TEXT: &str = "The park process stopped unexpectedly. Coasterworks will quit.";
+
+/// What the dialog says when the app could not start: what went wrong, and, if the park file is
+/// known, where it is and how to start over, since a damaged park is a likely cause.
+fn startup_failure_text(error: &str, park: Option<&Path>) -> String {
+    let mut text = format!("Coasterworks could not start.\n\n{error}");
+    if let Some(park) = park {
+        text.push_str(&format!(
+            "\n\nPark file: {}\nMove or delete the park file to start fresh.",
+            park.display()
+        ));
+    }
+    text
+}
+
+/// Shows `text` in a native error dialog and runs `then` when it is dismissed.
+///
+/// It returns at once: `show` is used, not `blocking_show`, because the dialog is put up by the
+/// main thread, and a caller on the main thread (the setup closure is) that waited for it would
+/// wait for itself. The app's event loop shows the dialog once the caller has returned.
+fn show_error_dialog<R: Runtime>(
+    app: &AppHandle<R>,
+    text: String,
+    then: impl FnOnce() + Send + 'static,
+) {
+    app.dialog()
+        .message(text)
+        .title(DIALOG_TITLE)
+        .kind(MessageDialogKind::Error)
+        .show(move |_| then());
+}
+
+/// The app could not start. Says why, in a dialog and on stderr, and ends the process with exit
+/// code 1 once the dialog is dismissed. The caller returns afterwards, and the event loop runs
+/// only to show the dialog.
+fn fail_startup<R: Runtime>(app: &AppHandle<R>, error: &str, park: Option<&Path>) {
+    eprintln!("coasterworks: {error}");
+    show_error_dialog(app, startup_failure_text(error, park), || {
+        std::process::exit(1)
+    });
+}
+
+/// What the sidecar's reader calls if it dies while the app runs: says so, then quits with exit
+/// code 1. Through `AppHandle::exit`, so the usual exit handling runs.
+fn quit_after_sidecar_died(app: &AppHandle) -> impl FnOnce(Option<i32>) + Send + 'static {
+    let app = app.clone();
+    move |code| {
+        eprintln!("coasterworks: the sidecar exited unexpectedly (code {code:?})");
+        let quit = app.clone();
+        show_error_dialog(&app, SIDECAR_STOPPED_TEXT.to_owned(), move || quit.exit(1));
+    }
+}
 
 /// The running sidecar, until the app takes it out to stop it.
 type SidecarSlot = Mutex<Option<Sidecar>>;
@@ -109,16 +167,26 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_dialog::init())
         .menu(build_menu)
         .on_menu_event(on_menu_event)
         .setup(|app| {
-            let sidecar = match sidecar::spawn(app.handle()) {
-                Ok(sidecar) => sidecar,
+            let park = match sidecar::park_path(app.handle()) {
+                Ok(park) => park,
                 Err(message) => {
-                    eprintln!("coasterworks: could not start the sidecar: {message}");
-                    std::process::exit(1);
+                    fail_startup(app.handle(), &message, None);
+                    return Ok(());
                 }
             };
+            let sidecar =
+                match sidecar::spawn(app.handle(), &park, quit_after_sidecar_died(app.handle())) {
+                    Ok(sidecar) => sidecar,
+                    Err(message) => {
+                        let error = format!("could not start the sidecar: {message}");
+                        fail_startup(app.handle(), &error, Some(&park));
+                        return Ok(());
+                    }
+                };
             // `WebviewUrl::default()` is the dev server under `tauri dev` and the built web
             // client otherwise. The window is made here, not in tauri.conf.json, because the page
             // needs the sidecar's address in place before it loads.
@@ -133,8 +201,8 @@ pub fn run() {
             });
             if let Err(err) = opened {
                 // The sidecar is already stopped. Returning the error would make Tauri panic.
-                eprintln!("coasterworks: could not open the window: {err}");
-                std::process::exit(1);
+                let error = format!("could not open the window: {err}");
+                fail_startup(app.handle(), &error, Some(&park));
             }
             Ok(())
         })
@@ -184,7 +252,21 @@ mod tests {
     }
 
     fn fake(app: &AppHandle<MockRuntime>, script: &str) -> Sidecar {
-        sidecar::launch(app, "node", vec!["-e".into(), script.into()]).expect("the fake is ready")
+        sidecar::launch(app, "node", vec!["-e".into(), script.into()], |_| {})
+            .expect("the fake is ready")
+    }
+
+    /// A stand-in that is ready, and a channel that hears what is reported if it dies unasked.
+    fn fake_reporting(
+        app: &AppHandle<MockRuntime>,
+        script: &str,
+    ) -> (Sidecar, std::sync::mpsc::Receiver<Option<i32>>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let sidecar = sidecar::launch(app, "node", vec!["-e".into(), script.into()], move |code| {
+            let _ = tx.send(code);
+        })
+        .expect("the fake is ready");
+        (sidecar, rx)
     }
 
     /// Whether a process with this pid exists. A child that has been waited for does not.
@@ -247,6 +329,80 @@ mod tests {
         assert!(slot_is_empty(handle));
         // ExitRequested and then Exit both stop it; the second finds nothing to do.
         stop_sidecar(handle);
+    }
+
+    #[test]
+    fn the_startup_failure_dialog_names_the_error_the_park_and_how_to_start_over() {
+        let text = startup_failure_text(
+            "could not start the sidecar: the sidecar exited before it was ready:\nbad park",
+            Some(Path::new("/data/parks/current.park")),
+        );
+        assert!(text.starts_with("Coasterworks could not start."), "{text}");
+        assert!(text.contains("the sidecar exited before it was ready:\nbad park"));
+        assert!(text.contains("Park file: /data/parks/current.park"));
+        assert!(text.ends_with("Move or delete the park file to start fresh."));
+    }
+
+    #[test]
+    fn the_startup_failure_dialog_has_no_park_line_when_there_is_no_park_yet() {
+        let text = startup_failure_text("no app data directory: nope", None);
+        assert!(text.contains("no app data directory: nope"));
+        assert!(!text.contains("Park file"));
+        assert!(!text.contains("Move or delete"));
+    }
+
+    #[test]
+    fn the_sidecar_stopped_dialog_says_what_the_player_needs_to_know() {
+        assert_eq!(
+            SIDECAR_STOPPED_TEXT,
+            "The park process stopped unexpectedly. Coasterworks will quit."
+        );
+    }
+
+    #[test]
+    fn a_sidecar_that_dies_on_its_own_is_reported_once_with_its_exit_code() {
+        let app = app();
+        let (_sidecar, reports) = fake_reporting(app.handle(), SHORT_LIVED);
+        assert_eq!(reports.recv_timeout(Duration::from_secs(10)), Ok(Some(0)));
+        assert!(reports.recv_timeout(Duration::from_millis(300)).is_err());
+    }
+
+    #[test]
+    fn a_sidecar_the_shell_stops_is_not_reported_as_dying() {
+        let app = app();
+        let (sidecar, reports) = fake_reporting(app.handle(), WELL_BEHAVED);
+        let pid = sidecar.pid();
+        sidecar.kill();
+        assert!(!alive(pid));
+        assert!(
+            reports.recv_timeout(Duration::from_millis(500)).is_err(),
+            "a stop the shell asked for was reported"
+        );
+    }
+
+    #[test]
+    fn a_sidecar_that_had_to_be_killed_is_not_reported_either() {
+        let app = app();
+        let (sidecar, reports) = fake_reporting(app.handle(), STUBBORN);
+        sidecar.kill_within(Duration::from_millis(200));
+        assert!(reports.recv_timeout(Duration::from_millis(500)).is_err());
+    }
+
+    #[test]
+    fn a_sidecar_that_exits_before_it_is_ready_is_a_failed_start_and_not_reported_as_dying() {
+        let app = app();
+        let (tx, reports) = std::sync::mpsc::channel();
+        let started = sidecar::launch(
+            app.handle(),
+            "node",
+            vec!["-e".into(), "process.exit(3)".into()],
+            move |code| {
+                let _ = tx.send(code);
+            },
+        );
+        let error = started.err().expect("it never said it was ready");
+        assert!(error.contains("exited before it was ready"), "{error}");
+        assert!(reports.recv_timeout(Duration::from_millis(300)).is_err());
     }
 
     #[test]

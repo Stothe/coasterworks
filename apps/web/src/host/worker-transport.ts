@@ -27,7 +27,7 @@ function toFrame(data: unknown): Frame | null {
 export class WorkerPortTransport implements MessageTransport {
   protected readonly port: PortLike;
   private messageHandler: ((frame: Frame) => void) | undefined;
-  private closeHandler: (() => void) | undefined;
+  private closeHandler: ((reason?: string) => void) | undefined;
   private closed = false;
 
   constructor(port: PortLike) {
@@ -53,7 +53,7 @@ export class WorkerPortTransport implements MessageTransport {
     this.messageHandler = handler;
   }
 
-  onClose(handler: () => void): void {
+  onClose(handler: (reason?: string) => void): void {
     this.closeHandler = handler;
   }
 
@@ -61,11 +61,11 @@ export class WorkerPortTransport implements MessageTransport {
     this.markClosed();
   }
 
-  /** Records that the link is gone and tells the listener, once. */
-  protected markClosed(): void {
+  /** Records that the link is gone and tells the listener, once, with the reason if there is one. */
+  protected markClosed(reason?: string): void {
     if (this.closed) return;
     this.closed = true;
-    this.closeHandler?.();
+    this.closeHandler?.(reason);
   }
 }
 
@@ -80,7 +80,9 @@ export class WorkerTransport extends WorkerPortTransport {
     // itself reports its own faults as protocol errors, so this is the worker failing, not the sim.
     worker.addEventListener("error", (event) => {
       console.error("The sim worker failed:", event.message);
-      this.markClosed();
+      this.markClosed(
+        event.message ? `The sim worker failed: ${event.message}` : "The sim worker failed",
+      );
     });
   }
 

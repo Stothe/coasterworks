@@ -1,5 +1,11 @@
 import type { Frame, MessageTransport } from "@coasterworks/protocol";
 
+/** Why a socket closed, for the player: the server's words if it gave any, else the close code. */
+function closeReason(event: CloseEvent): string {
+  const said = typeof event.reason === "string" ? event.reason.trim() : "";
+  return said !== "" ? said : `WebSocket closed (code ${event.code})`;
+}
+
 /**
  * A `MessageTransport` over a browser `WebSocket`, for a host that runs elsewhere (`coasterworks
  * serve`). Binary frames arrive as `Uint8Array`. Frames sent while the socket is still opening wait
@@ -9,7 +15,7 @@ export class WsTransport implements MessageTransport {
   private readonly socket: WebSocket;
   private readonly waiting: Frame[] = [];
   private messageHandler: ((frame: Frame) => void) | undefined;
-  private closeHandler: (() => void) | undefined;
+  private closeHandler: ((reason?: string) => void) | undefined;
   private closed = false;
 
   constructor(socket: WebSocket) {
@@ -23,7 +29,7 @@ export class WsTransport implements MessageTransport {
       if (typeof data === "string") this.messageHandler?.(data);
       else if (data instanceof ArrayBuffer) this.messageHandler?.(new Uint8Array(data));
     });
-    socket.addEventListener("close", () => this.markClosed());
+    socket.addEventListener("close", (event) => this.markClosed(closeReason(event)));
     // An error is always followed by a close event, which is what ends the link.
   }
 
@@ -40,7 +46,7 @@ export class WsTransport implements MessageTransport {
     this.messageHandler = handler;
   }
 
-  onClose(handler: () => void): void {
+  onClose(handler: (reason?: string) => void): void {
     this.closeHandler = handler;
   }
 
@@ -50,10 +56,10 @@ export class WsTransport implements MessageTransport {
     this.markClosed();
   }
 
-  private markClosed(): void {
+  private markClosed(reason?: string): void {
     if (this.closed) return;
     this.closed = true;
     this.waiting.length = 0;
-    this.closeHandler?.();
+    this.closeHandler?.(reason);
   }
 }

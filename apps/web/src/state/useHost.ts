@@ -3,7 +3,11 @@ import type { TerrainData } from "@coasterworks/render";
 import { useEffect, useRef, useState } from "react";
 import { connectHost } from "../host/connect";
 
-export type HostStatus = "connecting" | "ready" | "error";
+/**
+ * `error` is a connection that could not be made; `disconnected` is one that was made and then
+ * lost. Either way `HostState.error` says why.
+ */
+export type HostStatus = "connecting" | "ready" | "error" | "disconnected";
 
 export interface HostState {
   status: HostStatus;
@@ -14,16 +18,24 @@ export interface HostState {
   /** The last 50 log events, oldest first. */
   events: EventMessage[];
   client: SimClient | null;
-  /** Why the connection failed, or the last error the host reported. */
+  /** Why the connection failed or was lost, or the last error the host reported. */
   error?: string;
-  /** True once the host has stopped the simulation after a fault. */
+  /**
+   * True while the host has the simulation stopped after a fault. The welcome, every snapshot and
+   * the host's error all say so, and a snapshot that says it is running again clears it.
+   */
   halted: boolean;
+  /** What the host said when it halted, such as `Simulation halted: boom`, while `halted`. */
+  haltMessage?: string;
 }
 
 /** What `useHost` needs from a connection. `connectHost` provides it; tests provide their own. */
 export type ConnectFn = () => Promise<{ client: SimClient }>;
 
 const MAX_EVENTS = 50;
+
+/** What the host's error starts with when it has stopped the simulation. */
+const HALT_PREFIX = "Simulation halted";
 
 const INITIAL: HostState = {
   status: "connecting",
@@ -43,11 +55,18 @@ interface Session {
 
 function withSnapshot(state: HostState, snapshot: DecodedSnapshot): HostState {
   const { header, terrain } = snapshot;
-  return {
+  const next: HostState = {
     ...state,
     snapshot,
     terrain: terrain ? { width: header.width, height: header.height, ...terrain } : state.terrain,
+    halted: header.halted,
   };
+  if (!header.halted) {
+    // Running again: the halt, and the error that announced it, are over.
+    delete next.haltMessage;
+    if (state.error?.startsWith(HALT_PREFIX)) delete next.error;
+  }
+  return next;
 }
 
 function messageOf(error: unknown): string {
@@ -78,15 +97,37 @@ function open(connect: ConnectFn, setState: (update: (state: HostState) => HostS
         setState((state) => ({ ...state, events: [...state.events, event].slice(-MAX_EVENTS) })),
       );
       client.onError((message) =>
-        setState((state) => ({
-          ...state,
-          error: message,
-          halted: state.halted || message.startsWith("Simulation halted"),
-        })),
+        setState((state) =>
+          message.startsWith(HALT_PREFIX)
+            ? { ...state, error: message, halted: true, haltMessage: message }
+            : { ...state, error: message },
+        ),
       );
-      await client.connect();
+      // A connection lost before the page learned it was ready is told by `connect` failing, or
+      // by `lost` here; one lost after that, by the handler.
+      let lost: string | undefined;
+      client.onClose((reason) => {
+        lost = reason;
+        if (session.closed) return;
+        setState((state) =>
+          state.status === "ready"
+            ? { ...state, status: "disconnected", error: reason, client: null }
+            : state,
+        );
+      });
+      const welcome = await client.connect();
       if (session.closed) return;
-      setState((state) => ({ ...state, status: "ready", client }));
+      setState((state) =>
+        lost !== undefined
+          ? { ...state, status: "disconnected", error: lost, client: null }
+          : {
+              ...state,
+              status: "ready",
+              client,
+              // The welcome comes first, so this is what a page that has no snapshot yet knows.
+              halted: state.snapshot ? state.halted : welcome.halted,
+            },
+      );
     } catch (error) {
       if (session.closed) return;
       client?.close();

@@ -5,6 +5,7 @@
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -68,6 +69,8 @@ pub struct Sidecar {
     child: CommandChild,
     /// Signalled once the process has gone and its output has been read to the end.
     exited: mpsc::Receiver<()>,
+    /// Set when the shell means to stop the sidecar, so that its exit is not taken for a fault.
+    stopping: Arc<AtomicBool>,
 }
 
 impl Sidecar {
@@ -84,6 +87,8 @@ impl Sidecar {
 
     /// `kill`, with the wait for a graceful exit set by the caller.
     pub fn kill_within(self, wait: Duration) {
+        // Before the signal, so the exit it causes is never reported as the sidecar dying.
+        self.stopping.store(true, Ordering::SeqCst);
         #[cfg(unix)]
         {
             // Already gone (or its output reader is): there is nothing to signal, and its pid
@@ -137,7 +142,7 @@ fn cli_entry() -> Result<PathBuf, String> {
 }
 
 /// `<app data dir>/parks/current.park`, with the directory made.
-fn park_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
+pub fn park_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     let dir = app
         .path()
         .app_data_dir()
@@ -188,21 +193,28 @@ fn serve_args(cli: &Path, park: &Path) -> Vec<OsString> {
 }
 
 /// Starts `coasterworks serve` on a free port and waits for it to say where it is listening.
-/// The park is `current.park` in the app data directory, made on the first run; the sidecar
-/// writes it as the player edits.
-pub fn spawn<R: Runtime>(app: &AppHandle<R>) -> Result<Sidecar, String> {
+/// The park is `park` (`current.park` in the app data directory, see `park_path`), made on the
+/// first run; the sidecar writes it as the player edits.
+///
+/// `on_unexpected_exit` is called, once, with the exit code if there is one, if the sidecar exits
+/// after it was ready without the shell having stopped it: the park can no longer be played.
+pub fn spawn<R: Runtime>(
+    app: &AppHandle<R>,
+    park: &Path,
+    on_unexpected_exit: impl FnOnce(Option<i32>) + Send + 'static,
+) -> Result<Sidecar, String> {
     let cli = cli_entry()?;
-    let park = park_path(app)?;
-    ensure_park(&cli, &park)?;
-    launch(app, "node", serve_args(&cli, &park))
+    ensure_park(&cli, park)?;
+    launch(app, "node", serve_args(&cli, park), on_unexpected_exit)
 }
 
 /// Runs `program args` as the sidecar and waits for its ready line. Apart from `spawn` it is what
-/// the tests use, with stand-ins for `coasterworks serve`.
+/// the tests use, with stand-ins for `coasterworks serve`. See `spawn` for `on_unexpected_exit`.
 pub(crate) fn launch<R: Runtime>(
     app: &AppHandle<R>,
     program: impl AsRef<OsStr>,
     args: Vec<OsString>,
+    on_unexpected_exit: impl FnOnce(Option<i32>) + Send + 'static,
 ) -> Result<Sidecar, String> {
     let (mut events, child) = app
         .shell()
@@ -215,6 +227,9 @@ pub(crate) fn launch<R: Runtime>(
     let (exited_tx, exited_rx) = mpsc::channel::<()>();
     let stderr = Arc::new(Mutex::new(String::new()));
     let kept = Arc::clone(&stderr);
+    let stopping = Arc::new(AtomicBool::new(false));
+    let stopping_seen = Arc::clone(&stopping);
+    let mut on_unexpected_exit = Some(on_unexpected_exit);
     // Reads the sidecar's output until it exits, so its pipes never fill and its log is not lost.
     tauri::async_runtime::spawn(async move {
         let mut announced = false;
@@ -246,6 +261,15 @@ pub(crate) fn launch<R: Runtime>(
                 CommandEvent::Error(message) => eprintln!("[sidecar] error: {message}"),
                 CommandEvent::Terminated(payload) => {
                     eprintln!("[sidecar] exited (code {:?})", payload.code);
+                    // Said before the report, so that a shell that quits in answer to the report
+                    // finds the sidecar gone and does not wait for it.
+                    let _ = exited_tx.send(());
+                    // One that never got as far as its ready line is `launch` failing, not this.
+                    if announced && !stopping_seen.load(Ordering::SeqCst) {
+                        if let Some(report) = on_unexpected_exit.take() {
+                            report(payload.code);
+                        }
+                    }
                     break;
                 }
                 _ => {}
@@ -260,6 +284,7 @@ pub(crate) fn launch<R: Runtime>(
             ready,
             child,
             exited: exited_rx,
+            stopping,
         }),
         Err(err) => {
             let _ = child.kill();

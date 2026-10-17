@@ -189,6 +189,176 @@ describe("useHost", () => {
     expect(result.current.snapshot?.header.speed).toBe(0);
   });
 
+  describe("a halted simulation", () => {
+    const boom = {
+      name: "boom",
+      tick() {
+        throw new Error("kaboom");
+      },
+    };
+
+    /** A rig whose sim has faulted and been halted, as a page that joins late finds it. */
+    function haltedRig(): Rig {
+      const rig = makeRig();
+      rig.sim.systems.push(boom);
+      rig.advance(1000);
+      rig.runLoop();
+      expect(rig.host.halted).toBe(true);
+      return rig;
+    }
+
+    it("is known to a page that joins after the fault, from the welcome, the error and the snapshot", async () => {
+      const rig = haltedRig();
+      const { result } = renderHook(() => useHost(rig.connect));
+      await waitFor(() => expect(result.current.status).toBe("ready"));
+      expect(result.current.halted).toBe(true);
+      expect(result.current.haltMessage).toBe("Simulation halted: kaboom");
+      expect(result.current.error).toBe("Simulation halted: kaboom");
+      expect(result.current.snapshot?.header).toMatchObject({ halted: true, speed: 0 });
+    });
+
+    it("is known from the welcome alone when no snapshot has come yet", async () => {
+      const rig = makeRig();
+      // A host whose snapshot trails the welcome, as a socket's does: hold the snapshot back.
+      const real = rig.clientEnd;
+      const connect = vi.fn(async () => {
+        const client = new SimClient({
+          send: (frame) => real.send(frame),
+          onMessage: (handler) =>
+            real.onMessage((frame) => {
+              if (typeof frame === "string") handler(frame);
+            }),
+          onClose: (handler) => real.onClose(handler),
+          close: () => real.close(),
+        });
+        rig.clients.push(client);
+        return { client };
+      });
+      rig.sim.systems.push(boom);
+      rig.advance(1000);
+      rig.runLoop();
+
+      const { result } = renderHook(() => useHost(connect));
+      await waitFor(() => expect(result.current.status).toBe("ready"));
+      expect(result.current.snapshot).toBeNull();
+      expect(result.current.halted).toBe(true);
+    });
+
+    it("is cleared by the first snapshot that says the host runs again, with its error", async () => {
+      const rig = makeRig();
+      rig.sim.systems.push(boom);
+      const { result } = renderHook(() => useHost(rig.connect));
+      await waitFor(() => expect(result.current.status).toBe("ready"));
+      expect(result.current.halted).toBe(false);
+
+      act(() => {
+        rig.advance(1000);
+        rig.runLoop();
+      });
+      await waitFor(() => expect(result.current.halted).toBe(true));
+      expect(result.current.haltMessage).toBe("Simulation halted: kaboom");
+
+      rig.sim.systems.pop();
+      await act(async () => {
+        await result.current.client?.setSpeed(1);
+      });
+      await waitFor(() => expect(result.current.halted).toBe(false));
+      expect(result.current.haltMessage).toBeUndefined();
+      expect(result.current.error).toBeUndefined();
+      expect(result.current.snapshot?.header).toMatchObject({ halted: false, speed: 1 });
+
+      // And the sim really runs: the next loop step advances the tick.
+      const before = result.current.snapshot?.header.tick ?? 0;
+      act(() => {
+        rig.advance(1000);
+        rig.runLoop();
+      });
+      await waitFor(() => expect(result.current.snapshot?.header.tick).toBeGreaterThan(before));
+      expect(result.current.halted).toBe(false);
+    });
+
+    it("is set again when the fault is still there after a resume", async () => {
+      const rig = haltedRig();
+      const { result } = renderHook(() => useHost(rig.connect));
+      await waitFor(() => expect(result.current.halted).toBe(true));
+
+      await act(async () => {
+        await result.current.client?.setSpeed(1);
+      });
+      await waitFor(() => expect(result.current.halted).toBe(false));
+      act(() => {
+        rig.advance(1000);
+        rig.runLoop();
+      });
+      await waitFor(() => expect(result.current.halted).toBe(true));
+      expect(result.current.haltMessage).toBe("Simulation halted: kaboom");
+    });
+
+    it("keeps the halt, and what it said, when some other error arrives", async () => {
+      const rig = haltedRig();
+      const { result } = renderHook(() => useHost(rig.connect));
+      await waitFor(() => expect(result.current.halted).toBe(true));
+
+      act(() => {
+        rig.clientEnd.send(new Uint8Array([1, 2, 3]));
+      });
+      await waitFor(() => expect(result.current.error).toBe("Expected a text frame"));
+      expect(result.current.halted).toBe(true);
+      expect(result.current.haltMessage).toBe("Simulation halted: kaboom");
+    });
+  });
+
+  describe("a lost connection", () => {
+    it("moves from ready to disconnected, with the reason, no client, and the park still in hand", async () => {
+      const rig = makeRig();
+      const { result } = renderHook(() => useHost(rig.connect));
+      await waitFor(() => expect(result.current.status).toBe("ready"));
+      const terrain = result.current.terrain;
+
+      act(() => {
+        rig.clientEnd.close();
+      });
+
+      await waitFor(() => expect(result.current.status).toBe("disconnected"));
+      expect(result.current.error).toBe("Connection closed");
+      expect(result.current.client).toBeNull();
+      expect(result.current.terrain).toBe(terrain);
+      expect(result.current.snapshot).not.toBeNull();
+    });
+
+    it("passes on the reason the transport gives", async () => {
+      const rig = makeRig();
+      let drop: (reason?: string) => void = () => {};
+      const connect = async () => {
+        const client = new SimClient({
+          send: (frame) => rig.clientEnd.send(frame),
+          onMessage: (handler) => rig.clientEnd.onMessage(handler),
+          onClose: (handler) => {
+            drop = handler;
+          },
+          close: () => rig.clientEnd.close(),
+        });
+        return { client };
+      };
+      const { result } = renderHook(() => useHost(connect));
+      await waitFor(() => expect(result.current.status).toBe("ready"));
+
+      act(() => drop("WebSocket closed (code 1006)"));
+
+      await waitFor(() => expect(result.current.status).toBe("disconnected"));
+      expect(result.current.error).toBe("WebSocket closed (code 1006)");
+    });
+
+    it("is a failed connection, not a lost one, when the link closes before the welcome", async () => {
+      const [clientEnd, hostEnd] = createLinkedTransports();
+      hostEnd.onMessage(() => hostEnd.close());
+      const connect = async () => ({ client: new SimClient(clientEnd) });
+      const { result } = renderHook(() => useHost(connect));
+      await waitFor(() => expect(result.current.status).toBe("error"));
+      expect(result.current.error).toBe("Connection closed");
+    });
+  });
+
   it("reports a connection that fails", async () => {
     const connect = vi.fn(async () => {
       throw new Error("no route to host");
