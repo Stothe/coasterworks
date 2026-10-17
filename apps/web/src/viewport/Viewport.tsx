@@ -9,6 +9,7 @@ import type { ExecResult } from "@coasterworks/sim";
 import { useEffect, useRef } from "react";
 import { CLASSIC_VIEW_EVENT, onShellEvent } from "../host/shell";
 import { brushRect, planCommand, timeOfDay, type BrushSize, type TerrainToolId } from "./brush";
+import { framingDistance } from "./framing";
 
 export interface ViewportProps {
   terrain: TerrainData | null;
@@ -27,9 +28,6 @@ interface Live {
   hasTerrain: boolean;
 }
 
-/** The view is pulled back this many map-widths from the target, so a new park shows whole. */
-const FRAMING = 1.05;
-
 function show(live: Live, terrain: TerrainData | null): void {
   if (!terrain) return;
   if (live.hasTerrain) {
@@ -38,11 +36,9 @@ function show(live: Live, terrain: TerrainData | null): void {
   }
   live.scene.setTerrain(terrain);
   live.hasTerrain = true;
-  // `setTerrain` centers the target; pull back far enough to see the park.
-  live.scene.rig.distance = Math.max(
-    live.scene.rig.distance,
-    Math.max(terrain.width, terrain.height) * FRAMING,
-  );
+  // `setTerrain` centers the target; pull back far enough to see the park, within the zoom limits.
+  const { rig } = live.scene;
+  rig.distance = framingDistance(terrain, rig.distance, rig.limits.distance);
 }
 
 function failure(error: unknown): ExecResult {

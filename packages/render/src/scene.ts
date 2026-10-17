@@ -19,6 +19,7 @@ import {
   WebGLRenderer,
 } from "three";
 import { CameraRig } from "./camera.js";
+import { groundHeightAt } from "./ground.js";
 import { srgbToLinear } from "./palette.js";
 import { pickTile, rayFromCamera } from "./picker.js";
 import { sunFor, type SunState } from "./sky.js";
@@ -183,6 +184,8 @@ export function createScene(canvas: HTMLCanvasElement, opts: SceneOptions = {}):
   scene.add(chunkGroup);
   const chunks = new Map<string, Chunk>();
   let terrain: TerrainData | null = null;
+  // The rig keeps its target on the ground and its eye out of the hills, as the terrain is now.
+  rig.heightAt = (x, z) => (terrain ? groundHeightAt(terrain, x, z) : 0);
 
   let highlight: LineSegments | null = null;
   let highlightRect: [number, number, number, number] | null = null;
@@ -326,6 +329,8 @@ export function createScene(canvas: HTMLCanvasElement, opts: SceneOptions = {}):
     if (disposed) return;
     // The target cannot leave the map, however the rig was moved since the last frame.
     if (terrain) rig.clampTarget(terrain.width, terrain.height);
+    // The view follows the ground, and the camera stays above it, however the rig was moved.
+    rig.settle();
     // The rig owns the field of view; follow it if it changed.
     const fov = radiansToDegrees(rig.fovY);
     if (camera.fov !== fov) {

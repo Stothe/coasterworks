@@ -1,5 +1,6 @@
-export { CameraRig } from "./camera.js";
+export { CAMERA_CLEARANCE, CameraRig } from "./camera.js";
 export type { CameraLike } from "./camera.js";
+export { groundHeightAt } from "./ground.js";
 export { attachControls } from "./input.js";
 export type { ControlHandlers, ControlOptions, PickedTile } from "./input.js";
 export { SURFACE_COLORS, WATER_COLOR, srgbToLinear, surfaceColor } from "./palette.js";

@@ -22,6 +22,8 @@ const READY_TIMEOUT: Duration = Duration::from_secs(10);
 const STOP_TIMEOUT: Duration = Duration::from_secs(5);
 /// The most of the sidecar's stderr kept to explain a failed start.
 const STDERR_KEPT: usize = 8 * 1024;
+/// What the first run's park is called: `coasterworks new --sample` makes this one.
+const SAMPLE_PARK_NAME: &str = "Leafy Lake";
 
 /// What `coasterworks serve` prints, as one line of JSON, once it is listening.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -153,16 +155,27 @@ pub fn park_path<R: Runtime>(app: &AppHandle<R>) -> Result<PathBuf, String> {
     Ok(dir.join("current.park"))
 }
 
+/// What `node` is given to make the first run's park: the sample park, Leafy Lake, with a hill
+/// and a pond to shape, rather than a flat field.
+fn new_park_args(cli: &Path, park: &Path) -> Vec<OsString> {
+    vec![
+        cli.as_os_str().to_owned(),
+        "new".into(),
+        "--out".into(),
+        park.as_os_str().to_owned(),
+        "--sample".into(),
+        "--name".into(),
+        SAMPLE_PARK_NAME.into(),
+    ]
+}
+
 /// Makes a park at `park` if there is not one there yet.
 fn ensure_park(cli: &Path, park: &Path) -> Result<(), String> {
     if park.exists() {
         return Ok(());
     }
     let output = StdCommand::new("node")
-        .arg(cli)
-        .args(["new", "--out"])
-        .arg(park)
-        .args(["--name", "My Park"])
+        .args(new_park_args(cli, park))
         .output()
         .map_err(|err| format!("could not run node (is it on PATH?): {err}"))?;
     if output.status.success() {
@@ -403,6 +416,63 @@ mod tests {
                 "--exit-on-stdin-eof",
             ]
         );
+    }
+
+    #[test]
+    fn the_first_run_makes_the_sample_park_called_leafy_lake() {
+        let args = new_park_args(
+            Path::new("/cli/index.js"),
+            Path::new("/data/parks/current.park"),
+        );
+        let args: Vec<&str> = args.iter().map(|arg| arg.to_str().unwrap()).collect();
+        assert_eq!(
+            args,
+            [
+                "/cli/index.js",
+                "new",
+                "--out",
+                "/data/parks/current.park",
+                "--sample",
+                "--name",
+                "Leafy Lake",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_real_cli_makes_leafy_lake_once_and_leaves_a_park_that_exists_alone() {
+        let cli = cli_entry().expect("the CLI is built: run `pnpm build` first");
+        let dir = std::env::temp_dir().join(format!(
+            "coasterworks-desktop-test-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let park = dir.join("parks").join("current.park");
+        std::fs::create_dir_all(park.parent().unwrap()).unwrap();
+
+        ensure_park(&cli, &park).expect("the first run makes the park");
+        let inspected = StdCommand::new("node")
+            .arg(&cli)
+            .arg("inspect")
+            .arg(&park)
+            .output()
+            .expect("node is on PATH");
+        assert!(inspected.status.success(), "{inspected:?}");
+        let inspected: serde_json::Value =
+            serde_json::from_slice(&inspected.stdout).expect("inspect prints JSON");
+        assert_eq!(inspected["status"]["name"], "Leafy Lake");
+        assert_eq!(inspected["status"]["width"], 64);
+        assert_eq!(inspected["status"]["height"], 64);
+
+        // A second run finds the player's park and does nothing to it.
+        let before = std::fs::read(&park).unwrap();
+        ensure_park(&cli, &park).expect("an existing park is fine");
+        assert_eq!(std::fs::read(&park).unwrap(), before);
+
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[cfg(unix)]

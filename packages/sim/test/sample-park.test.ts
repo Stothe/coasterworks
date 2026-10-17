@@ -1,7 +1,5 @@
-// @vitest-environment node
-import { MAX_HEIGHT, hashWorld } from "@coasterworks/sim";
 import { describe, expect, it } from "vitest";
-import { createSamplePark } from "../src/dev/sample-park";
+import { MAX_HEIGHT, createSamplePark, hashWorld } from "../src/index.js";
 
 /** Corner height of a freshly created world; the hill must stand this many steps above it. */
 const GROUND = 8;

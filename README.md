@@ -56,6 +56,9 @@ Make a park, change it, let time pass, and look at it. Every command prints one 
 # Create a 64 by 64 park in my.park (add --force to replace a file that is already there)
 node apps/cli/dist/index.js new --out my.park --name "Demo Park" --seed 1
 
+# Or start from the sample park, Leafy Lake, with a hill and a pond (the Mac app's first run)
+node apps/cli/dist/index.js new --out leafy.park --sample --seed 1
+
 # Raise a patch of land (the result says what it cost, in cents)
 node apps/cli/dist/index.js exec --save my.park --command terrain_raise --input '{"x":4,"y":4,"w":3,"h":3}' --out my.park
 

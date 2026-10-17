@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CameraRig } from "../src/camera.js";
+import { CAMERA_CLEARANCE, CameraRig } from "../src/camera.js";
 
 describe("CameraRig", () => {
   it("places the camera on a sphere around the target", () => {
@@ -173,5 +173,148 @@ describe("CameraRig", () => {
       },
     });
     expect(calls).toEqual(["set 1.000 2.000 13.000", "lookAt 1 2 3"]);
+  });
+});
+
+/** A cone of rock `height` high and `radius` wide on flat ground at 0, centered on (cx, cz). */
+function hill(cx: number, cz: number, height: number, radius: number) {
+  return (x: number, z: number) => height * Math.max(0, 1 - Math.hypot(x - cx, z - cz) / radius);
+}
+
+/** How far the rig's eye is above the least height it is allowed. */
+function clearanceOf(rig: CameraRig, ground: (x: number, z: number) => number): number {
+  const eye = rig.position();
+  return eye.y - ground(eye.x, eye.z) - CAMERA_CLEARANCE;
+}
+
+describe("CameraRig height awareness", () => {
+  it("keeps one unit of clearance", () => {
+    expect(CAMERA_CLEARANCE).toBe(1);
+  });
+
+  it("settle() does nothing without a height sampler", () => {
+    const rig = new CameraRig();
+    rig.target = { x: 3, y: 2, z: 4 };
+    rig.distance = 4;
+    rig.settle();
+    expect(rig.target).toEqual({ x: 3, y: 2, z: 4 });
+    expect(rig.distance).toBe(4);
+    expect(rig.pitch).toBe(0.6);
+  });
+
+  it("eases the target toward the ground by a fifth of the gap each frame, then lands on it", () => {
+    const rig = new CameraRig();
+    rig.heightAt = () => 10;
+    rig.target = { x: 0, y: 0, z: 0 };
+    rig.settle();
+    expect(rig.target.y).toBeCloseTo(2, 12);
+    rig.settle();
+    expect(rig.target.y).toBeCloseTo(3.6, 12);
+    for (let i = 0; i < 100; i++) rig.settle();
+    expect(rig.target.y).toBe(10);
+    // Above the ground it comes down the same way.
+    rig.heightAt = () => 0;
+    rig.settle();
+    expect(rig.target.y).toBeCloseTo(8, 12);
+  });
+
+  it("leaves a camera that already clears the ground exactly where it is", () => {
+    const rig = new CameraRig();
+    rig.heightAt = hill(40, 40, 6, 8); // far from the eye and the target
+    rig.target = { x: 10, y: 0, z: 10 };
+    const { distance, pitch, yaw } = rig;
+    rig.settle();
+    expect(rig.distance).toBe(distance);
+    expect(rig.pitch).toBe(pitch);
+    expect(rig.yaw).toBe(yaw);
+  });
+
+  it("makes the target follow the ground over a hill, and back down the far side", () => {
+    const rig = new CameraRig();
+    const ground = hill(10, 10, 6, 8);
+    rig.heightAt = ground;
+    rig.target = { x: 4, y: 0, z: 10 };
+    for (const x of [6, 8, 10, 12, 14, 16, 18]) {
+      rig.target.x = x;
+      for (let i = 0; i < 80; i++) rig.settle();
+      expect(rig.target.y).toBeCloseTo(ground(x, 10), 3);
+    }
+    expect(rig.target.y).toBe(0);
+  });
+
+  it("keeps the eye above a hill when zoomed all the way in at the default pitch", () => {
+    const rig = new CameraRig();
+    const ground = hill(10, 10, 6, 8);
+    rig.heightAt = ground;
+    rig.zoom(0.001);
+    expect(rig.distance).toBe(4);
+    expect(rig.pitch).toBe(0.6);
+    // Looking at the top of the hill, a little off its peak, from the flank.
+    rig.target = { x: 10, y: 6, z: 10 };
+    rig.yaw = Math.PI / 4;
+
+    for (let frame = 0; frame < 40; frame++) {
+      rig.settle();
+      expect(clearanceOf(rig, ground)).toBeGreaterThanOrEqual(-1e-9);
+    }
+    expect(rig.target.y).toBeCloseTo(6, 6);
+    expect(rig.position().y).toBeGreaterThanOrEqual(ground(rig.position().x, rig.position().z) + 1);
+  });
+
+  it("lifts the eye over a ridge by raising the pitch, not by backing off", () => {
+    const rig = new CameraRig();
+    // The camera is on the +Z side of the target; the ridge is between it and the target's feet.
+    const ground = hill(0, 3.3, 3, 4);
+    rig.heightAt = ground;
+    rig.target = { x: 0, y: 0, z: 0 };
+    rig.yaw = 0;
+    rig.distance = 4;
+    rig.pitch = 0.6;
+    expect(clearanceOf(rig, ground)).toBeLessThan(0); // it would be inside the ridge
+
+    rig.settle();
+
+    expect(rig.pitch).toBeGreaterThan(0.6);
+    expect(rig.pitch).toBeLessThanOrEqual(1.4);
+    expect(rig.distance).toBe(4);
+    expect(clearanceOf(rig, ground)).toBeGreaterThanOrEqual(-1e-9);
+    // Not much more than it had to: a hair above the least pitch that clears.
+    expect(clearanceOf(rig, ground)).toBeLessThan(0.01);
+  });
+
+  it("backs off when the pitch is already as high as it goes", () => {
+    const rig = new CameraRig();
+    const ground = hill(0, 0.7, 40, 30); // a mountain the eye cannot get over by pitch alone
+    rig.heightAt = ground;
+    rig.target = { x: 0, y: 0, z: 0 };
+    rig.yaw = 0;
+    rig.distance = 4;
+    rig.pitch = 0.6;
+
+    rig.settle();
+
+    expect(rig.pitch).toBe(1.4);
+    expect(rig.distance).toBeGreaterThan(4);
+    expect(clearanceOf(rig, ground)).toBeGreaterThanOrEqual(-1e-9);
+  });
+
+  it("never leaves the eye in the ground, from any pose over bumpy land", () => {
+    const rig = new CameraRig();
+    const ground = (x: number, z: number) => 3 + 2.5 * Math.sin(x * 0.7) * Math.cos(z * 0.5);
+    rig.heightAt = ground;
+    for (const distance of [4, 7, 15, 40]) {
+      for (const pitch of [0.26, 0.6, 1.0, 1.4]) {
+        for (let k = 0; k < 8; k++) {
+          rig.distance = distance;
+          rig.pitch = pitch;
+          rig.yaw = (k * Math.PI) / 4;
+          rig.target = { x: 3 + k * 1.7, y: ground(3 + k * 1.7, 9), z: 9 };
+          rig.settle();
+          expect(clearanceOf(rig, ground)).toBeGreaterThanOrEqual(-1e-9);
+          expect(rig.pitch).toBeGreaterThanOrEqual(pitch);
+          expect(rig.pitch).toBeLessThanOrEqual(1.4);
+        }
+      }
+    }
   });
 });

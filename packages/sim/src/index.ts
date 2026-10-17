@@ -21,6 +21,7 @@ export { deserializeWorld, serializeWorld } from "./save/codec.js";
 export { SaveError } from "./save/error.js";
 export { MIGRATIONS, migrate } from "./save/migrate.js";
 export type { Migration } from "./save/migrate.js";
+export { SAMPLE_SIZE, createSamplePark } from "./sample-park.js";
 export { Sim } from "./sim.js";
 export { LOAN_MAX, financeSystem } from "./systems/finance.js";
 export type { System } from "./systems/types.js";

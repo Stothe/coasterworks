@@ -1,4 +1,7 @@
-import { Sim, createWorld, type ExecResult, type World } from "@coasterworks/sim";
+import type { ExecResult } from "./commands/execute.js";
+import { Sim } from "./sim.js";
+import { createWorld } from "./world/create.js";
+import type { World } from "./world/types.js";
 
 /** Tiles per side of the sample park. */
 export const SAMPLE_SIZE = 64;

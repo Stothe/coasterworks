@@ -1,6 +1,5 @@
 import { SimHostServer, type HostTimers } from "@coasterworks/protocol";
-import { Sim } from "@coasterworks/sim";
-import { createSamplePark } from "../dev/sample-park";
+import { Sim, createSamplePark } from "@coasterworks/sim";
 import { WorkerPortTransport, type PortLike } from "./worker-transport";
 
 /** The sample park's seed. The same seed is the same park every time. */

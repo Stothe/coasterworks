@@ -14,8 +14,8 @@ You need Rust (`cargo`), Node 22 or newer, and pnpm 10.
 
 ```sh
 pnpm install
-pnpm build          # builds apps/cli/dist, which the shell runs with node
-pnpm dev:desktop    # tauri dev: starts the Vite dev server, builds the shell, opens the window
+pnpm dev:desktop    # builds apps/cli/dist, then tauri dev: starts the Vite dev server, builds the
+                    # shell, opens the window
 ```
 
 The first run compiles Tauri, which takes several minutes. After that it is seconds.
@@ -31,7 +31,8 @@ another port. Stop the first.
 
 1. Finds the CLI (`COASTERWORKS_CLI`, else `apps/cli/dist/index.js`).
 2. Makes `~/Library/Application Support/com.coasterworks.app/parks/current.park` with
-   `coasterworks new` if it is not there yet.
+   `coasterworks new --sample --name "Leafy Lake"` if it is not there yet: the first run opens the
+   sample park, a hill and a pond, rather than a flat field.
 3. Runs `node <cli> serve --save <park> --out <park> --port 0` and reads its stdout until the ready
    line arrives (10 s limit, otherwise it shows a dialog with the sidecar's stderr and exits 1).
 4. Opens the `main` window (1400x900, minimum 1100x700) with an initialization script that sets

@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { MAX_ADVANCE_DAYS, createWorld, hashWorld } from "@coasterworks/sim";
+import { MAX_ADVANCE_DAYS, createSamplePark, createWorld, hashWorld } from "@coasterworks/sim";
 import { main, type CliIO } from "../src/index.js";
 import { readPark, writePark } from "../src/io.js";
 
@@ -139,6 +139,58 @@ describe("new", () => {
     expect(parseOut(again)).toMatchObject({ name: "Second", width: 8, height: 8 });
     expect((await readPark(file)).meta.name).toBe("Second");
     expect(await readdir(dir)).toEqual(["replace.park"]);
+  });
+
+  describe("--sample", () => {
+    it("makes Leafy Lake, the same park createSamplePark makes for the seed", async () => {
+      const file = join(dir, "sample.park");
+      const made = await cli("new", "--out", file, "--sample", "--seed", "5");
+      expect(made.code).toBe(0);
+      expect(made.stderr).toBe("");
+      expect(parseOut(made)).toMatchObject({
+        name: "Leafy Lake",
+        width: 64,
+        height: 64,
+        date: "March 1, Year 1",
+        cash: 10_000_00,
+      });
+
+      const world = await readPark(file);
+      const expected = createSamplePark(5);
+      expect(world.meta.seed).toBe(5);
+      expect(Number.isNaN(Date.parse(world.meta.created))).toBe(false);
+      expect(world.terrain.corners).toEqual(expected.terrain.corners);
+      expect(world.terrain.water).toEqual(expected.terrain.water);
+      expect(world.log.length).toBeGreaterThan(0);
+      expect(Math.max(...world.terrain.corners)).toBeGreaterThan(8 + 10);
+    });
+
+    it("takes its name from --name, as the desktop app asks for", async () => {
+      const file = join(dir, "named.park");
+      const made = await cli("new", "--out", file, "--sample", "--name", "Leafy Lake");
+      expect(made.code).toBe(0);
+      expect(parseOut(made)).toMatchObject({ name: "Leafy Lake", width: 64 });
+      const renamed = await cli("new", "--out", join(dir, "r.park"), "--sample", "--name", "Mine");
+      expect(parseOut(renamed)).toMatchObject({ name: "Mine", width: 64 });
+    });
+
+    it("picks a seed when none is given, and still refuses to replace a park", async () => {
+      const file = join(dir, "random.park");
+      expect((await cli("new", "--out", file, "--sample")).code).toBe(0);
+      expect((await readPark(file)).meta.seed).toBeTypeOf("number");
+      const again = await cli("new", "--out", file, "--sample");
+      expect(again.code).toBe(1);
+      expect(again.stderr).toBe(`error: ${file} already exists (use --force to overwrite)\n`);
+    });
+
+    it.each(["--width", "--height"])("is a usage error with %s", async (flag) => {
+      const file = join(dir, "bad-sample.park");
+      const made = await cli("new", "--out", file, "--sample", flag, "8");
+      expect(made.code).toBe(2);
+      expect(made.stdout).toBe("");
+      expect(made.stderr).toContain("--sample makes a 64 by 64 park");
+      expect(await exists(file)).toBe(false);
+    });
   });
 
   it("is a usage error without --out", async () => {
