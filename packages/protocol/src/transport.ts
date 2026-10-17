@@ -30,6 +30,7 @@ class LinkedEnd implements MessageTransport {
   private messageHandler: ((frame: Frame) => void) | undefined;
   private closeHandler: (() => void) | undefined;
   private inbox: Frame[] = [];
+  private draining = false;
   private closed = false;
   private closeReported = false;
 
@@ -40,8 +41,7 @@ class LinkedEnd implements MessageTransport {
 
   onMessage(handler: (frame: Frame) => void): void {
     this.messageHandler = handler;
-    // Frames sent before anyone listened wait their turn here.
-    while (this.inbox.length > 0) this.deliver(this.inbox.shift() as Frame);
+    this.drain();
   }
 
   onClose(handler: () => void): void {
@@ -57,15 +57,27 @@ class LinkedEnd implements MessageTransport {
 
   private receive(frame: Frame): void {
     if (this.closed) return;
-    if (this.messageHandler) this.deliver(frame);
-    else this.inbox.push(frame);
+    this.inbox.push(frame);
+    this.drain();
   }
 
-  private deliver(frame: Frame): void {
+  /**
+   * Hands over waiting frames one at a time, oldest first. Frames sent while the handler runs, or
+   * before anyone listened, join the back of the line instead of jumping it.
+   */
+  private drain(): void {
+    if (this.draining) return;
+    this.draining = true;
     try {
-      this.messageHandler?.(frame);
-    } catch (error) {
-      reportLater(error);
+      while (this.messageHandler && this.inbox.length > 0) {
+        try {
+          this.messageHandler(this.inbox.shift() as Frame);
+        } catch (error) {
+          reportLater(error);
+        }
+      }
+    } finally {
+      this.draining = false;
     }
   }
 

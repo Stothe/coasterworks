@@ -213,7 +213,8 @@ export function decodeSnapshot(bytes: Uint8Array): DecodedSnapshot {
   const corners = new Int16Array(cornerCount);
   let at = headerEnd;
   for (let i = 0; i < cornerCount; i++, at += 2) corners[i] = view.getInt16(at, true);
-  const surface = bytes.slice(at, at + tiles);
-  const water = bytes.slice(at + tiles, at + tiles * 2);
+  // Copies by construction. `slice` would not: on a Node `Buffer` it returns a view.
+  const surface = new Uint8Array(bytes.subarray(at, at + tiles));
+  const water = new Uint8Array(bytes.subarray(at + tiles, at + tiles * 2));
   return { header, terrain: { corners, surface, water } };
 }

@@ -62,6 +62,10 @@ function publicEntry(entry: LogEntry): LogEntryPublic {
   return out;
 }
 
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /**
  * Runs a sim and serves it to any number of clients. Socket clients act as the `"player"`; an MCP
  * server acts as the `"agent"` by calling the sim directly, and the host notices through
@@ -83,6 +87,11 @@ export class SimHostServer {
   /** The world and log length that the last broadcast covered, to spot changes made elsewhere. */
   private trackedWorld: World;
   private loggedCount: number;
+  /** Set when the sim was seen to hold a different world, until a mutation announces it. */
+  private worldChanged = false;
+  /** Broadcasts waiting their turn; see `publish`. */
+  private readonly outbox: Array<() => void> = [];
+  private publishing = false;
   private loop: { handle: unknown } | undefined;
 
   constructor(sim: Sim, opts: SimHostOptions = {}) {
@@ -111,7 +120,7 @@ export class SimHostServer {
   /** Sets the speed and tells every client. */
   setSpeed(speed: Speed): void {
     this.applySpeed(speed);
-    this.broadcastSnapshot();
+    this.publish(() => this.broadcastSnapshot());
   }
 
   /** Starts serving a transport. It may be called before `start()`, and for any number of clients. */
@@ -135,7 +144,7 @@ export class SimHostServer {
     const now = timers.now();
     this.lastTickAt = this.lastSnapshotAt = now;
     const interval = Math.min(LOOP_INTERVAL_MS, this.snapshotIntervalMs);
-    this.loop = { handle: timers.setInterval(() => this.tick(), interval) };
+    this.loop = { handle: timers.setInterval(() => this.runLoop(), interval) };
   }
 
   stop(): void {
@@ -152,17 +161,40 @@ export class SimHostServer {
   tick(): void {
     const now = this.requireTimers().now();
     this.advance(now);
-    const world = this.sim.world;
-    if (world !== this.trackedWorld || world.log.length !== this.loggedCount) {
+    this.syncWorld();
+    if (this.worldChanged || this.sim.world.log.length !== this.loggedCount) {
       this.mutated();
     } else if (now - this.lastSnapshotAt >= this.snapshotIntervalMs) {
-      this.broadcastSnapshot();
+      this.publish(() => this.broadcastSnapshot());
     }
   }
 
   /** Call after changing the sim from outside the protocol, such as an MCP command. */
   notifyExternalMutation(): void {
     this.mutated();
+  }
+
+  /**
+   * What the timer runs. A fault in the sim must not kill the page or the process, nor leave a
+   * broken sim running: the host halts it, tells the clients, and stays up for queries and a later
+   * `start()`.
+   */
+  private runLoop(): void {
+    try {
+      this.tick();
+    } catch (error) {
+      this.halt(error);
+    }
+  }
+
+  private halt(error: unknown): void {
+    this.stop();
+    this.applySpeed(0);
+    const message = `Simulation halted: ${errorText(error)}`;
+    this.publish(() => {
+      this.broadcast({ t: "error", message });
+      this.broadcastSnapshot();
+    });
   }
 
   private requireTimers(): HostTimers {
@@ -209,14 +241,12 @@ export class SimHostServer {
       return;
     }
     try {
+      // Before anything runs, so a command on a world that was just swapped in logs against it.
+      this.syncWorld();
       this.dispatch(client, msg);
     } catch (error) {
       // A request that blows up must not take the other clients, or the loop, with it.
-      this.sendError(
-        client,
-        error instanceof Error ? error.message : String(error),
-        "id" in msg ? msg.id : undefined,
-      );
+      this.sendError(client, errorText(error), "id" in msg ? msg.id : undefined);
     }
   }
 
@@ -249,7 +279,7 @@ export class SimHostServer {
       case "speed":
         this.applySpeed(msg.speed);
         this.reply(client, msg.id, { ok: true });
-        this.broadcastSnapshot();
+        this.publish(() => this.broadcastSnapshot());
         return;
       case "snapshot":
         // The snapshot goes first, so a client that waits for the reply has it when the wait ends.
@@ -284,24 +314,59 @@ export class SimHostServer {
   }
 
   /**
-   * The park changed. Tell every client what was logged, then show them the park, with terrain
-   * for any that do not hold the new version.
+   * Notices that the sim now holds a different world, such as a loaded save. Its log is not news,
+   * so counting starts from where it ends, and the terrain is new to every client.
    */
-  private mutated(): void {
+  private syncWorld(): void {
     const world = this.sim.world;
-    if (world !== this.trackedWorld) {
-      // A different park altogether, such as a loaded save: its history is not news.
-      this.trackedWorld = world;
-      this.loggedCount = world.log.length;
-    }
+    if (world === this.trackedWorld) return;
+    this.trackedWorld = world;
+    this.loggedCount = world.log.length;
+    this.worldChanged = true;
     this.terrainVersion++;
-    for (let i = this.loggedCount; i < world.log.length; i++) {
+  }
+
+  /** The park changed: tell every client, in the order things happened. */
+  private mutated(): void {
+    this.publish(() => this.announce());
+  }
+
+  /**
+   * Tells every client what was logged since the last announcement, then shows them the park,
+   * with terrain for any that do not hold the new version.
+   */
+  private announce(): void {
+    this.syncWorld();
+    const world = this.sim.world;
+    const from = this.loggedCount;
+    const to = world.log.length;
+    this.loggedCount = to;
+    this.worldChanged = false;
+    this.terrainVersion++;
+    for (let i = from; i < to; i++) {
       const entry = world.log[i];
       if (entry) this.broadcast({ t: "event", kind: "log", entry: publicEntry(entry) });
     }
-    this.loggedCount = world.log.length;
     this.broadcastSnapshot();
     this.onMutate?.(world);
+  }
+
+  /**
+   * Runs a broadcast now, or, if one is already going out, right after it. A client's handler can
+   * call back into the host while it is being sent to; without this, that call's broadcast would
+   * reach the clients later in the loop before the one it interrupted, and they would hear events
+   * out of order or twice. A broadcast reads the park when it runs, so none is ever stale.
+   * Exceptions leave the queue as it is, to be run by the next broadcast.
+   */
+  private publish(broadcast: () => void): void {
+    this.outbox.push(broadcast);
+    if (this.publishing) return;
+    this.publishing = true;
+    try {
+      for (let next = this.outbox.shift(); next; next = this.outbox.shift()) next();
+    } finally {
+      this.publishing = false;
+    }
   }
 
   private buildSnapshot(withTerrain: boolean): Uint8Array {

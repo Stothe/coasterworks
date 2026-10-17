@@ -31,6 +31,33 @@ describe("createLinkedTransports", () => {
     expect(got).toEqual(["first", "second", "third"]);
   });
 
+  it("keeps frames in order when a handler sends while queued frames are delivered", () => {
+    const [a, b] = createLinkedTransports();
+    a.send("one");
+    a.send("two");
+    const got: Frame[] = [];
+    b.onMessage((frame) => {
+      got.push(frame);
+      if (frame === "one") a.send("three");
+    });
+    expect(got).toEqual(["one", "two", "three"]);
+  });
+
+  it("keeps frames in order when a handler sends while a live frame is delivered", () => {
+    const [a, b] = createLinkedTransports();
+    const got: Frame[] = [];
+    b.onMessage((frame) => {
+      got.push(frame);
+      if (frame === "one") {
+        a.send("two");
+        got.push("after the handler's own work");
+      }
+    });
+    a.send("one");
+    // "two" waits until the handler for "one" is done, as it would on a real transport.
+    expect(got).toEqual(["one", "after the handler's own work", "two"]);
+  });
+
   it("closing either side runs onClose on both, once", () => {
     const [a, b] = createLinkedTransports();
     const closes = { a: 0, b: 0 };

@@ -115,6 +115,18 @@ describe("snapshot encoding", () => {
     expect(decoded.terrain?.corners[0]).toBe(63);
   });
 
+  it("copies out of a Node Buffer, whose slice is a view", () => {
+    const encoded = Buffer.from(encodeSnapshot(header(), terrain()));
+    const decoded = decodeSnapshot(encoded);
+    encoded.fill(0);
+    expect(decoded.terrain?.corners).toEqual(terrain().corners);
+    expect(decoded.terrain?.surface).toEqual(terrain().surface);
+    expect(decoded.terrain?.water).toEqual(terrain().water);
+    // Plain typed arrays too, not Buffers that happen to hold the right bytes.
+    expect(Buffer.isBuffer(decoded.terrain?.surface)).toBe(false);
+    expect(Buffer.isBuffer(decoded.terrain?.water)).toBe(false);
+  });
+
   it("refuses to encode terrain that disagrees with the header", () => {
     expect(() => encodeSnapshot(header({ hasTerrain: true }))).toThrow(ProtocolError);
     expect(() => encodeSnapshot(header({ hasTerrain: false }), terrain())).toThrow(ProtocolError);

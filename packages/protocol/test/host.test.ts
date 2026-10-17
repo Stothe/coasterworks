@@ -2,6 +2,7 @@ import { createWorld } from "@coasterworks/sim";
 import { describe, expect, it, vi } from "vitest";
 import {
   PROTOCOL_VERSION,
+  SimClient,
   SimHostServer,
   createLinkedTransports,
   type Frame,
@@ -831,5 +832,182 @@ describe("onMutate", () => {
     peer.send({ t: "speed", id: 3, speed: 2 });
     peer.send({ t: "snapshot", id: 4 });
     expect(onMutate).not.toHaveBeenCalled();
+  });
+});
+
+describe("a client that calls back into the host while it is being sent to", () => {
+  /** A real client attached to `host`, and said hello. */
+  async function client(host: SimHostServer): Promise<SimClient> {
+    const [hostSide, clientSide] = createLinkedTransports();
+    host.attach(hostSide);
+    const connected = new SimClient(clientSide);
+    await connected.connect();
+    return connected;
+  }
+
+  it.each(["before", "after"] as const)(
+    "tells every client each log entry once, in order, when the caller is attached %s them",
+    async (position) => {
+      const { sim, host } = setup();
+      let a: SimClient;
+      let b: Peer;
+      if (position === "before") {
+        a = await client(host);
+        b = joined(host);
+      } else {
+        b = joined(host);
+        a = await client(host);
+      }
+      const heardByA: number[] = [];
+      let answered = false;
+      a.onEvent((event) => {
+        heardByA.push(event.entry.id);
+        if (answered) return;
+        answered = true;
+        void a.command("finance_take_loan", { amount: 100_000 });
+      });
+
+      sim.execute("terrain_raise", RAISE, "agent");
+      host.notifyExternalMutation();
+
+      expect(sim.world.log.map((entry) => entry.id)).toEqual([1, 2]);
+      expect(heardByA).toEqual([1, 2]);
+      expect(b.messages("event").map((event) => event.entry.id)).toEqual([1, 2]);
+      expect(b.kinds()).toEqual(["event", "snapshot", "event", "snapshot"]);
+      // What B was last shown is the newest state, not the state when the first event went out.
+      expect(b.lastSnapshot().header.cash).toBe(sim.world.finance.cash);
+      expect(b.lastSnapshot().header.terrainVersion).toBe(2);
+      expect(b.lastSnapshot().terrain?.corners).toEqual(sim.world.terrain.corners);
+    },
+  );
+
+  it("never shows a client an older snapshot after a newer one", async () => {
+    const { host } = setup();
+    const a = await client(host);
+    const b = joined(host);
+    let answered = false;
+    a.onSnapshot(() => {
+      if (answered) return;
+      answered = true;
+      void a.setSpeed(8);
+    });
+
+    host.setSpeed(2);
+
+    expect(host.speed).toBe(8);
+    expect(b.snapshots().map((snapshot) => snapshot.header.speed)).toEqual([2, 8]);
+  });
+});
+
+describe("a different world in the sim", () => {
+  const OTHER = { width: 4, height: 4, seed: 3, name: "Other Park" };
+
+  it("announces a client's command on the new world, once", () => {
+    const { sim, host } = setup();
+    const peer = joined(host);
+    sim.execute("terrain_raise", RAISE, "agent");
+    host.notifyExternalMutation();
+    peer.clear();
+
+    sim.replaceWorld(createWorld(OTHER));
+    peer.send({ t: "command", id: 1, name: "terrain_raise", input: { x: 0, y: 0, w: 1, h: 1 } });
+
+    expect(peer.kinds()).toEqual(["result", "event", "snapshot"]);
+    expect(peer.messages("event")).toHaveLength(1);
+    expect(peer.messages("event")[0]?.entry).toMatchObject({ id: 1, name: "terrain_raise" });
+    expect(peer.lastSnapshot().header).toMatchObject({ width: 4, height: 4, hasTerrain: true });
+  });
+
+  it("sends the new terrain with whatever snapshot comes first, and announces the swap on the tick", () => {
+    const { sim, clock, host } = setup();
+    const peer = joined(host);
+    sim.replaceWorld(createWorld(OTHER));
+
+    peer.send({ t: "speed", id: 1, speed: 2 });
+    expect(peer.lastSnapshot().header).toMatchObject({ width: 4, height: 4, hasTerrain: true });
+
+    peer.clear();
+    clock.advance(25);
+    host.tick();
+    expect(peer.kinds()).toEqual(["snapshot"]);
+    expect(peer.lastSnapshot().header).toMatchObject({ width: 4, height: 4 });
+    expect(peer.messages("event")).toEqual([]);
+  });
+});
+
+describe("a fault in the sim", () => {
+  const boom = {
+    name: "boom",
+    tick: () => {
+      throw new Error("boom");
+    },
+  };
+
+  it("halts the loop, pauses, and tells every client once", () => {
+    const { sim, clock, host } = setup();
+    const a = joined(host);
+    const b = joined(host);
+    sim.systems.push(boom);
+    const tick = vi.spyOn(host, "tick");
+    host.start();
+    clock.advance(25);
+
+    expect(() => clock.fire()).not.toThrow();
+
+    expect(clock.active()).toEqual([]);
+    expect(host.speed).toBe(0);
+    for (const peer of [a, b]) {
+      expect(peer.kinds()).toEqual(["error", "snapshot"]);
+      expect(peer.messages("error")).toEqual([{ t: "error", message: "Simulation halted: boom" }]);
+      expect(peer.lastSnapshot().header.speed).toBe(0);
+    }
+
+    clock.advance(1_000);
+    clock.fire();
+    expect(tick).toHaveBeenCalledTimes(1);
+    expect(a.messages("error")).toHaveLength(1);
+  });
+
+  it("still answers queries, and can be started again once the fault is gone", () => {
+    const { sim, clock, host } = setup();
+    const peer = joined(host);
+    sim.systems.push(boom);
+    host.start();
+    clock.advance(25);
+    clock.fire();
+    peer.clear();
+
+    peer.send({ t: "query", id: 1, name: "park_status", input: {} });
+    expect(peer.messages("result")[0]?.result).toMatchObject({ ok: true });
+
+    sim.systems.pop();
+    const haltedAt = sim.world.tick;
+    host.setSpeed(1);
+    host.start();
+    clock.advance(25);
+    clock.fire();
+    expect(sim.world.tick).toBe(haltedAt + 1);
+  });
+
+  it("leaves the public tick() throwing, so tests see the failure", () => {
+    const { sim, clock, host } = setup();
+    sim.systems.push(boom);
+    clock.advance(25);
+    expect(() => host.tick()).toThrow("boom");
+  });
+
+  it("halts on anything thrown, not only an Error", () => {
+    const { sim, clock, host } = setup();
+    const peer = joined(host);
+    sim.systems.push({
+      name: "odd",
+      tick: () => {
+        throw "plain text";
+      },
+    });
+    host.start();
+    clock.advance(25);
+    clock.fire();
+    expect(peer.messages("error")[0]?.message).toBe("Simulation halted: plain text");
   });
 });

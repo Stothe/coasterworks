@@ -5,6 +5,7 @@ import {
   SimClient,
   SimHostServer,
   createLinkedTransports,
+  encodeSnapshot,
   type DecodedSnapshot,
   type EventMessage,
   type Frame,
@@ -300,5 +301,87 @@ describe("SimClient", () => {
     });
     expect(() => deliver?.("{")).toThrow(ProtocolError);
     expect(() => deliver?.(Uint8Array.from([1, 2, 3]))).toThrow(ProtocolError);
+  });
+
+  it("onError receives errors that answer no request, and only those", async () => {
+    const [server, clientSide] = createLinkedTransports();
+    const client = new SimClient(clientSide);
+    const messages: string[] = [];
+    const stop = client.onError((message) => messages.push(message));
+    const pending = client.undo();
+
+    server.send(JSON.stringify({ t: "error", message: "Simulation halted: boom" }));
+    server.send(JSON.stringify({ t: "error", id: 1, message: "Nope" }));
+    await expect(pending).rejects.toThrow("Nope");
+    expect(messages).toEqual(["Simulation halted: boom"]);
+
+    stop();
+    server.send(JSON.stringify({ t: "error", message: "unheard" }));
+    expect(messages).toEqual(["Simulation halted: boom"]);
+  });
+
+  it("onError also hears the error that refuses a hello", async () => {
+    const [server, clientSide] = createLinkedTransports();
+    server.onMessage(() => {
+      server.send(JSON.stringify({ t: "error", message: "Unsupported protocol version" }));
+    });
+    const client = new SimClient(clientSide);
+    const messages: string[] = [];
+    client.onError((message) => messages.push(message));
+    await expect(client.connect()).rejects.toThrow("Unsupported protocol version");
+    expect(messages).toEqual(["Unsupported protocol version"]);
+  });
+
+  it("onError hears that a failing sim halted, once", async () => {
+    const { sim, clock, host, client } = setup();
+    await client.connect();
+    const messages: string[] = [];
+    client.onError((message) => messages.push(message));
+    sim.systems.push({
+      name: "boom",
+      tick: () => {
+        throw new Error("boom");
+      },
+    });
+    host.start();
+    clock.advance(25);
+    clock.fire();
+    clock.advance(25);
+    clock.fire();
+    expect(messages).toEqual(["Simulation halted: boom"]);
+  });
+
+  it("a handler that throws does not keep the next one from running", async () => {
+    const [server, clientSide] = createLinkedTransports();
+    const client = new SimClient(clientSide);
+    const heard: string[] = [];
+    const failing = () => {
+      throw new Error("handler failed");
+    };
+
+    client.onEvent(failing);
+    client.onEvent((event) => heard.push(`event ${event.entry.id}`));
+    client.onError(failing);
+    client.onError((message) => heard.push(`error ${message}`));
+    client.onSnapshot(failing);
+    client.onSnapshot((snapshot) => heard.push(`snapshot ${snapshot.header.tick}`));
+
+    const entry = { id: 3, tick: 0, client: "agent", name: "x", input: {}, cost: 0 };
+    server.send(JSON.stringify({ t: "event", kind: "log", entry }));
+    server.send(JSON.stringify({ t: "error", message: "oops" }));
+    server.send(
+      encodeSnapshot({
+        tick: 7,
+        speed: 1,
+        cash: 0,
+        loan: 0,
+        date: "March 1, Year 1",
+        terrainVersion: 0,
+        hasTerrain: false,
+        width: 1,
+        height: 1,
+      }),
+    );
+    expect(heard).toEqual(["event 3", "error oops", "snapshot 7"]);
   });
 });

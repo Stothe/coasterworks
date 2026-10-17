@@ -20,6 +20,17 @@ interface Pending<T> {
 
 const closedError = () => new ProtocolError("Connection closed");
 
+/** Calls every handler with `value`. One that throws must not keep the rest from hearing it. */
+function notify<T>(handlers: Set<(value: T) => void>, value: T): void {
+  for (const handler of [...handlers]) {
+    try {
+      handler(value);
+    } catch {
+      // The handler's failure is its own business.
+    }
+  }
+}
+
 /** Adds `handler` to `handlers` and returns the function that removes that registration. */
 function subscribe<T>(handlers: Set<(value: T) => void>, handler: (value: T) => void) {
   // A fresh function per call, so registering one handler twice gives two independent removals.
@@ -39,6 +50,7 @@ export class SimClient {
   private readonly pending = new Map<number, Pending<ResultPayload>>();
   private readonly snapshotHandlers = new Set<(snapshot: DecodedSnapshot) => void>();
   private readonly eventHandlers = new Set<(event: EventMessage) => void>();
+  private readonly errorHandlers = new Set<(message: string) => void>();
   private nextId = 1;
   private connecting: Promise<WelcomeMessage> | undefined;
   private helloPending: Pending<WelcomeMessage> | undefined;
@@ -101,6 +113,14 @@ export class SimClient {
     return subscribe(this.eventHandlers, handler);
   }
 
+  /**
+   * Calls `handler` with each error the host sends that is not the answer to a request, such as
+   * "Simulation halted: ..." when the sim fails. Returns the function that stops that.
+   */
+  onError(handler: (message: string) => void): () => void {
+    return subscribe(this.errorHandlers, handler);
+  }
+
   /** Closes the transport. Requests still waiting for an answer reject. */
   close(): void {
     this.handleClose();
@@ -131,7 +151,7 @@ export class SimClient {
   private handleFrame(frame: Frame): void {
     if (typeof frame !== "string") {
       const snapshot = decodeSnapshot(frame);
-      for (const handler of [...this.snapshotHandlers]) handler(snapshot);
+      notify(this.snapshotHandlers, snapshot);
       return;
     }
     const msg = parseHostMessage(frame);
@@ -148,17 +168,19 @@ export class SimClient {
         this.settle(msg.id)?.resolve(msg.result as ResultPayload);
         return;
       case "event":
-        for (const handler of [...this.eventHandlers]) handler(msg);
+        notify(this.eventHandlers, msg);
         return;
       case "error": {
         const failure = new ProtocolError(msg.message);
         if (msg.id !== undefined) {
           this.settle(msg.id)?.reject(failure);
         } else {
-          // Without an id the error is about the connection itself, which only a hello can be.
+          // Without an id the error is not about a request. It is for `onError`, and it also
+          // answers a hello that is waiting.
           const waiting = this.helloPending;
           this.helloPending = undefined;
           waiting?.reject(failure);
+          notify(this.errorHandlers, msg.message);
         }
         return;
       }
