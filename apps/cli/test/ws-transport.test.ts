@@ -74,6 +74,28 @@ describe("wsTransport", () => {
     }
   });
 
+  it("delivers nothing after close(), nor after the socket has closed", () => {
+    const { socket, transport, frames } = setup();
+    socket.emit("message", Buffer.from("before"), false);
+    transport.close();
+    // A message already in flight when the transport was closed.
+    socket.emit("message", Buffer.from("late"), false);
+    socket.emit("message", Buffer.from([1]), true);
+    socket.emit("close", 1000);
+    socket.emit("message", Buffer.from("later"), false);
+    expect(frames).toEqual(["before"]);
+  });
+
+  it("still reports the close that close() asks for", () => {
+    const { socket, transport } = setup();
+    const onClose = vi.fn();
+    transport.onClose(onClose);
+    transport.close();
+    expect(onClose).not.toHaveBeenCalled();
+    socket.emit("close", 1000);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("closes the socket, and leaves the error to the close handler", () => {
     const { socket, transport } = setup();
     transport.close();

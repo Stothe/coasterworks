@@ -51,16 +51,37 @@ function sha256(text: string): Buffer {
 }
 
 /**
- * True when `given` is the `expected` token. It compares digests, so the check takes the same time
- * wherever the two differ, and whatever their lengths.
+ * True when `given` is the `expected` token; never when either is empty. It compares digests, so
+ * the check takes the same time wherever the two differ, and whatever their lengths.
  */
 export function tokenMatches(expected: string, given: string): boolean {
+  // An empty token is no token: a server with none would otherwise let in a request with none.
+  if (expected === "" || given === "") return false;
   return timingSafeEqual(sha256(given), sha256(expected));
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown, headers = {}): void {
   res.writeHead(status, { "content-type": "application/json", ...headers });
   res.end(JSON.stringify(body));
+}
+
+/** Answers 500 if nothing has been sent yet, and otherwise, or if that fails, drops the connection. */
+function failRequest(res: ServerResponse): void {
+  try {
+    if (res.headersSent) res.destroy();
+    else sendJson(res, 500, { error: "internal error" });
+  } catch {
+    res.destroy();
+  }
+}
+
+/** The path a request asked for, or undefined if its target is not a URL at all, such as `//`. */
+function pathOf(req: IncomingMessage): string | undefined {
+  try {
+    return new URL(req.url ?? "/", "http://localhost").pathname;
+  } catch {
+    return undefined;
+  }
 }
 
 export interface McpRequestHandlerOptions extends McpServerOptions {
@@ -77,8 +98,10 @@ export interface McpRequestHandlerOptions extends McpServerOptions {
 /**
  * Builds the part of `serveHttp` that speaks MCP, for a caller that runs its own HTTP server and
  * wants `/mcp` on it. The handler answers a request for `/mcp` itself (the method, the bearer
- * token, the `Host` header, then MCP) and returns true. For any other path it touches nothing and
- * returns false, and the request is the caller's. It never rejects: a failure becomes a 500.
+ * token, the `Host` header, then MCP) and returns true. For any other path, including a target that
+ * is not a URL at all (`//`), it touches nothing and returns false, and the request is the
+ * caller's. It never rejects: a failure becomes a 500, or a dropped connection if even that cannot
+ * be sent.
  *
  * The handler keeps no session: each request gets its own MCP server, and they all share `sim`.
  */
@@ -121,12 +144,11 @@ export function createMcpRequestHandler(
   }
 
   return async (req, res) => {
-    if (new URL(req.url ?? "/", "http://localhost").pathname !== PATH) return false;
+    if (pathOf(req) !== PATH) return false;
     try {
       await handle(req, res);
     } catch {
-      if (res.headersSent) res.destroy();
-      else sendJson(res, 500, { error: "internal error" });
+      failRequest(res);
     }
     return true;
   };
@@ -150,9 +172,13 @@ export async function serveHttp(sim: Sim, opts: HttpOptions): Promise<HttpServer
   });
 
   const http = createServer((req, res) => {
-    void handle(req, res).then((handled) => {
-      if (!handled) sendJson(res, 404, { error: "not found" });
-    });
+    // The handler does not reject, but nothing here may reach the process as an unhandled
+    // rejection, which would end it: a request must never be able to stop the server.
+    handle(req, res)
+      .then((handled) => {
+        if (!handled) sendJson(res, 404, { error: "not found" });
+      })
+      .catch(() => failRequest(res));
   });
 
   await new Promise<void>((resolve, reject) => {

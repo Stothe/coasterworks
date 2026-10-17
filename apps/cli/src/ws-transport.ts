@@ -19,12 +19,15 @@ function textOf(data: RawData): string {
  * Wraps a server-side `ws` socket as the `MessageTransport` a `SimHostServer` serves. Text
  * messages arrive as strings and binary ones as a `Uint8Array` of their own; a string is sent as a
  * text frame and a `Uint8Array` as a binary one. The close handler runs once, when the socket
- * closes or fails (a failed socket is dropped, as the browser's is). Attach it in the same turn as
+ * closes or fails (a failed socket is dropped, as the browser's is). Once `close()` has been
+ * called, no message is delivered, even one that was already on its way. Attach it in the same turn as
  * the socket is accepted, so no message arrives before there is a handler for it.
  */
 export function wsTransport(socket: WebSocket): MessageTransport {
   let messageHandler: ((frame: Frame) => void) | undefined;
   let closeHandler: (() => void) | undefined;
+  // Set by `close()`: what arrives after it is not for anyone. `closed` is the socket's own end.
+  let closing = false;
   let closed = false;
 
   const markClosed = (): void => {
@@ -34,6 +37,7 @@ export function wsTransport(socket: WebSocket): MessageTransport {
   };
 
   socket.on("message", (data: RawData, isBinary: boolean) => {
+    if (closing || closed) return;
     messageHandler?.(isBinary ? bytesOf(data) : textOf(data));
   });
   socket.on("close", markClosed);
@@ -52,6 +56,7 @@ export function wsTransport(socket: WebSocket): MessageTransport {
       closeHandler = handler;
     },
     close() {
+      closing = true;
       socket.close();
     },
   };

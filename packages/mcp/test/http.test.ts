@@ -1,5 +1,5 @@
 import { createServer, request } from "node:http";
-import type { AddressInfo } from "node:net";
+import { connect as connectSocket, type AddressInfo } from "node:net";
 import { networkInterfaces } from "node:os";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -289,7 +289,10 @@ describe("tokenMatches", () => {
     expect(tokenMatches("s3cret", "s3crets")).toBe(false);
     expect(tokenMatches("s3cret", "S3CRET")).toBe(false);
     expect(tokenMatches("s3cret", "")).toBe(false);
-    expect(tokenMatches("", "")).toBe(true);
+    // An empty token is no token, on either side.
+    expect(tokenMatches("", "")).toBe(false);
+    expect(tokenMatches("", "x")).toBe(false);
+    expect(tokenMatches("x", "")).toBe(false);
     expect(tokenMatches("é", "é")).toBe(true);
   });
 });
@@ -412,5 +415,97 @@ describe("createMcpRequestHandler", () => {
     expect((await client.listTools()).tools.map((t) => t.name)).toContain("save_write");
     await client.callTool({ name: "terrain_raise", arguments: { x: 0, y: 0, w: 1, h: 1 } });
     expect(calls).toEqual(["mutated"]);
+  });
+});
+
+/** Sends `request` as it is, bytes and all, and returns the status line that comes back. */
+function rawStatusLine(port: number, request: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = connectSocket(port, "127.0.0.1", () => socket.write(request));
+    let text = "";
+    socket.setEncoding("utf8").on("data", (chunk: string) => (text += chunk));
+    socket.once("close", () => resolve(text.split("\r\n")[0] ?? ""));
+    socket.once("error", reject);
+  });
+}
+
+/** Request targets that `new URL(target, base)` throws on, or that are odd enough to try. */
+const ODD_TARGETS = ["//", "///", "/%", "//mcp", "/mcp/../x"];
+
+const rawGet = (port: number, target: string) =>
+  rawStatusLine(
+    port,
+    `GET ${target} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`,
+  );
+
+describe("a malformed request target", () => {
+  it.each(ODD_TARGETS)(
+    "%s is answered by serveHttp, which then serves the next request",
+    async (target) => {
+      // Not `/mcp`, so a 404; what matters is that the process answers at all.
+      expect(await rawGet(http.port, target)).toBe("HTTP/1.1 404 Not Found");
+      const client = await connect();
+      expect((await client.listTools()).tools.length).toBeGreaterThan(0);
+    },
+  );
+
+  it("is not the handler's, and never makes it reject", async () => {
+    const handle = createMcpRequestHandler(sim, { token: TOKEN, allowedHosts: () => ["h"] });
+    for (const url of ["//", "///", "http://", "//[", "/%", undefined]) {
+      const res = { headersSent: false, writeHead: () => expect.fail("wrote"), end() {} };
+      const req = { url, method: "GET", headers: {} };
+      // `//` and the like do not parse as a URL at all.
+      expect(await handle(req as never, res as never), String(url)).toBe(false);
+    }
+  });
+
+  it("is refused with 404 by a server that uses the handler, which then serves /mcp", async () => {
+    const hosts: string[] = [];
+    const handle = createMcpRequestHandler(sim, { token: TOKEN, allowedHosts: () => hosts });
+    const server = createServer((req, res) => {
+      void handle(req, res).then((handled) => {
+        if (handled) return;
+        res.writeHead(404).end();
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const { port } = server.address() as AddressInfo;
+      hosts.push(`127.0.0.1:${port}`);
+      for (const target of ODD_TARGETS) {
+        expect(await rawGet(port, target), target).toBe("HTTP/1.1 404 Not Found");
+      }
+      const client = await connectTo(`http://127.0.0.1:${port}/mcp`, TOKEN);
+      expect((await client.listTools()).tools.length).toBeGreaterThan(0);
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections();
+      });
+    }
+  });
+});
+
+describe("a handler that cannot answer", () => {
+  it("still does not reject: it answers 500, or drops the connection if it cannot", async () => {
+    const handle = createMcpRequestHandler(sim, { token: TOKEN, allowedHosts: () => [] });
+    const destroyed: string[] = [];
+    // Writing the 500 fails as well, as it does on a socket that has just been reset.
+    const res = {
+      headersSent: false,
+      writeHead: () => {
+        throw new Error("socket is gone");
+      },
+      end() {},
+      destroy: () => destroyed.push("destroyed"),
+      once() {},
+    };
+    const req = {
+      url: "/mcp",
+      method: "POST",
+      headers: { authorization: `Bearer ${TOKEN}` },
+    };
+    expect(await handle(req as never, res as never)).toBe(true);
+    expect(destroyed).toEqual(["destroyed"]);
   });
 });

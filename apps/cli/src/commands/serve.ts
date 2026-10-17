@@ -68,7 +68,8 @@ async function closeWindows(wss: WebSocketServer): Promise<void> {
   const gaveUp = new Promise<void>((resolve) => (timer = setTimeout(resolve, CLOSE_GRACE_MS)));
   await Promise.race([answered, gaveUp]);
   clearTimeout(timer);
-  for (const client of open) client.terminate();
+  // Everything still here, not only the windows that were open when the stop began.
+  for (const client of wss.clients) client.terminate();
   wss.close();
 }
 
@@ -168,6 +169,9 @@ export async function serveCommand(args: string[], io: CliIO): Promise<number> {
     sendJson(res, 404, { error: "not found" });
   }
 
+  // Set when the stop begins. A request that was already on its way is still answered, and an
+  // upgrade among them must not become a window that nothing would close.
+  let closing = false;
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_MESSAGE_BYTES });
   const server = createServer((req, res) => {
     route(req, res).catch(() => {
@@ -176,6 +180,7 @@ export async function serveCommand(args: string[], io: CliIO): Promise<number> {
     });
   });
   server.on("upgrade", (req, socket, head) => {
+    if (closing) return refuse(socket, "503 Service Unavailable");
     const url = parseUrl(req);
     if (url?.pathname !== "/ws") return refuse(socket, "404 Not Found");
     const given = url.searchParams.get("token");
@@ -209,6 +214,7 @@ export async function serveCommand(args: string[], io: CliIO): Promise<number> {
     });
     await untilAborted(io.signal);
   } finally {
+    closing = true;
     hostServer.stop();
     // Stop listening first, so nothing new arrives while the windows are told to go.
     const closed = new Promise<void>((resolve) => server.close(() => resolve()));

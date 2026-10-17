@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { request } from "node:http";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -189,6 +190,37 @@ class Peer {
 
 const tokenUrl = (info: ServeInfo, token = info.token) => `${info.wsUrl}?token=${token}`;
 
+/** An upgrade request, line by line, for a `target` that a WebSocket client would not send as is. */
+const upgradeLines = (port: number, target: string) => [
+  `GET ${target} HTTP/1.1`,
+  `Host: 127.0.0.1:${port}`,
+  "Upgrade: websocket",
+  "Connection: Upgrade",
+  "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
+  "Sec-WebSocket-Version: 13",
+];
+
+/** What a server answers to a request, up to the end of the response headers, then hangs up. */
+function headOf(socket: ReturnType<typeof connect>): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let text = "";
+    socket.setEncoding("utf8").on("data", (chunk: string) => {
+      text += chunk;
+      if (text.includes("\r\n\r\n")) resolve(text);
+    });
+    socket.once("close", () => resolve(text));
+    socket.once("error", reject);
+  });
+}
+
+/** Sends an upgrade request for `target` as it is, and returns the head of the answer. */
+function rawUpgrade(port: number, target: string): Promise<string> {
+  const socket = connect(port, "127.0.0.1", () =>
+    socket.write([...upgradeLines(port, target), "", ""].join("\r\n")),
+  );
+  return headOf(socket).finally(() => socket.destroy());
+}
+
 /** The corner at (x, y) of a 16 wide park's terrain. */
 const corner = (terrain: { corners: Int16Array }, x: number, y: number) =>
   terrain.corners[y * 17 + x];
@@ -246,29 +278,61 @@ describe("serve", () => {
   it("answers a refused upgrade with the 401 status line and closes the connection", async () => {
     const file = await makePark();
     const server = await startServe("--save", file, "--token", "t");
-    const { connect } = await import("node:net");
-    const raw = await new Promise<string>((resolve, reject) => {
-      const socket = connect(server.info.port, "127.0.0.1", () => {
-        socket.write(
-          [
-            "GET /ws HTTP/1.1",
-            `Host: 127.0.0.1:${server.info.port}`,
-            "Upgrade: websocket",
-            "Connection: Upgrade",
-            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==",
-            "Sec-WebSocket-Version: 13",
-            "",
-            "",
-          ].join("\r\n"),
-        );
-      });
-      let text = "";
-      socket.setEncoding("utf8").on("data", (chunk: string) => (text += chunk));
-      socket.once("close", () => resolve(text));
-      socket.once("error", reject);
-    });
-    expect(raw).toBe("HTTP/1.1 401 Unauthorized\r\n\r\n");
+    expect(await rawUpgrade(server.info.port, "/ws")).toBe("HTTP/1.1 401 Unauthorized\r\n\r\n");
     expect((await server.stop()).code).toBe(0);
+  });
+
+  it.each([
+    ["the token under another name", "/ws?tok=t", "401 Unauthorized"],
+    ["the token's name in capitals", "/ws?TOKEN=t", "401 Unauthorized"],
+    ["a token that only starts right", "/ws?token=tt", "401 Unauthorized"],
+    ["a trailing slash", "/ws/?token=t", "404 Not Found"],
+    ["a path that climbs out to /mcp", "/ws/../mcp?token=t", "404 Not Found"],
+    ["the path in capitals", "/WS?token=t", "404 Not Found"],
+    ["an empty first segment", "//ws?token=t", "404 Not Found"],
+    ["a longer path", "/wsx?token=t", "404 Not Found"],
+    ["a path that is not a URL", "//", "404 Not Found"],
+    ["the token in the fragment", "/ws#token=t", "401 Unauthorized"],
+  ])("refuses an upgrade with %s", async (_label, target, status) => {
+    const file = await makePark();
+    const server = await startServe("--save", file, "--token", "t");
+    const head = await rawUpgrade(server.info.port, target);
+    expect(head).toBe(`HTTP/1.1 ${status}\r\n\r\n`);
+    // The same request with the right path and token is let in, so the refusals mean something.
+    expect(await rawUpgrade(server.info.port, "/ws?token=t")).toMatch(
+      /^HTTP\/1\.1 101 Switching Protocols\r\n/,
+    );
+    expect((await server.stop()).code).toBe(0);
+  });
+
+  it("refuses an upgrade that arrives while the server is shutting down, and still stops", async () => {
+    const file = await makePark();
+    const out = join(dir, "race.park");
+    const server = await startServe("--save", file, "--out", out, "--token", "t");
+    // A window that never answers the close frame, so the stop spends its grace period waiting.
+    const stuck = await Peer.connect(tokenUrl(server.info));
+    await stuck.hello();
+    stuck.socket.pause();
+
+    // A request that has begun, with the right token, but is not finished when the stop comes.
+    const late = connect(server.info.port, "127.0.0.1");
+    late.write(`${upgradeLines(server.info.port, "/ws?token=t").join("\r\n")}\r\n`);
+    const answer = headOf(late);
+    await sleep(50);
+
+    const stopping = server.stop();
+    await sleep(100);
+    // The rest of it lands mid-stop.
+    late.write("\r\n");
+    expect(await answer).toBe("HTTP/1.1 503 Service Unavailable\r\n\r\n");
+    late.destroy();
+
+    const stopped = await stopping;
+    expect(stopped.code).toBe(0);
+    expect(stopped.stderr).toBe("");
+    // The final write was not skipped.
+    expect((await readPark(out)).meta.name).toBe("New Park");
+    await expect(fetch(`${server.http}/health`)).rejects.toThrow();
   });
 
   it("serves the window and an agent from one sim, autosaves both, and stops cleanly", async () => {
