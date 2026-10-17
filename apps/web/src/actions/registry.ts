@@ -13,12 +13,18 @@ import {
 export interface UiHandlers {
   pause(): void;
   setSpeed(speed: Speed): void;
+  /** One step faster (`1`) or slower (`-1`) along the play speeds. */
+  stepSpeed(direction: 1 | -1): void;
   undo(): void;
   redo(): void;
   classicView(): void;
   setTool(tool: DockTool): void;
   openInspector(tab: InspectorTab): void;
   help(): void;
+  /** Opens the command bar. */
+  commandBar(): void;
+  /** Closes what is open, or else puts the tool down (Esc). */
+  cancel(): void;
 }
 
 /**
@@ -72,6 +78,7 @@ function commandAction(entry: CatalogEntry, deps: UiActionDeps): Action {
     description: entry.description,
     category: entry.category,
     kind: "command",
+    commandName: entry.name,
     keywords: [...new Set([...entry.name.split("_"), entry.category])],
     schema,
     run: () => {},
@@ -113,9 +120,11 @@ function uiAction(
   keywords: string[],
   run: () => void,
   shortcut?: string,
+  hidden = false,
 ): Action {
   const action: Action = { id, title, description, category: "ui", kind: "ui", keywords, run };
   if (shortcut !== undefined) action.shortcut = shortcut;
+  if (hidden) action.hidden = true;
   return action;
 }
 
@@ -137,6 +146,22 @@ function uiActions({ ui }: UiActionDeps): Action[] {
         ["speed", "faster", "slower", `${speed}x`],
         () => ui.setSpeed(speed),
       ),
+    ),
+    uiAction(
+      "ui.speed.up",
+      "Speed up",
+      "Step the simulation one speed faster.",
+      ["speed", "faster", "increase", "plus"],
+      () => ui.stepSpeed(1),
+      "+",
+    ),
+    uiAction(
+      "ui.speed.down",
+      "Slow down",
+      "Step the simulation one speed slower.",
+      ["speed", "slower", "decrease", "minus"],
+      () => ui.stepSpeed(-1),
+      "-",
     ),
     uiAction(
       "ui.undo",
@@ -186,6 +211,25 @@ function uiActions({ ui }: UiActionDeps): Action[] {
       ["help", "keys", "keyboard", "shortcuts"],
       () => ui.help(),
       "?",
+    ),
+    // The next two are for keys: the bar does not list them.
+    uiAction(
+      "ui.commandBar",
+      "Command bar",
+      "Open the command bar.",
+      ["command", "bar", "search", "palette"],
+      () => ui.commandBar(),
+      undefined,
+      true,
+    ),
+    uiAction(
+      "ui.cancel",
+      "Cancel",
+      "Close what is open, or put the tool down.",
+      ["cancel", "escape", "close"],
+      () => ui.cancel(),
+      "Esc",
+      true,
     ),
   ];
 }

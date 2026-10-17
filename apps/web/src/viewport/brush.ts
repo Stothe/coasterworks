@@ -80,6 +80,51 @@ export function planCommand(
   }
 }
 
+/** What a click asks the sim to do for a placement: the command, and everything it takes. */
+export interface PlacedCommand {
+  name: string;
+  input: Record<string, unknown>;
+}
+
+/** The brush a terrain command is, for the ones whose missing parameters the viewport can fill. */
+const BRUSH_OF_COMMAND: Readonly<Record<string, TerrainToolId>> = {
+  terrain_raise: "raise",
+  terrain_lower: "lower",
+  terrain_level: "level",
+  terrain_set_water: "water",
+};
+
+/**
+ * What a click on tile (`x`, `y`) asks the sim to do for a placement started elsewhere (the command
+ * bar, a tray): the command with its `defaults`, over the tiles the brush covers. A terrain
+ * command whose height or water level the placement did not give takes it from the clicked tile,
+ * as the terrain bar does, and Shift and Alt do what they do there. `null` if the brush is off the
+ * map.
+ */
+export function planPlacement(
+  placement: { command: string; defaults: Record<string, unknown>; size: number },
+  mods: ClickMods,
+  x: number,
+  y: number,
+  terrain: TerrainData,
+): PlacedCommand | null {
+  const brush = BRUSH_OF_COMMAND[placement.command];
+  if (brush) {
+    const planned = planCommand(brush, mods, x, y, placement.size, terrain);
+    if (!planned) return null;
+    // The area is the player's click and what the placement gave is the tool's; what the viewport
+    // worked out only fills in what is missing.
+    const { x: left, y: top, w, h } = planned.input;
+    return {
+      name: planned.name,
+      input: { ...planned.input, ...placement.defaults, x: left, y: top, w, h },
+    };
+  }
+  const rect = brushRect(x, y, placement.size, terrain.width, terrain.height);
+  if (!rect) return null;
+  return { name: placement.command, input: { ...placement.defaults, ...rect } };
+}
+
 /** One day-night cycle runs once a month. */
 const CYCLE = TICKS_PER_DAY * DAYS_PER_MONTH;
 /** Where in the cycle tick 0 falls, so that a new park opens in the morning rather than at night. */

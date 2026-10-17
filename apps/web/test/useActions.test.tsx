@@ -19,12 +19,15 @@ function makeDeps(): UiActionDeps {
     ui: {
       pause: vi.fn(),
       setSpeed: vi.fn(),
+      stepSpeed: vi.fn(),
       undo: vi.fn(),
       redo: vi.fn(),
       classicView: vi.fn(),
       setTool: vi.fn(),
       openInspector: vi.fn(),
       help: vi.fn(),
+      commandBar: vi.fn(),
+      cancel: vi.fn(),
     },
   };
 }

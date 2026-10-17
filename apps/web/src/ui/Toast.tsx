@@ -9,10 +9,10 @@ export interface ToastProps {
   onDismiss(id: number): void;
 }
 
-/** The stack of messages at the top right. */
+/** The stack of messages at the top right, under the command bar button. */
 export function Toast({ toasts, onDismiss }: ToastProps) {
   return (
-    <div className="pointer-events-none absolute top-3.5 right-3.5 flex w-72 flex-col gap-2">
+    <div className="pointer-events-none absolute top-16 right-3.5 flex w-72 flex-col gap-2">
       {toasts.map((toast) => (
         <div
           key={toast.id}

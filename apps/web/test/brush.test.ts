@@ -1,7 +1,13 @@
 // @vitest-environment node
 import type { TerrainData } from "@coasterworks/render";
 import { describe, expect, it } from "vitest";
-import { brushRect, lowestCorner, planCommand, timeOfDay } from "../src/viewport/brush";
+import {
+  brushRect,
+  lowestCorner,
+  planCommand,
+  planPlacement,
+  timeOfDay,
+} from "../src/viewport/brush";
 
 const none = { shift: false, alt: false };
 
@@ -158,5 +164,94 @@ describe("timeOfDay", () => {
       expect(t).toBeGreaterThanOrEqual(0);
       expect(t).toBeLessThan(1);
     }
+  });
+});
+
+describe("planPlacement", () => {
+  const terrain = flat(16, 16, 4);
+
+  it("clicks a raise placement into terrain_raise over the brush, with its defaults", () => {
+    const plan = planPlacement(
+      { command: "terrain_raise", defaults: { steps: 2 }, size: 2 },
+      none,
+      5,
+      6,
+      terrain,
+    );
+    expect(plan).toEqual({ name: "terrain_raise", input: { x: 5, y: 6, w: 2, h: 2, steps: 2 } });
+  });
+
+  it("fills in the height of a level placement and the level of a water one from the tile", () => {
+    expect(
+      planPlacement({ command: "terrain_level", defaults: {}, size: 1 }, none, 3, 3, terrain),
+    ).toEqual({ name: "terrain_level", input: { x: 3, y: 3, w: 1, h: 1, height: 4 } });
+    expect(
+      planPlacement({ command: "terrain_set_water", defaults: {}, size: 1 }, none, 3, 3, terrain),
+    ).toEqual({ name: "terrain_set_water", input: { x: 3, y: 3, w: 1, h: 1, level: 6 } });
+  });
+
+  it("prefers what the placement gives to what it would work out", () => {
+    const plan = planPlacement(
+      { command: "terrain_level", defaults: { height: 9 }, size: 1 },
+      none,
+      3,
+      3,
+      terrain,
+    );
+    expect(plan?.input["height"]).toBe(9);
+  });
+
+  it("never lets the defaults move the area the player clicked", () => {
+    const plan = planPlacement(
+      { command: "terrain_raise", defaults: { x: 0, y: 0, w: 9, h: 9 }, size: 1 },
+      none,
+      5,
+      6,
+      terrain,
+    );
+    expect(plan?.input).toMatchObject({ x: 5, y: 6, w: 1, h: 1 });
+  });
+
+  it("honors Shift and Alt as the terrain bar does", () => {
+    const shift = { shift: true, alt: false };
+    expect(
+      planPlacement({ command: "terrain_raise", defaults: {}, size: 1 }, shift, 3, 3, terrain)
+        ?.name,
+    ).toBe("terrain_lower");
+    const alt = { shift: false, alt: true };
+    expect(
+      planPlacement({ command: "terrain_set_water", defaults: {}, size: 1 }, alt, 3, 3, terrain)
+        ?.input["level"],
+    ).toBe(0);
+  });
+
+  it("places any other command over the brush with its defaults, and nothing else of its own", () => {
+    expect(
+      planPlacement(
+        { command: "terrain_set_surface", defaults: { surface: 2 }, size: 3 },
+        none,
+        5,
+        5,
+        terrain,
+      ),
+    ).toEqual({ name: "terrain_set_surface", input: { x: 4, y: 4, w: 3, h: 3, surface: 2 } });
+    expect(
+      planPlacement(
+        { command: "ride_build", defaults: { kind: "carousel" }, size: 1 },
+        none,
+        0,
+        0,
+        terrain,
+      ),
+    ).toEqual({ name: "ride_build", input: { x: 0, y: 0, w: 1, h: 1, kind: "carousel" } });
+  });
+
+  it("is null when the brush is off the map", () => {
+    expect(
+      planPlacement({ command: "terrain_raise", defaults: {}, size: 1 }, none, 40, 40, terrain),
+    ).toBeNull();
+    expect(
+      planPlacement({ command: "ride_build", defaults: {}, size: 1 }, none, 40, 40, terrain),
+    ).toBeNull();
   });
 });

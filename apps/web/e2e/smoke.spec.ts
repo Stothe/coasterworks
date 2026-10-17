@@ -75,7 +75,7 @@ test("opens a park, shapes terrain, undoes it, pauses, and draws", async ({ page
   await expect.poll(async () => cents(await cash.innerText())).toBeLessThan(START_CENTS);
 
   // Undo gives it back.
-  await page.keyboard.press("Meta+z");
+  await page.keyboard.press("ControlOrMeta+z");
   await expect(cash).toContainText(START_CASH);
 
   // Space resumes, and the pause button lets go.

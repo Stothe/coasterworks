@@ -12,6 +12,9 @@ export default defineConfig({
   // The first WebGL frame can be slow on a CI runner with no GPU.
   timeout: 60_000,
   expect: { timeout: 15_000 },
+  // One at a time: each test paints WebGL in software, and two at once on a small runner is slow
+  // enough to trip the first-frame waits.
+  workers: 1,
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? [["list"], ["github"]] : "list",
   outputDir: "test-results",

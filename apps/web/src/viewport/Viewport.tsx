@@ -8,7 +8,16 @@ import {
 import type { ExecResult } from "@coasterworks/sim";
 import { useEffect, useRef } from "react";
 import { CLASSIC_VIEW_EVENT, onShellEvent } from "../host/shell";
-import { brushRect, planCommand, timeOfDay, type BrushSize, type TerrainToolId } from "./brush";
+import { useUiStore } from "../state/uiStore";
+import {
+  brushRect,
+  planCommand,
+  planPlacement,
+  timeOfDay,
+  type BrushSize,
+  type TerrainToolId,
+} from "./brush";
+import { onClassicViewRequest } from "./classicView";
 import { framingDistance } from "./framing";
 
 export interface ViewportProps {
@@ -16,7 +25,9 @@ export interface ViewportProps {
   /** The sim tick, which sets the time of day. */
   tick: number;
   client: SimClient | null;
+  /** The terrain bar's tool, used while no placement is in progress. */
   tool: TerrainToolId;
+  /** The terrain bar's brush, used while no placement is in progress. */
   brush: BrushSize;
   /** Called with the outcome of every command a click sent, including one that could not be sent. */
   onResult(result: ExecResult): void;
@@ -47,14 +58,16 @@ function failure(error: unknown): ExecResult {
 
 /** The 3D view of the park, and the pointer input that edits it. */
 export function Viewport(props: ViewportProps) {
+  // A placement started elsewhere (the command bar) is what a click does, in preference to the bar.
+  const placement = useUiStore((state) => state.placement);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const live = useRef<Live | null>(null);
   const hover = useRef<{ x: number; y: number } | null>(null);
   const outlineRef = useRef<(() => void) | null>(null);
   // The scene outlives renders, so its handlers read the current props through this.
-  const latest = useRef(props);
+  const latest = useRef({ ...props, placement });
   useEffect(() => {
-    latest.current = props;
+    latest.current = { ...props, placement };
   });
 
   useEffect(() => {
@@ -67,10 +80,11 @@ export function Viewport(props: ViewportProps) {
     scene.setTimeOfDay(timeOfDay(latest.current.tick));
 
     const outline = () => {
-      const { terrain, brush } = latest.current;
+      const { terrain, brush, placement } = latest.current;
       const at = hover.current;
+      const size = placement?.size ?? brush;
       const rect =
-        at && terrain ? brushRect(at.x, at.y, brush, terrain.width, terrain.height) : null;
+        at && terrain ? brushRect(at.x, at.y, size, terrain.width, terrain.height) : null;
       if (rect) scene.highlightTile(rect.x, rect.y, rect.w, rect.h);
       else scene.highlightTile(null);
     };
@@ -83,9 +97,11 @@ export function Viewport(props: ViewportProps) {
         outline();
       },
       onTileClick: (x, y, mods) => {
-        const { client, terrain, tool, brush, onResult } = latest.current;
+        const { client, terrain, tool, brush, placement, onResult } = latest.current;
         if (!client || !terrain) return;
-        const plan = planCommand(tool, mods, x, y, brush, terrain);
+        const plan = placement
+          ? planPlacement(placement, mods, x, y, terrain)
+          : planCommand(tool, mods, x, y, brush, terrain);
         if (!plan) return;
         client
           .command(plan.name, plan.input)
@@ -94,7 +110,10 @@ export function Viewport(props: ViewportProps) {
     });
 
     // The desktop app's View > Classic View menu item: back to the first of RCT's four angles.
-    const stopShell = onShellEvent(CLASSIC_VIEW_EVENT, () => scene.rig.setClassic(0));
+    const goClassic = () => scene.rig.setClassic(0);
+    const stopShell = onShellEvent(CLASSIC_VIEW_EVENT, goClassic);
+    // The same, from the Home key and the command bar.
+    const stopRequest = onClassicViewRequest(goClassic);
 
     const observer = new ResizeObserver(() => scene.resize());
     observer.observe(canvas);
@@ -107,6 +126,7 @@ export function Viewport(props: ViewportProps) {
     return () => {
       cancelAnimationFrame(frame);
       stopShell();
+      stopRequest();
       observer.disconnect();
       detach();
       scene.dispose();
@@ -126,7 +146,7 @@ export function Viewport(props: ViewportProps) {
   // The outline is the brush, so it changes with the brush even if the pointer does not move.
   useEffect(() => {
     outlineRef.current?.();
-  }, [props.brush, props.tool]);
+  }, [props.brush, props.tool, placement]);
 
   return (
     <canvas

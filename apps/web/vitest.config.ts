@@ -17,5 +17,7 @@ export default defineConfig({
     // Component and host tests need a DOM; the pure ones opt out with `@vitest-environment node`.
     environment: "jsdom",
     include: ["test/**/*.test.{ts,tsx}"],
+    // The browser pieces jsdom lacks (ResizeObserver, matchMedia, scrollIntoView).
+    setupFiles: ["./test/setup.ts"],
   },
 });

@@ -63,6 +63,10 @@ export interface Action {
   keywords: string[];
   /** How the keyboard does it, as shown to the player: `⌘Z`, `Space`, `1`. */
   shortcut?: string;
+  /** The sim command a command-backed action runs: what a form sends. Absent for a UI action. */
+  commandName?: string;
+  /** True for an action that exists only for a key to run, and is not listed in the command bar. */
+  hidden?: boolean;
   /** `rect` for a command that takes an area of tiles: the player drags out its x, y, w and h. */
   placement?: "rect" | "tile";
   /** The command's input schema, for a form. Absent for a UI action. */

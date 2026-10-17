@@ -1,18 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { EmptyState, Field, IconButton, Kbd, Panel, Segmented, Tabs } from "../src/ui/kit";
-
-// Radix positions a tooltip with a ResizeObserver, which jsdom does not have.
-beforeAll(() => {
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    },
-  );
-});
 
 afterEach(cleanup);
 

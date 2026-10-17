@@ -13,12 +13,15 @@ function makeDeps() {
   const ui = {
     pause: vi.fn(),
     setSpeed: vi.fn(),
+    stepSpeed: vi.fn(),
     undo: vi.fn(),
     redo: vi.fn(),
     classicView: vi.fn(),
     setTool: vi.fn(),
     openInspector: vi.fn(),
     help: vi.fn(),
+    commandBar: vi.fn(),
+    cancel: vi.fn(),
   };
   const deps = {
     startPlacement: vi.fn(),
@@ -58,6 +61,16 @@ const entry = (name: string, inputSchema: Record<string, unknown>): CatalogEntry
 });
 
 describe("buildActions: commands", () => {
+  it("names the command each command action runs", () => {
+    const { actions } = setup();
+    for (const action of actions.filter((a) => a.kind === "command")) {
+      expect(action.commandName, action.id).toBe(action.id);
+    }
+    expect(actions.filter((a) => a.kind === "ui").every((a) => a.commandName === undefined)).toBe(
+      true,
+    );
+  });
+
   it("makes one action per command and none for a query", () => {
     const { actions } = setup();
     const commands = catalog.filter((e) => e.kind === "command").map((e) => e.name);
@@ -261,6 +274,33 @@ describe("buildActions: interface actions", () => {
     ]) {
       expect(get(id).kind, id).toBe("ui");
     }
+  });
+
+  it("steps the speed from + and -", () => {
+    const { get, ui } = setup([]);
+    expect(get("ui.speed.up").shortcut).toBe("+");
+    expect(get("ui.speed.down").shortcut).toBe("-");
+    get("ui.speed.up").run(ctx);
+    get("ui.speed.down").run(ctx);
+    expect(ui.stepSpeed.mock.calls).toEqual([[1], [-1]]);
+  });
+
+  it("has actions for the keys that open the bar and cancel, which the bar does not list", () => {
+    const { get, ui } = setup([]);
+    for (const id of ["ui.commandBar", "ui.cancel"]) {
+      expect(get(id).kind, id).toBe("ui");
+      expect(get(id).hidden, id).toBe(true);
+    }
+    // Everything else is listed.
+    expect(
+      setup()
+        .actions.filter((a) => a.hidden)
+        .map((a) => a.id),
+    ).toEqual(["ui.commandBar", "ui.cancel"]);
+    get("ui.commandBar").run(ctx);
+    get("ui.cancel").run(ctx);
+    expect(ui.commandBar).toHaveBeenCalledTimes(1);
+    expect(ui.cancel).toHaveBeenCalledTimes(1);
   });
 
   it("has no ⌘K action, because ⌘K is the bar itself", () => {
