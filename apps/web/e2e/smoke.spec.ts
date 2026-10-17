@@ -5,7 +5,11 @@ import { fileURLToPath } from "node:url";
 /** What a fresh sample park starts with, as the status pills show it. */
 const START_CASH = "$10,000.00";
 const START_CENTS = 10_000_00;
-const START_DATE = "March 1, Year 1";
+/**
+ * The date it starts on is March 1, but the park runs at 1x until the test pauses it, and a slow
+ * runner can be some days in by then. Any day of the first March is the park just opened.
+ */
+const START_DATE = /March \d+, Year 1/;
 
 /** Terrain has a sky, grass in two shades, sand, water and a hill; a blank canvas has one colour. */
 const MIN_COLOURS = 8;
@@ -46,7 +50,7 @@ test("opens a park, shapes terrain, undoes it, pauses, and draws", async ({ page
     { timeout: 45_000 },
   );
 
-  // The sample park opens running at 1x. Pause before reading the date, so it cannot have moved.
+  // The sample park opens running at 1x. Pause before reading the date, so it holds still.
   const pause = page.getByRole("button", { name: "Pause" });
   await page.keyboard.press("Space");
   await expect(pause).toHaveAttribute("aria-pressed", "true");
@@ -113,12 +117,16 @@ test("opens a park, shapes terrain, undoes it, pauses, and draws", async ({ page
       }),
   );
 
-  // Keep the picture: with the test's output, and for the README only when asked to.
+  // Keep the picture with the test's output, whatever happens next.
   const picture = await page.screenshot({ path: testInfo.outputPath("park.png") });
+
+  // Errors first: a shader that failed to compile also leaves a blank canvas, and the message
+  // says why where the colour count only says that.
+  expect(problems).toEqual([]);
+  expect(colours, "distinct colours on the park view").toBeGreaterThanOrEqual(MIN_COLOURS);
+
+  // The README's picture is replaced only by a run that passed everything above.
   if (process.env.UPDATE_SCREENSHOT === "1") {
     await writeFile(README_SCREENSHOT, picture);
   }
-
-  expect(colours, "distinct colours on the park view").toBeGreaterThanOrEqual(MIN_COLOURS);
-  expect(problems).toEqual([]);
 });
