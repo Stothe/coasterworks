@@ -83,6 +83,10 @@ It prints one line of JSON once it is listening, `{"wsUrl":"ws://127.0.0.1:<port
 
 To point the web app at the sidecar, start it with `pnpm dev:web` and open `http://localhost:5173/?ws=<wsUrl>&token=<token>`.
 
+### Run the Mac app (dev mode)
+
+`pnpm build && pnpm dev:desktop` opens the Coasterworks window: a Tauri 2 shell that starts the sidecar on a free port, keeps your park in `~/Library/Application Support/com.coasterworks.app/parks/current.park`, and stops the sidecar when you close the window. **File > Copy MCP Config** puts the agent config for the running sidecar on the clipboard. It needs Rust, and the first build takes several minutes. See [apps/desktop/README.md](apps/desktop/README.md).
+
 ## What's here
 
 - `packages/sim`: the deterministic simulation core: world, commands, queries, undo, and the save format (`@coasterworks/sim`)

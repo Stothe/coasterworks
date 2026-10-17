@@ -10,6 +10,7 @@
   "scripts": {
     "typecheck": "pnpm -r --if-present typecheck",
     "dev:web": "pnpm --filter @coasterworks/web dev",
+    "dev:desktop": "pnpm --filter @coasterworks/desktop dev",
     "test": "vitest run",
     "test:watch": "vitest",
     "build": "pnpm -r build",

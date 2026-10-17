@@ -145,6 +145,53 @@ describe("connectHost", () => {
     expect(mode).toBe("worker");
   });
 
+  describe("when the desktop shell has injected window.__COASTERWORKS__", () => {
+    const shell = {
+      wsUrl: "ws://127.0.0.1:49152/ws",
+      mcpUrl: "http://127.0.0.1:49152/mcp",
+      token: "shell-token",
+    };
+
+    it("dials the shell's socket with its token, though the URL bar is clean", async () => {
+      vi.stubGlobal("__COASTERWORKS__", shell);
+      const { mode } = await connectHost("");
+      expect(mode).toBe("socket");
+      expect(FakeWorker.instances).toHaveLength(0);
+      expect(FakeWebSocket.instances[0]?.url).toBe("ws://127.0.0.1:49152/ws?token=shell-token");
+    });
+
+    it("prefers the shell's socket and token over the query string", async () => {
+      vi.stubGlobal("__COASTERWORKS__", shell);
+      await connectHost("?ws=ws://localhost:7777/socket&token=from-the-query");
+      expect(FakeWebSocket.instances).toHaveLength(1);
+      expect(FakeWebSocket.instances[0]?.url).toBe("ws://127.0.0.1:49152/ws?token=shell-token");
+    });
+
+    it("reads window.__COASTERWORKS__ when the query is the page's own", async () => {
+      vi.stubGlobal("__COASTERWORKS__", shell);
+      const { mode } = await connectHost();
+      expect(mode).toBe("socket");
+    });
+
+    it("falls back to the query string when the shell gave no socket", async () => {
+      vi.stubGlobal("__COASTERWORKS__", { wsUrl: "", mcpUrl: "", token: "" });
+      await connectHost("?ws=ws://localhost:7777/socket&token=q");
+      expect(FakeWebSocket.instances[0]?.url).toBe("ws://localhost:7777/socket?token=q");
+    });
+
+    it("falls back to the worker when the shell gave nothing and the query has no socket", async () => {
+      vi.stubGlobal("__COASTERWORKS__", {});
+      const { mode } = await connectHost("");
+      expect(mode).toBe("worker");
+    });
+
+    it("dials a shell socket that needs no token as it is", async () => {
+      vi.stubGlobal("__COASTERWORKS__", { wsUrl: "ws://127.0.0.1:1/ws" });
+      await connectHost("?token=ignored-with-the-shell");
+      expect(FakeWebSocket.instances[0]?.url).toBe("ws://127.0.0.1:1/ws");
+    });
+  });
+
   it("gives back a client that speaks to the worker", async () => {
     const { client } = await connectHost("");
     const worker = FakeWorker.instances[0] as FakeWorker;

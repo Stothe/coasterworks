@@ -1,0 +1,18 @@
+{
+  "name": "@coasterworks/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "license": "MIT",
+  "description": "The Coasterworks Mac app: a Tauri 2 shell around the web client and the `coasterworks serve` sidecar.",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "echo skipped",
+    "icon": "node scripts/make-icon.mjs && tauri icon assets/icon.png && rm -rf src-tauri/icons/android src-tauri/icons/ios",
+    "typecheck": "cargo check --manifest-path src-tauri/Cargo.toml",
+    "test": "cargo test --manifest-path src-tauri/Cargo.toml"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2"
+  }
+}

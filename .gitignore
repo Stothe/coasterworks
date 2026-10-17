@@ -7,3 +7,7 @@ coverage/
 
 # Park saves made while trying the CLI
 *.park
+
+# The desktop app's Rust build, and the capability schemas Tauri generates into it
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/

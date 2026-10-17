@@ -7,6 +7,7 @@ import {
 } from "@coasterworks/render";
 import type { ExecResult } from "@coasterworks/sim";
 import { useEffect, useRef } from "react";
+import { CLASSIC_VIEW_EVENT, onShellEvent } from "../host/shell";
 import { brushRect, planCommand, timeOfDay, type BrushSize, type TerrainToolId } from "./brush";
 
 export interface ViewportProps {
@@ -96,6 +97,9 @@ export function Viewport(props: ViewportProps) {
       },
     });
 
+    // The desktop app's View > Classic View menu item: back to the first of RCT's four angles.
+    const stopShell = onShellEvent(CLASSIC_VIEW_EVENT, () => scene.rig.setClassic(0));
+
     const observer = new ResizeObserver(() => scene.resize());
     observer.observe(canvas);
 
@@ -106,6 +110,7 @@ export function Viewport(props: ViewportProps) {
 
     return () => {
       cancelAnimationFrame(frame);
+      stopShell();
       observer.disconnect();
       detach();
       scene.dispose();
