@@ -182,7 +182,7 @@ function uiActions({ ui }: UiActionDeps): Action[] {
     uiAction(
       "ui.classicView",
       "Classic view",
-      "Return the camera to the classic isometric view.",
+      "Snap the camera to a classic isometric angle; again for the next of the four.",
       ["camera", "view", "reset", "home", "isometric"],
       () => ui.classicView(),
       "Home",

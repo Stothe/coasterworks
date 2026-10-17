@@ -17,7 +17,7 @@ import {
   type BrushSize,
   type TerrainToolId,
 } from "./brush";
-import { onClassicViewRequest } from "./classicView";
+import { classicCycle, onClassicViewRequest } from "./classicView";
 import { framingDistance } from "./framing";
 
 export interface ViewportProps {
@@ -109,10 +109,10 @@ export function Viewport(props: ViewportProps) {
       },
     });
 
-    // The desktop app's View > Classic View menu item: back to the first of RCT's four angles.
-    const goClassic = () => scene.rig.setClassic(0);
+    // Home, the Classic view action and the desktop app's View > Classic View menu item all go to
+    // the next of RCT's four angles.
+    const goClassic = classicCycle(scene.rig);
     const stopShell = onShellEvent(CLASSIC_VIEW_EVENT, goClassic);
-    // The same, from the Home key and the command bar.
     const stopRequest = onClassicViewRequest(goClassic);
 
     const observer = new ResizeObserver(() => scene.resize());

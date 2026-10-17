@@ -56,3 +56,25 @@ test("a placement started from the command bar is what a click does, until Escap
   await clickMiddle();
   await expect.poll(lastCommand).toBe("terrain_lower");
 });
+
+test("the search field has the keyboard back after Escape from a form", async ({ page }) => {
+  await page.goto("/");
+  await page.waitForFunction(
+    () => (window as unknown as Hook).__coasterworks?.ready === true,
+    undefined,
+    { timeout: 45_000 },
+  );
+
+  await page.keyboard.press("ControlOrMeta+k");
+  const search = page.getByPlaceholder("Type a command…");
+  await search.fill("take loan");
+  await page.keyboard.press("Enter");
+  await expect(page.getByLabel("Amount")).toBeFocused();
+
+  // Escape goes back to the list, and what is typed next goes to the search field.
+  await page.keyboard.press("Escape");
+  await expect(search).toBeFocused();
+  await page.keyboard.type("repay");
+  await expect(search).toHaveValue("repay");
+  await expect(page.getByRole("option", { name: /Repay loan/ })).toBeVisible();
+});

@@ -17,7 +17,7 @@ use sidecar::Sidecar;
 
 const COPY_MCP_CONFIG: &str = "copy-mcp-config";
 const CLASSIC_VIEW: &str = "classic-view";
-/// The event the web client listens for to put the camera back at the first classic angle.
+/// The event the web client listens for to step the camera to the next classic angle.
 const CLASSIC_VIEW_EVENT: &str = "coasterworks://classic-view";
 
 /// What the native dialogs are titled.

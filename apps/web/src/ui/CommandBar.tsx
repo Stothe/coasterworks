@@ -157,6 +157,9 @@ export function CommandBar({
               className="flex min-h-0 flex-col"
             >
               <Command.Input
+                // The list comes back (from a form's Back or Escape) with the field already in focus:
+                // its form had the focus, and nothing else is there to take it.
+                autoFocus
                 placeholder="Type a command…"
                 className="min-h-10 border-b border-white/10 bg-transparent px-3 text-sm text-ink outline-none placeholder:text-muted"
               />

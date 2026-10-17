@@ -340,15 +340,28 @@ describe("CommandBar: forms", () => {
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(uiStore.getState().formAction).toBeNull();
     expect(input()).toBeTruthy();
+    // The search field has the focus again, so the player can type at once.
+    expect(document.activeElement).toBe(input());
 
     fireEvent.click(option(/Take loan/));
     fireEvent.keyDown(screen.getByLabelText("Amount"), { key: "Escape" });
     expect(uiStore.getState().formAction).toBeNull();
     expect(input()).toBeTruthy();
+    expect(document.activeElement).toBe(input());
     expect(screen.getByRole("dialog")).toBeTruthy();
 
     fireEvent.keyDown(input(), { key: "Escape" });
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("has the focus in the search field after Back from an action that needs the full UI", () => {
+    setup([
+      entry("park_build_ride", { type: "object", properties: { layout: { type: "object" } } }),
+    ]);
+    open();
+    fireEvent.click(option(/Park build ride/));
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(document.activeElement).toBe(input());
   });
 
   it("says an action needs the full UI when its form cannot be drawn, and does not crash", () => {

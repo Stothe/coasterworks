@@ -75,7 +75,8 @@ that stream ends, however the shell went away (SIGKILL, SIGHUP, a crash).
   The port and token change on every launch.
 
 - **View > Classic View**: the shell emits `coasterworks://classic-view`; the web client (inside
-  Tauri only) answers with `rig.setClassic(0)`.
+  Tauri only) answers by stepping the camera to the next of the four classic angles, as the Home
+  key does.
 
 There is no Edit menu on purpose: a native Undo item would take Cmd+Z before the page's own
 undo hotkey saw it.

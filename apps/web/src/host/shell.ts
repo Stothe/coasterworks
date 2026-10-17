@@ -1,4 +1,4 @@
-/** The event the desktop shell's View > Classic View sends. */
+/** The event the desktop shell's View > Classic View sends: the next classic camera angle. */
 export const CLASSIC_VIEW_EVENT = "coasterworks://classic-view";
 
 /**

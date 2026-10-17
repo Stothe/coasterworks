@@ -42,6 +42,8 @@ interface Turn {
   from: number;
   to: number;
   startedAt: number;
+  /** The yaw the turn last set. A different one means something else moved the camera. */
+  written: number;
 }
 
 const easeInOut = (k: number) => k * k * (3 - 2 * k);
@@ -64,7 +66,11 @@ function isTyping(target: EventTarget | null): boolean {
  * - Left click picks a tile; left drag past 4 px pans the view instead.
  * - Right drag (or ctrl + left drag, the Mac right click) orbits.
  * - The wheel zooms by `1.1 ** (deltaY / 100)`.
- * - `q` / `e` turn the view a quarter turn over 250 ms; `Home` and `1`-`4` snap to the classic angles.
+ * - `q` / `e` turn the view a quarter turn over 250 ms. The number keys and `Home` are not here:
+ *   the app owns them (the dock tools, and the classic angles through `rig.setClassic`).
+ *
+ * A turn gives way to any other change to the rig's yaw, such as the app snapping to a classic
+ * angle while it runs.
  *
  * Returns a function that removes every listener and stops any animation.
  */
@@ -91,8 +97,14 @@ export function attachControls(
   const stepTurn = () => {
     frame = 0;
     if (!turn) return;
+    if (rig.yaw !== turn.written) {
+      // Something else turned the view (a snap to a classic angle): let it stand.
+      turn = null;
+      return;
+    }
     const k = Math.min(1, Math.max(0, (performance.now() - turn.startedAt) / TURN_MS));
     rig.yaw = k >= 1 ? turn.to : turn.from + (turn.to - turn.from) * easeInOut(k);
+    turn.written = rig.yaw;
     if (k >= 1) {
       turn = null;
     } else {
@@ -104,7 +116,7 @@ export function attachControls(
     // A quarter turn pressed mid-turn continues from where the last one is headed.
     const base = turn ? turn.to : rig.yaw;
     if (frame) cancelAnimationFrame(frame);
-    turn = { from: rig.yaw, to: base + delta, startedAt: performance.now() };
+    turn = { from: rig.yaw, to: base + delta, startedAt: performance.now(), written: rig.yaw };
     frame = requestAnimationFrame(stepTurn);
   };
 
@@ -196,26 +208,9 @@ export function attachControls(
   const onKeyDown = (event: Event) => {
     const e = event as KeyboardEvent;
     if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
-    const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-    switch (key) {
-      case "q":
-      case "e":
-        if (!e.repeat) startTurn(key === "q" ? -Math.PI / 2 : Math.PI / 2);
-        break;
-      case "Home":
-        stopTurn();
-        rig.setClassic(0);
-        break;
-      case "1":
-      case "2":
-      case "3":
-      case "4":
-        stopTurn();
-        rig.setClassic((Number(key) - 1) as 0 | 1 | 2 | 3);
-        break;
-      default:
-        return;
-    }
+    const key = e.key.toLowerCase();
+    if (key !== "q" && key !== "e") return;
+    if (!e.repeat) startTurn(key === "q" ? -Math.PI / 2 : Math.PI / 2);
     e.preventDefault();
   };
 
