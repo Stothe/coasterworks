@@ -9,6 +9,7 @@ import {
   terrainSetWater,
   terrainSmooth,
 } from "./commands/terrain.js";
+import { catalogListQuery } from "./queries/catalog.js";
 import { logRecent, undoState } from "./queries/log.js";
 import { parkBounds, parkStatus } from "./queries/park.js";
 import { terrainGet } from "./queries/terrain.js";
@@ -30,5 +31,7 @@ export function createDefaultRegistry(): Registry {
   registry.registerQuery(terrainGet);
   registry.registerQuery(logRecent);
   registry.registerQuery(undoState);
+  // Reads the registry it is in, so a client can discover every command and query.
+  registry.registerQuery(catalogListQuery(registry));
   return registry;
 }

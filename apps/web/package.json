@@ -16,6 +16,8 @@
     "@coasterworks/protocol": "workspace:*",
     "@coasterworks/render": "workspace:*",
     "@coasterworks/sim": "workspace:*",
+    "@radix-ui/react-tabs": "^1.2.1",
+    "@radix-ui/react-tooltip": "^1.4.1",
     "@tauri-apps/api": "^2.12.4",
     "react": "^19.3.1",
     "react-dom": "^19.3.1"

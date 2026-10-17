@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  type CatalogEntry,
   MAX_HEIGHT,
   Sim,
   createDefaultRegistry,
@@ -21,7 +22,7 @@ function setup(opts: { width?: number; height?: number } = {}) {
 }
 
 describe("default registry", () => {
-  it("registers the five queries, after the commands, with their categories", () => {
+  it("registers the six queries, after the commands, with their categories", () => {
     const queries = createDefaultRegistry()
       .catalog()
       .filter((e) => e.kind === "query");
@@ -31,7 +32,59 @@ describe("default registry", () => {
       ["terrain_get", "terrain", false],
       ["log_recent", "sim", false],
       ["undo_state", "sim", false],
+      ["catalog_list", "sim", false],
     ]);
+  });
+});
+
+describe("catalog_list", () => {
+  /** Runs `catalog_list` and returns its entries. */
+  function list(): CatalogEntry[] {
+    const { sim } = setup();
+    const out = sim.query("catalog_list", {});
+    if (!out.ok) throw new Error(out.error);
+    return out.result as CatalogEntry[];
+  }
+
+  it("returns the registry's catalog: every command and query, itself included", () => {
+    const { sim } = setup();
+    const entries = list();
+    expect(entries).toEqual(sim.registry.catalog());
+
+    const kinds = (kind: CatalogEntry["kind"]) =>
+      entries.filter((e) => e.kind === kind).map((e) => e.name);
+    expect(kinds("command")).toEqual(sim.registry.commands().map((def) => def.name));
+    expect(kinds("query")).toEqual(sim.registry.queries().map((def) => def.name));
+    expect(kinds("query")).toContain("catalog_list");
+  });
+
+  it("gives every entry its kind, undo flag, and a JSON Schema for its input", () => {
+    for (const entry of list()) {
+      expect(["command", "query"], entry.name).toContain(entry.kind);
+      expect(typeof entry.description, entry.name).toBe("string");
+      expect(typeof entry.undoable, entry.name).toBe("boolean");
+      expect(entry.inputSchema["type"], entry.name).toBe("object");
+    }
+    const raise = list().find((e) => e.name === "terrain_raise");
+    expect(raise).toMatchObject({ category: "terrain", kind: "command", undoable: true });
+    expect(Object.keys(raise?.inputSchema["properties"] as object)).toEqual([
+      "x",
+      "y",
+      "w",
+      "h",
+      "steps",
+    ]);
+  });
+
+  it("is plain JSON, so it crosses the worker and the wire unchanged", () => {
+    const entries = list();
+    expect(JSON.parse(JSON.stringify(entries))).toEqual(entries);
+  });
+
+  it("takes no input: stray keys are ignored and a non-object is refused", () => {
+    const { sim } = setup();
+    expect(sim.query("catalog_list", { extra: 1 }).ok).toBe(true);
+    expect(sim.query("catalog_list", null).ok).toBe(false);
   });
 });
 
