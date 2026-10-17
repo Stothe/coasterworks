@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { gunzipSync, gzipSync, strFromU8, strToU8 } from "fflate";
 import { describe, expect, it } from "vitest";
 import {
@@ -174,9 +175,11 @@ describe("save round trip", () => {
     expect(loaded.terrain.corners).toBeInstanceOf(Int16Array);
     expect(loaded.terrain.surface).toBeInstanceOf(Uint8Array);
     expect(loaded.terrain.water).toBeInstanceOf(Uint8Array);
+    expect(loaded.terrain.path).toBeInstanceOf(Uint8Array);
     expect(loaded.terrain.corners).toStrictEqual(world.terrain.corners);
     expect(loaded.terrain.surface).toStrictEqual(world.terrain.surface);
     expect(loaded.terrain.water).toStrictEqual(world.terrain.water);
+    expect(loaded.terrain.path).toStrictEqual(world.terrain.path);
     expect(loaded.terrain.corners.byteOffset).toBe(0);
     expect(loaded.rng).toBeInstanceOf(Rng);
     expect(loaded.rng.next()).toBe(Rng.fromState(world.rng.state).next());
@@ -187,10 +190,50 @@ describe("save round trip", () => {
     world.terrain.corners.set([0, MAX_HEIGHT, 1, 62, 31, 32, 8, 16, 2, 7, 8, 9]);
     world.terrain.surface.set([0, 1, 2, 3, 4, 0]);
     world.terrain.water.set([0, 1, 2, 31, 62, MAX_HEIGHT]);
+    world.terrain.path.set([0, 1, 2, 2, 1, 0]);
     const loaded = deserializeWorld(serializeWorld(world));
     expect(loaded.terrain.corners).toStrictEqual(world.terrain.corners);
     expect(loaded.terrain.surface).toStrictEqual(world.terrain.surface);
     expect(loaded.terrain.water).toStrictEqual(world.terrain.water);
+    expect(loaded.terrain.path).toStrictEqual(world.terrain.path);
+  });
+
+  it("round-trips paths and every part of the park state, and restarts pathVersion at 0", () => {
+    const sim = new Sim(freshWorld(16, 16));
+    for (const [name, input] of [
+      ["path_build", { x: 3, y: 1, w: 5, h: 1, kind: "foot" }],
+      ["path_build", { x: 3, y: 2, w: 1, h: 4, kind: "queue" }],
+      ["path_remove", { x: 5, y: 1, w: 1, h: 1 }],
+      ["park_set_entrance", { x: 15, y: 9 }],
+      ["park_set_entry_fee", { cents: 12_50 }],
+      ["park_rename", { name: "Fünpark \u{1F3A2} II" }],
+      ["park_open", {}],
+    ] as const) {
+      expect(sim.execute(name, input).ok, name).toBe(true);
+    }
+    const world = sim.world;
+    // The counters belong to later tasks; set them by hand so the round trip covers every field.
+    world.park.rating = 731;
+    world.park.guestsInPark = 12;
+    world.park.totalAdmissions = 340;
+    world.park.income = { entry: 3_400_00, rides: 56_00, shops: 7_00 };
+    world.park.expenses = { running: 80_00, wages: 9_00 };
+    world.park.monthly = { entry: 100_00, rides: 20_00, shops: 3_00, running: 40_00, wages: 5_00 };
+    expect(world.pathVersion).toBeGreaterThan(0);
+
+    const loaded = deserializeWorld(serializeWorld(world));
+    expect(loaded.park).toStrictEqual(world.park);
+    expect(loaded.park.entrance).toEqual({ x: 15, y: 9, side: 1 });
+    expect(loaded.terrain.path).toStrictEqual(world.terrain.path);
+    expect(loaded.terrain.path.some((v) => v === 2)).toBe(true);
+    expect(hashWorld(loaded)).toBe(hashWorld(world));
+    expect(loaded.pathVersion).toBe(0);
+
+    // The undo data for the path commands came along, so a loaded park can still undo one.
+    const loadedSim = new Sim(loaded);
+    expect(loadedSim.undo().ok).toBe(true);
+    expect(sim.undo().ok).toBe(true);
+    expect(loadedSim.hash()).toBe(sim.hash());
   });
 
   it("round-trips the biggest map", () => {
@@ -245,6 +288,7 @@ describe("save format", () => {
       "tick",
       "terrain",
       "finance",
+      "park",
       "rng",
       "log",
       "undoStack",
@@ -258,10 +302,32 @@ describe("save format", () => {
     expect(doc.rng).toEqual([...world.rng.state]);
     expect(doc.log).toEqual(JSON.parse(JSON.stringify(world.log)));
     const terrain = doc.terrain as Record<string, unknown>;
-    expect(Object.keys(terrain)).toEqual(["width", "height", "corners", "surface", "water"]);
+    expect(Object.keys(terrain)).toEqual([
+      "width",
+      "height",
+      "corners",
+      "surface",
+      "water",
+      "path",
+    ]);
     expect(terrain.corners).toEqual({ $t: "Int16Array", $b64: expect.any(String) });
     expect(terrain.surface).toEqual({ $t: "Uint8Array", $b64: expect.any(String) });
     expect(terrain.water).toEqual({ $t: "Uint8Array", $b64: expect.any(String) });
+    expect(terrain.path).toEqual({ $t: "Uint8Array", $b64: expect.any(String) });
+    // The park is plain JSON, in a fixed key order.
+    expect(doc.park).toEqual(JSON.parse(JSON.stringify(world.park)));
+    expect(Object.keys(doc.park as object)).toEqual([
+      "name",
+      "open",
+      "entryFee",
+      "entrance",
+      "rating",
+      "guestsInPark",
+      "totalAdmissions",
+      "income",
+      "expenses",
+      "monthly",
+    ]);
   });
 
   it("writes typed array bytes little-endian whatever the host", () => {
@@ -314,12 +380,12 @@ describe("deserializeWorld errors", () => {
     }
   });
 
-  it("throws the exact newer-version message for schema 2", () => {
+  it("throws the exact newer-version message for schema 3", () => {
     const doc = readDoc(serializeWorld(freshWorld()));
-    doc.schemaVersion = 2;
+    doc.schemaVersion = 3;
     expect(() => deserializeWorld(writeDoc(doc))).toThrow(SaveError);
     expect(() => deserializeWorld(writeDoc(doc))).toThrow(
-      "Save is from a newer version (schema 2, this build reads 1)",
+      "Save is from a newer version (schema 3, this build reads 2)",
     );
     let caught: unknown;
     try {
@@ -328,7 +394,7 @@ describe("deserializeWorld errors", () => {
       caught = error;
     }
     expect((caught as Error).message).toBe(
-      "Save is from a newer version (schema 2, this build reads 1)",
+      "Save is from a newer version (schema 3, this build reads 2)",
     );
     expect((caught as Error).name).toBe("SaveError");
   });
@@ -336,7 +402,7 @@ describe("deserializeWorld errors", () => {
   it("interpolates the versions into the newer-version message", () => {
     expectSaveError(
       () => deserializeWorld(writeDoc({ schemaVersion: 41 })),
-      /^Save is from a newer version \(schema 41, this build reads 1\)$/,
+      /^Save is from a newer version \(schema 41, this build reads 2\)$/,
     );
   });
 
@@ -368,6 +434,20 @@ describe("deserializeWorld errors", () => {
       "array without bytes": (doc) =>
         ((doc.terrain as Record<string, unknown>).surface = { $t: "Uint8Array" }),
       "stack of strings": (doc) => (doc.undoStack = ["a"]),
+      "missing path layer": (doc) => delete (doc.terrain as Record<string, unknown>).path,
+      "path layer with the wrong tag": (doc) =>
+        ((doc.terrain as Record<string, unknown>).path = { $t: "Int16Array", $b64: "AAAA" }),
+      "missing park": (doc) => delete doc.park,
+      "park without a name": (doc) => delete (doc.park as Record<string, unknown>).name,
+      "park that is not an object": (doc) => (doc.park = "open"),
+      "open as a number": (doc) => ((doc.park as Record<string, unknown>).open = 1),
+      "fractional entry fee": (doc) => ((doc.park as Record<string, unknown>).entryFee = 10.5),
+      "entrance with a side of 4": (doc) =>
+        ((doc.park as Record<string, unknown>).entrance = { x: 0, y: 0, side: 4 }),
+      "entrance without a side": (doc) =>
+        ((doc.park as Record<string, unknown>).entrance = { x: 0, y: 0 }),
+      "income missing a field": (doc) =>
+        ((doc.park as Record<string, unknown>).income = { entry: 0, rides: 0 }),
       "missing hash": (doc) => delete doc.hash,
       "numeric hash": (doc) => (doc.hash = 5),
     };
@@ -431,7 +511,10 @@ describe("deserializeWorld errors", () => {
 });
 
 /** Flips the low bit of the first byte of one of the terrain arrays inside a document. */
-function tamperTerrain(doc: Record<string, unknown>, key: "corners" | "surface" | "water"): void {
+function tamperTerrain(
+  doc: Record<string, unknown>,
+  key: "corners" | "surface" | "water" | "path",
+): void {
   const terrain = doc.terrain as Record<string, { $b64: string }>;
   const bytes = fromBase64((terrain[key] as { $b64: string }).$b64);
   bytes[0] = (bytes[0] as number) ^ 1;
@@ -451,6 +534,15 @@ describe("save integrity", () => {
       "a corner height": (doc) => tamperTerrain(doc, "corners"),
       "a surface byte": (doc) => tamperTerrain(doc, "surface"),
       "a water byte": (doc) => tamperTerrain(doc, "water"),
+      "a path byte": (doc) => tamperTerrain(doc, "path"),
+      "the park name": (doc) => ((doc.park as { name: string }).name += "!"),
+      "the open flag": (doc) => ((doc.park as { open: boolean }).open = true),
+      "the entry fee": (doc) => ((doc.park as { entryFee: number }).entryFee += 1),
+      "the entrance": (doc) =>
+        ((doc.park as { entrance: unknown }).entrance = { x: 0, y: 0, side: 0 }),
+      "the rating": (doc) => ((doc.park as { rating: number }).rating += 1),
+      "the admissions": (doc) => ((doc.park as { totalAdmissions: number }).totalAdmissions += 1),
+      "monthly wages": (doc) => ((doc.park as { monthly: { wages: number } }).monthly.wages += 1),
       cash: (doc) => {
         const finance = doc.finance as { cash: number };
         finance.cash += 1;
@@ -586,6 +678,9 @@ function oldSave(
 ): Uint8Array {
   const doc = readDoc(serializeWorld(world));
   doc.schemaVersion = 0;
+  // Schema 0 comes before the path layer and the park state; schema 1 to 2 adds them back.
+  delete (doc.terrain as Record<string, unknown>).path;
+  delete doc.park;
   edit(doc);
   return writeDoc(doc);
 }
@@ -662,6 +757,26 @@ const VIOLATIONS: Array<[string, (world: World) => void, RegExp]> = [
   ["a corner below zero", (w) => (w.terrain.corners[5] = -1), /corner/],
   ["a surface above 4", (w) => (w.terrain.surface[3] = 5), /surface/],
   ["a water level above the highest height", (w) => (w.terrain.water[3] = MAX_HEIGHT + 1), /water/],
+  ["a path value above 2", (w) => (w.terrain.path[3] = 3), /path 3/],
+  [
+    "an entrance off the map",
+    (w) => (w.park.entrance = { x: 16, y: 0, side: 0 }),
+    /entrance.*outside/,
+  ],
+  [
+    "an entrance off the map edge",
+    (w) => (w.park.entrance = { x: 5, y: 5, side: 0 }),
+    /not on the map edge/,
+  ],
+  ["a negative entry fee", (w) => (w.park.entryFee = -1), /entry fee/],
+  ["an entry fee above $100", (w) => (w.park.entryFee = 100_01), /entry fee/],
+  ["a negative rating", (w) => (w.park.rating = -1), /rating/],
+  ["a rating above 999", (w) => (w.park.rating = 1000), /rating/],
+  ["negative guests in the park", (w) => (w.park.guestsInPark = -1), /guestsInPark/],
+  ["negative admissions", (w) => (w.park.totalAdmissions = -1), /totalAdmissions/],
+  ["negative entry income", (w) => (w.park.income.entry = -1), /income\.entry/],
+  ["negative wage expenses", (w) => (w.park.expenses.wages = -1), /expenses\.wages/],
+  ["negative monthly shop income", (w) => (w.park.monthly.shops = -1), /monthly\.shops/],
   [
     "a log id used twice",
     (w) => ((w.log[1] as { id: number }).id = (w.log[0] as { id: number }).id),
@@ -698,6 +813,30 @@ describe("validateWorldInvariants", () => {
     extremes.terrain.surface.set([0, 4, 0, 4]);
     extremes.terrain.water.set([0, MAX_HEIGHT, 0, MAX_HEIGHT]);
     expect(validateWorldInvariants(extremes)).toBeNull();
+  });
+
+  it("accepts an entrance on any edge, a free park, a $100 fee, and the highest rating", () => {
+    const world = freshWorld(5, 4);
+    for (const [x, y] of [
+      [0, 0],
+      [4, 0],
+      [2, 0],
+      [4, 2],
+      [2, 3],
+      [0, 2],
+      [4, 3],
+    ] as const) {
+      world.park.entrance = { x, y, side: 0 };
+      expect(validateWorldInvariants(world), `(${x}, ${y})`).toBeNull();
+    }
+    world.park.entryFee = 0;
+    expect(validateWorldInvariants(world)).toBeNull();
+    world.park.entryFee = 100_00;
+    world.park.rating = 999;
+    expect(validateWorldInvariants(world)).toBeNull();
+    world.park.rating = 0;
+    world.terrain.path.fill(2);
+    expect(validateWorldInvariants(world)).toBeNull();
   });
 
   it("allows a stack entry that has no undo data, as a loan does", () => {
@@ -753,8 +892,9 @@ describe("migrate", () => {
     expect(migrate(doc)).toBe(doc);
   });
 
-  it("starts with an empty migration table, since only schema 1 exists", () => {
-    expect(MIGRATIONS).toEqual({});
+  it("has a migration for each schema before the current one, and none after", () => {
+    expect(Object.keys(MIGRATIONS).map(Number)).toEqual([1]);
+    expect(SCHEMA_VERSION).toBe(2);
   });
 
   it("runs the migration for the document's version and stamps the new schema version", () => {
@@ -763,6 +903,7 @@ describe("migrate", () => {
         const old = doc as { schemaVersion: number; title: string };
         return { schemaVersion: old.schemaVersion, name: old.title };
       },
+      1: (doc: unknown) => doc,
     };
     const input = { schemaVersion: 0, title: "Old Park" };
     const out = migrate(input, migrations);
@@ -774,6 +915,7 @@ describe("migrate", () => {
   it("stops at the current schema version and ignores later entries", () => {
     const migrations = {
       0: (doc: unknown) => ({ ...(doc as object), ranZero: true }),
+      1: (doc: unknown) => doc,
       [SCHEMA_VERSION]: (doc: unknown) => ({ ...(doc as object), ranCurrent: true }),
     };
     const out = migrate({ schemaVersion: 0 }, migrations) as Record<string, unknown>;
@@ -851,6 +993,151 @@ describe("migrate", () => {
     const doc = readDoc(serializeWorld(freshWorld()));
     doc.schemaVersion = 0;
     expectSaveError(() => deserializeWorld(writeDoc(doc)), /no migration from schema 0/i);
+  });
+});
+
+const V1_FIXTURE = fromBase64(
+  readFileSync(new URL("./fixtures/sample-v1.park.b64", import.meta.url), "utf8").trim(),
+);
+
+/** The `hashWorld` of the schema 1 fixture, as the current build computes it once it is loaded. */
+const V1_FIXTURE_LOADED_HASH = "a65c95950f62c2bc";
+
+describe("schema 1 saves", () => {
+  it("has a fixture that really is a schema 1 document, without paths or a park", () => {
+    const doc = readDoc(V1_FIXTURE);
+    expect(doc.schemaVersion).toBe(1);
+    expect(doc).not.toHaveProperty("park");
+    expect(doc.terrain as object).not.toHaveProperty("path");
+    // The hash it carries is the one the schema 1 build computed, which is not ours.
+    expect(doc.hash).toBe("6346222bbd77599f");
+  });
+
+  it("loads as schema 2 with an empty path layer and a default, closed park", () => {
+    const world = deserializeWorld(V1_FIXTURE);
+    expect(world.meta.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(world.meta.name).toBe("Leafy Lake");
+    expect(world.terrain.width).toBe(64);
+    expect(world.terrain.height).toBe(64);
+    expect(world.terrain.path).toBeInstanceOf(Uint8Array);
+    expect(world.terrain.path).toHaveLength(64 * 64);
+    expect(world.terrain.path.every((v) => v === 0)).toBe(true);
+    expect(world.park).toStrictEqual({
+      name: "Leafy Lake",
+      open: false,
+      entryFee: 10_00,
+      entrance: null,
+      rating: 500,
+      guestsInPark: 0,
+      totalAdmissions: 0,
+      income: { entry: 0, rides: 0, shops: 0 },
+      expenses: { running: 0, wages: 0 },
+      monthly: { entry: 0, rides: 0, shops: 0, running: 0, wages: 0 },
+    });
+    expect(world.pathVersion).toBe(0);
+  });
+
+  it("keeps everything else it had: the terrain, the money, and the log", () => {
+    const world = deserializeWorld(V1_FIXTURE);
+    expect(world.finance).toStrictEqual({
+      cash: 10_000_00,
+      loan: 0,
+      monthStart: { cash: 10_000_00 },
+    });
+    expect(world.log).toHaveLength(18);
+    expect(world.log.every((entry) => entry.client === "system")).toBe(true);
+    expect(world.terrain.water.some((v) => v > 0)).toBe(true);
+    expect(world.terrain.surface.includes(3)).toBe(true);
+    expect(world.undoStack).toEqual([]);
+  });
+
+  it("loads without comparing the schema 1 hash, and hashes to a pinned value", () => {
+    const world = deserializeWorld(V1_FIXTURE);
+    expect(hashWorld(world)).not.toBe("6346222bbd77599f");
+    expect(hashWorld(world)).toBe(V1_FIXTURE_LOADED_HASH);
+    // Loading it twice gives the same world.
+    expect(hashWorld(deserializeWorld(V1_FIXTURE))).toBe(V1_FIXTURE_LOADED_HASH);
+  });
+
+  it("saves again as a current schema, with the new hash, and reloads to the same world", () => {
+    const world = deserializeWorld(V1_FIXTURE);
+    const resaved = serializeWorld(world);
+    const doc = readDoc(resaved);
+    expect(doc.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(doc.hash).toBe(V1_FIXTURE_LOADED_HASH);
+    expect(hashWorld(deserializeWorld(resaved))).toBe(V1_FIXTURE_LOADED_HASH);
+  });
+
+  it("is a park the player can carry on with: lay a path, place the entrance, open", () => {
+    const sim = new Sim(deserializeWorld(V1_FIXTURE));
+    expect(sim.execute("park_set_entrance", { x: 32, y: 63 }).ok).toBe(true);
+    expect(sim.execute("path_build", { x: 32, y: 55, w: 1, h: 8, kind: "foot" }).ok).toBe(true);
+    expect(sim.execute("park_open", {}).ok).toBe(true);
+    expect(sim.world.park.open).toBe(true);
+  });
+});
+
+describe("MIGRATIONS[1]", () => {
+  const v1Doc = () => ({
+    schemaVersion: 1,
+    meta: { name: "Old Park", seed: 3, created: "" },
+    terrain: { width: 3, height: 2, corners: { $t: "Int16Array", $b64: "" } },
+  });
+
+  it("adds a path layer of zeros the size of the map, and a default park named after the world", () => {
+    const step = MIGRATIONS[1] as Migration;
+    const out = step(v1Doc()) as {
+      terrain: Record<string, unknown>;
+      park: unknown;
+      meta: unknown;
+    };
+    expect(out.terrain.path).toEqual({ $t: "Uint8Array", $b64: toBase64(new Uint8Array(6)) });
+    expect(Array.from(fromBase64((out.terrain.path as { $b64: string }).$b64))).toEqual([
+      0, 0, 0, 0, 0, 0,
+    ]);
+    expect(out.terrain.width).toBe(3);
+    expect(out.park).toEqual({
+      name: "Old Park",
+      open: false,
+      entryFee: 10_00,
+      entrance: null,
+      rating: 500,
+      guestsInPark: 0,
+      totalAdmissions: 0,
+      income: { entry: 0, rides: 0, shops: 0 },
+      expenses: { running: 0, wages: 0 },
+      monthly: { entry: 0, rides: 0, shops: 0, running: 0, wages: 0 },
+    });
+    expect(out.meta).toEqual({ name: "Old Park", seed: 3, created: "" });
+  });
+
+  it("leaves the document it was given as it was", () => {
+    const doc = v1Doc();
+    (MIGRATIONS[1] as Migration)(doc);
+    expect(doc).toEqual(v1Doc());
+  });
+
+  it("is run by migrate, which stamps schema 2", () => {
+    const out = migrate(v1Doc()) as Record<string, unknown>;
+    expect(out.schemaVersion).toBe(2);
+    expect(out).toHaveProperty("park");
+  });
+
+  it("gives a map with unusable dimensions no path layer, so the schema check says why", () => {
+    const doc = readDoc(V1_FIXTURE);
+    (doc.terrain as Record<string, unknown>).width = 0;
+    expectSaveError(() => deserializeWorld(writeDoc(doc)), /^Save file is invalid: /);
+    const huge = readDoc(V1_FIXTURE);
+    (huge.terrain as Record<string, unknown>).height = 2 ** 31;
+    expectSaveError(() => deserializeWorld(writeDoc(huge)), /^Save file is invalid: /);
+  });
+
+  it("refuses a document with no terrain or no meta block as corrupt", () => {
+    const step = MIGRATIONS[1] as Migration;
+    for (const doc of [null, 5, [], { schemaVersion: 1 }, { schemaVersion: 1, meta: {} }]) {
+      expectSaveError(() => migrate(doc), "Save file is corrupt");
+    }
+    expect(() => step({ meta: {}, terrain: 3 })).toThrow(SaveError);
   });
 });
 

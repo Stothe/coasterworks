@@ -1,19 +1,47 @@
-import { SCHEMA_VERSION } from "../world/types.js";
+import { createParkState } from "../park/types.js";
+import { MAX_MAP, SCHEMA_VERSION } from "../world/types.js";
+import { toBase64 } from "./base64.js";
 import { CORRUPT_MESSAGE, SaveError } from "./error.js";
 
 /** Upgrades a document by one schema version. */
 export type Migration = (doc: unknown) => unknown;
 
-/**
- * Migrations keyed by the schema version they upgrade FROM, so `MIGRATIONS[1]` turns a schema 1
- * document into a schema 2 one. Empty while schema 1 is the only version there is. When
- * `SCHEMA_VERSION` goes up, add the entry for the version it left behind.
- */
-export const MIGRATIONS: Record<number, Migration> = {};
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+/** A usable map side, or the schema check later will say what is wrong with it. */
+function isDimension(value: unknown): value is number {
+  return Number.isInteger(value) && (value as number) >= 1 && (value as number) <= MAX_MAP;
+}
+
+/**
+ * Schema 1 to 2: parks gained a path layer and a park state. The path layer starts empty and the
+ * park starts closed with the default fee and rating, named after the world. A map with unusable
+ * dimensions gets no path layer, so the schema check refuses the document with the reason.
+ */
+const migrateV1ToV2: Migration = (doc) => {
+  if (!isRecord(doc) || !isRecord(doc.terrain) || !isRecord(doc.meta)) {
+    throw new SaveError(CORRUPT_MESSAGE);
+  }
+  const { width, height } = doc.terrain;
+  const terrain =
+    isDimension(width) && isDimension(height)
+      ? {
+          ...doc.terrain,
+          path: { $t: "Uint8Array", $b64: toBase64(new Uint8Array(width * height)) },
+        }
+      : doc.terrain;
+  const name = typeof doc.meta.name === "string" ? doc.meta.name : "";
+  return { ...doc, terrain, park: createParkState(name) };
+};
+
+/**
+ * Migrations keyed by the schema version they upgrade FROM, so `MIGRATIONS[1]` turns a schema 1
+ * document into a schema 2 one. When `SCHEMA_VERSION` goes up, add the entry for the version it
+ * left behind.
+ */
+export const MIGRATIONS: Record<number, Migration> = { 1: migrateV1ToV2 };
 
 /** The document's schema version. Throws `SaveError` if it has none. */
 export function schemaVersionOf(doc: unknown): number {

@@ -1,3 +1,4 @@
+import { createParkState } from "../park/types.js";
 import { Rng } from "../rng.js";
 import { MAX_MAP, SCHEMA_VERSION, type World } from "./types.js";
 
@@ -24,7 +25,10 @@ function checkDimension(label: string, value: number): void {
   }
 }
 
-/** Creates an empty park: flat grass at corner height 8, no water, nothing logged. */
+/**
+ * Creates an empty park: flat grass at corner height 8, no water, no paths, a closed park with no
+ * entrance, nothing logged.
+ */
 export function createWorld(opts: CreateWorldOptions): World {
   checkDimension("width", opts.width);
   checkDimension("height", opts.height);
@@ -51,8 +55,11 @@ export function createWorld(opts: CreateWorldOptions): World {
       corners: new Int16Array((width + 1) * (height + 1)).fill(FLAT_HEIGHT),
       surface: new Uint8Array(width * height),
       water: new Uint8Array(width * height),
+      path: new Uint8Array(width * height),
     },
     finance: { cash, loan: 0, monthStart: { cash } },
+    park: createParkState(opts.name),
+    pathVersion: 0,
     rng: new Rng(opts.seed),
     log: [],
     undoStack: [],

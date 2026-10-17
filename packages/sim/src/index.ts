@@ -11,9 +11,30 @@ export type {
 export { executeCommand } from "./commands/execute.js";
 export type { ExecResult } from "./commands/execute.js";
 export { Registry } from "./commands/registry.js";
+export { ENTRANCE_COST } from "./commands/park.js";
+export { PATH_COST } from "./commands/path.js";
 export { MAX_ADVANCE_DAYS } from "./commands/sim.js";
 export { redoLast, undoLast } from "./commands/undo.js";
 export { fnv1a64, hashString, hexHash } from "./hash.js";
+export {
+  DEFAULT_ENTRY_FEE,
+  DEFAULT_RATING,
+  MAX_ENTRY_FEE,
+  MAX_RATING,
+  createParkState,
+} from "./park/types.js";
+export type { EdgeSide, Entrance, ParkState } from "./park/types.js";
+export {
+  MAX_PATH_SLOPE,
+  PATH_FOOT,
+  PATH_NONE,
+  PATH_QUEUE,
+  canBuildPath,
+  edgeSide,
+  isEdgeTile,
+  neighborsOnPath,
+  pathAt,
+} from "./paths/paths.js";
 export { createDefaultRegistry } from "./registry-default.js";
 export { Rng } from "./rng.js";
 export type { RngState } from "./rng.js";

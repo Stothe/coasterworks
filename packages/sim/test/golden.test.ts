@@ -51,6 +51,13 @@ describe("golden scenario 1", () => {
       "terrain_set_water",
       "finance_take_loan",
       "finance_repay_loan",
+      "path_build",
+      "path_remove",
+      "park_set_entrance",
+      "park_set_entry_fee",
+      "park_open",
+      "park_close",
+      "park_rename",
       "sim_advance",
       "tick",
       "undo",
@@ -70,6 +77,22 @@ describe("runScenario", () => {
     // 120 ticks, then 70 days, then 400 ticks.
     expect(sim.world.tick).toBe(120 + 70 * 400 + 400);
     expect(sim.world.log.some((entry) => entry.name === "undo")).toBe(true);
+  });
+
+  it("lays the paths and sets up the park, so the hash is not guarding a no-op", () => {
+    const { world } = runScenario(scenario());
+    // The foot path ran (16, 25..30); its first tile was removed and its last two became a queue.
+    const path = (x: number, y: number) => world.terrain.path[y * 32 + x];
+    expect([25, 26, 27, 28, 29, 30].map((y) => path(16, y))).toEqual([0, 1, 1, 1, 2, 2]);
+    // The extra pair was built, undone, and built again.
+    expect([path(17, 25), path(18, 25)]).toEqual([1, 1]);
+    expect(world.park).toMatchObject({
+      name: "Golden Gardens",
+      open: false,
+      entryFee: 500,
+      entrance: { x: 16, y: 31, side: 2 },
+    });
+    expect(world.pathVersion).toBeGreaterThan(0);
   });
 
   it("throws with the step number and the reason when a step fails", () => {

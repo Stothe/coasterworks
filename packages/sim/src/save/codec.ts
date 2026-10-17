@@ -1,5 +1,6 @@
 import { gunzipSync, gzipSync, strFromU8, strToU8 } from "fflate";
 import { z } from "zod";
+import { copyParkState } from "../park/types.js";
 import { Rng } from "../rng.js";
 import { hashWorld } from "../world/hash.js";
 import { MAX_MAP, SCHEMA_VERSION, type LogEntry, type World } from "../world/types.js";
@@ -13,13 +14,14 @@ import { migrate, schemaVersionOf } from "./migrate.js";
  * Save format: gzip of one JSON document.
  *
  *   { schemaVersion, meta: { name, seed, created }, tick,
- *     terrain: { width, height, corners, surface, water },
- *     finance, rng: [w0, w1, w2, w3], log, undoStack, redoStack, nextId, hash }
+ *     terrain: { width, height, corners, surface, water, path },
+ *     finance, park, rng: [w0, w1, w2, w3], log, undoStack, redoStack, nextId, hash }
  *
  * Each terrain array is `{ "$t": "Int16Array" | "Uint8Array", "$b64": "<base64>" }`, holding the
- * array's values as little-endian bytes. `fflate` does the gzip so the same code runs in Node and
- * in browsers. Keys are written in a fixed order and the gzip header carries no timestamp, so
- * saving the same world twice gives the same bytes.
+ * array's values as little-endian bytes. `park` is plain JSON (`ParkState`, no typed arrays).
+ * `fflate` does the gzip so the same code runs in Node and in browsers. Keys are written in a
+ * fixed order and the gzip header carries no timestamp, so saving the same world twice gives the
+ * same bytes.
  *
  * `hash` is `hashWorld` of the saved world and is the last key. Loading guards against damage in
  * three ways.
@@ -98,6 +100,23 @@ const logEntrySchema = z.object({
   undoneBy: int.optional(),
 });
 
+const edgeSide = z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]);
+
+// Ranges (a fee of at most $100, a rating of at most 999, counters that are not negative) are the
+// invariants' business, so a bad value gets the same message from any source.
+const parkSchema = z.object({
+  name: z.string(),
+  open: z.boolean(),
+  entryFee: int,
+  entrance: z.object({ x: int, y: int, side: edgeSide }).nullable(),
+  rating: int,
+  guestsInPark: int,
+  totalAdmissions: int,
+  income: z.object({ entry: int, rides: int, shops: int }),
+  expenses: z.object({ running: int, wages: int }),
+  monthly: z.object({ entry: int, rides: int, shops: int, running: int, wages: int }),
+});
+
 const saveSchema = z.object({
   schemaVersion: int,
   meta: z.object({ name: z.string(), seed: int, created: z.string() }),
@@ -108,8 +127,10 @@ const saveSchema = z.object({
     corners: encodedArray("Int16Array"),
     surface: encodedArray("Uint8Array"),
     water: encodedArray("Uint8Array"),
+    path: encodedArray("Uint8Array"),
   }),
   finance: z.object({ cash: int, loan: int, monthStart: z.object({ cash: int }) }),
+  park: parkSchema,
   rng: z.tuple([uint32, uint32, uint32, uint32]),
   log: z.array(logEntrySchema),
   undoStack: z.array(int),
@@ -149,12 +170,14 @@ export function serializeWorld(world: World): Uint8Array {
       corners: encodeInt16(terrain.corners),
       surface: encodeUint8(terrain.surface),
       water: encodeUint8(terrain.water),
+      path: encodeUint8(terrain.path),
     },
     finance: {
       cash: finance.cash,
       loan: finance.loan,
       monthStart: { cash: finance.monthStart.cash },
     },
+    park: copyParkState(world.park),
     rng: [...world.rng.state],
     log: world.log.map(encodeLogEntry),
     undoStack: world.undoStack,
@@ -239,6 +262,7 @@ export function deserializeWorld(bytes: Uint8Array): World {
   const corners = decodeInt16(doc.terrain.corners, (width + 1) * (height + 1));
   const surface = decodeUint8(doc.terrain.surface, width * height);
   const water = decodeUint8(doc.terrain.water, width * height);
+  const path = decodeUint8(doc.terrain.path, width * height);
 
   let rng: Rng;
   try {
@@ -269,12 +293,14 @@ export function deserializeWorld(bytes: Uint8Array): World {
       created: doc.meta.created,
     },
     tick: doc.tick,
-    terrain: { width, height, corners, surface, water },
+    terrain: { width, height, corners, surface, water, path },
     finance: {
       cash: doc.finance.cash,
       loan: doc.finance.loan,
       monthStart: { cash: doc.finance.monthStart.cash },
     },
+    park: copyParkState(doc.park),
+    pathVersion: 0,
     rng,
     log,
     undoStack: doc.undoStack,

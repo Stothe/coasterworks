@@ -148,6 +148,8 @@ describe("buildActions: commands", () => {
         .sort(),
     ).toEqual(
       [
+        "path_build",
+        "path_remove",
         "terrain_level",
         "terrain_lower",
         "terrain_raise",

@@ -25,6 +25,11 @@ function addBump(world: World): void {
   world.terrain.corners[3 * (world.terrain.width + 1) + 3] = 14;
 }
 
+/** Puts the park entrance on the north edge, which `park_open` needs. */
+function placeEntrance(world: World): void {
+  world.park.entrance = { x: 5, y: 0, side: 0 };
+}
+
 /**
  * One entry for every command in the default registry. Adding a command without adding it here
  * fails "has a fixture for every registered command", so a new undoable command cannot skip the
@@ -38,6 +43,21 @@ const FIXTURES: Record<string, Fixture> = {
   terrain_set_surface: { input: { ...AREA, surface: 3 } },
   // Water has to be higher than the lowest corner of every tile; a fresh world is flat at 8.
   terrain_set_water: { input: { ...AREA, level: 12 } },
+  path_build: { input: { ...AREA, kind: "foot" } },
+  // A path to remove, so there is something to restore.
+  path_remove: { input: AREA, setup: (world) => void (world.terrain.path[3 * 16 + 3] = 2) },
+  // A queue under the entrance tile, which the entrance replaces and an undo has to bring back.
+  park_set_entrance: { input: { x: 5, y: 0 }, setup: (world) => void (world.terrain.path[5] = 2) },
+  park_set_entry_fee: { input: { cents: 5_00 } },
+  park_open: { input: {}, setup: placeEntrance },
+  park_close: {
+    input: {},
+    setup: (world) => {
+      placeEntrance(world);
+      world.park.open = true;
+    },
+  },
+  park_rename: { input: { name: "Renamed Park" } },
   sim_advance: { input: { days: 5 } },
   finance_take_loan: { input: { amount: 20_000_00 } },
   finance_repay_loan: { input: { amount: 10_00 }, setup: (world) => takeLoan(world, 20_000_00) },

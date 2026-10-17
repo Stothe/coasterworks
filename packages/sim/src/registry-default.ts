@@ -1,4 +1,12 @@
 import { financeRepayLoan, financeTakeLoan } from "./commands/finance.js";
+import {
+  parkClose,
+  parkOpen,
+  parkRename,
+  parkSetEntrance,
+  parkSetEntryFee,
+} from "./commands/park.js";
+import { pathBuild, pathRemove } from "./commands/path.js";
 import { Registry } from "./commands/registry.js";
 import { simAdvance } from "./commands/sim.js";
 import {
@@ -23,6 +31,13 @@ export function createDefaultRegistry(): Registry {
   registry.register(terrainSmooth);
   registry.register(terrainSetSurface);
   registry.register(terrainSetWater);
+  registry.register(pathBuild);
+  registry.register(pathRemove);
+  registry.register(parkSetEntrance);
+  registry.register(parkSetEntryFee);
+  registry.register(parkOpen);
+  registry.register(parkClose);
+  registry.register(parkRename);
   registry.register(simAdvance);
   registry.register(financeTakeLoan);
   registry.register(financeRepayLoan);

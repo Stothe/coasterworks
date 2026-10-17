@@ -130,7 +130,14 @@ describe("CommandBar: the list", () => {
     expect(inGroup("Terrain")).toContain("terrain_raise");
     expect(inGroup("Terrain")).toContain("terrain_set_water");
     expect(inGroup("Finance")).toEqual(["finance_take_loan", "finance_repay_loan"]);
-    expect(inGroup("Park")).toEqual(["park_close_gates"]);
+    expect(inGroup("Park")).toEqual([
+      "park_set_entrance",
+      "park_set_entry_fee",
+      "park_open",
+      "park_close",
+      "park_rename",
+      "park_close_gates",
+    ]);
     expect(inGroup("View")).toContain("ui.classicView");
     expect(inGroup("View")).toContain("ui.tool.terrain");
     expect(inGroup("Speed")).toEqual([
@@ -144,7 +151,8 @@ describe("CommandBar: the list", () => {
     ]);
     expect(inGroup("History")).toEqual(["ui.undo", "ui.redo"]);
     expect(inGroup("Time")).toEqual(["sim_advance"]);
-    expect(inGroup("Other")).toEqual(["ui.help"]);
+    // The path commands have no group of their own until the Paths tray arrives.
+    expect(inGroup("Other")).toEqual(["path_build", "path_remove", "ui.help"]);
   });
 
   it("shows the title, the description dimmed, and the shortcut as a key cap", () => {

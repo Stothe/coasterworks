@@ -66,7 +66,10 @@ export async function newCommand(args: string[], io: CliIO): Promise<number> {
   let world: World;
   if (sample) {
     world = createSamplePark(seed);
-    if (values.name !== undefined) world.meta.name = values.name;
+    if (values.name !== undefined) {
+      world.meta.name = values.name;
+      world.park.name = values.name;
+    }
     world.meta.created = createdIso;
   } else {
     world = createWorld({ width, height, seed, name: values.name ?? "New Park", createdIso });

@@ -1,4 +1,5 @@
 import { fnv1a64, hashString, hexHash } from "../hash.js";
+import { copyParkState } from "../park/types.js";
 import type { World } from "./types.js";
 
 function bytesOf(array: Int16Array | Uint8Array): Uint8Array {
@@ -6,9 +7,11 @@ function bytesOf(array: Int16Array | Uint8Array): Uint8Array {
 }
 
 /**
- * Fingerprint of everything that determines the simulation's future: tick, terrain, finance, the
- * root rng state, the log length, the id counter, the undo/redo stacks, and the world's name and
- * seed. `meta.created` is left out so the same park hashes the same whenever it was created.
+ * Fingerprint of everything that determines the simulation's future: tick, terrain (heights,
+ * surface, water, and paths), finance, the park's state, the root rng state, the log length, the id
+ * counter, the undo/redo stacks, and the world's name and seed. `meta.created` is left out so the
+ * same park hashes the same whenever it was created, and `pathVersion` is left out because it is
+ * only a cache key that restarts at 0 on load.
  *
  * Two worlds that hash differently have diverged. Equal hashes mean equal covered state, up to
  * the usual 64-bit collision odds.
@@ -25,6 +28,7 @@ export function hashWorld(world: World): string {
     cash: finance.cash,
     loan: finance.loan,
     monthStartCash: finance.monthStart.cash,
+    park: copyParkState(world.park),
     rng: world.rng.state,
     logLength: world.log.length,
     nextId: world.nextId,
@@ -35,5 +39,6 @@ export function hashWorld(world: World): string {
   hash = fnv1a64(bytesOf(terrain.corners), hash);
   hash = fnv1a64(bytesOf(terrain.surface), hash);
   hash = fnv1a64(bytesOf(terrain.water), hash);
+  hash = fnv1a64(bytesOf(terrain.path), hash);
   return hexHash(hash);
 }

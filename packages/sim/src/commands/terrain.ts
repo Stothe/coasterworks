@@ -20,9 +20,9 @@ export const rectSchema = z.object({
 
 const heightSchema = z.int().min(0).max(MAX_HEIGHT);
 
-const OUTSIDE_PARK = "Area is outside the park";
+export const OUTSIDE_PARK = "Area is outside the park";
 
-function checkRect(world: World, rect: Rect): string | null {
+export function checkRect(world: World, rect: Rect): string | null {
   return inBounds(world.terrain, rect.x, rect.y, rect.w, rect.h) ? null : OUTSIDE_PARK;
 }
 
@@ -168,12 +168,12 @@ export const terrainSmooth = defineCommand({
 // Tile commands -------------------------------------------------------------------------------
 
 /** What a tile command saves so it can be undone: each changed tile and its previous value. */
-interface TileUndo {
+export interface TileUndo {
   tiles: Array<[index: number, previous: number]>;
 }
 
 /** Calls `fn(x, y, index)` for each tile of `rect`, row by row. The rect must be on the map. */
-function forEachTileInRect(
+export function forEachTileInRect(
   world: World,
   rect: Rect,
   fn: (x: number, y: number, index: number) => void,
@@ -185,7 +185,12 @@ function forEachTileInRect(
 }
 
 /** The indexes of the tiles of `rect` where `layer` differs from `value`. */
-function tilesToChange(world: World, rect: Rect, layer: Uint8Array, value: number): number[] {
+export function tilesToChange(
+  world: World,
+  rect: Rect,
+  layer: Uint8Array,
+  value: number,
+): number[] {
   const indexes: number[] = [];
   forEachTileInRect(world, rect, (_x, _y, index) => {
     if (layer[index] !== value) indexes.push(index);
@@ -193,7 +198,7 @@ function tilesToChange(world: World, rect: Rect, layer: Uint8Array, value: numbe
   return indexes;
 }
 
-function setTiles(layer: Uint8Array, indexes: number[], value: number): TileUndo {
+export function setTiles(layer: Uint8Array, indexes: number[], value: number): TileUndo {
   return {
     tiles: indexes.map((index) => {
       const previous = layer[index] as number;
@@ -203,7 +208,7 @@ function setTiles(layer: Uint8Array, indexes: number[], value: number): TileUndo
   };
 }
 
-function revertTiles(layer: Uint8Array, undo: TileUndo): void {
+export function revertTiles(layer: Uint8Array, undo: TileUndo): void {
   for (const [index, previous] of undo.tiles) layer[index] = previous;
 }
 
