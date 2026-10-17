@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { uiStore } from "../src/state/uiStore";
 import { useHost, type HostState } from "../src/state/useHost";
+import { snapshotOf } from "./snapshotSource";
 import {
   CLEAR_OF_INSPECTOR_REM,
   EDGE_GAP_REM,
@@ -51,22 +52,11 @@ function host(over: Partial<HostState> = {}): HostState {
   return {
     status: "ready",
     name: "Queryland",
-    snapshot: {
-      header: {
-        tick: 0,
-        speed: 1 as Speed,
-        halted: false,
-        cash: 1_000_000,
-        loan: 500_000,
-        monthStartCash: 1_000_000,
-        date: "March 1, Year 1",
-        terrainVersion: 0,
-        hasTerrain: true,
-        width: 16,
-        height: 16,
-      },
-    },
+    snapshot: snapshotOf({ loan: 500_000, hasTerrain: true }),
     terrain: terrain(),
+    paths: null,
+    guests: null,
+    park: null,
     events: [],
     client: { query, setSpeed, command } as unknown as SimClient,
     halted: false,
@@ -288,7 +278,7 @@ describe("keys while typing in the loan amount (Review Focus 5)", () => {
     const header = host().snapshot?.header;
     if (!header) throw new Error("no snapshot");
     vi.mocked(useHost).mockReturnValue(
-      host({ snapshot: { header: { ...header, loan: 510_000, cash: 1_010_000 } } }),
+      host({ snapshot: snapshotOf({ ...header, loan: 510_000, cash: 1_010_000 }) }),
     );
     view.rerender(<App />);
     expect(books()).toBe("$5,100.00");

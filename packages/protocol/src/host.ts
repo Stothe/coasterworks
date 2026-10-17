@@ -1,5 +1,5 @@
 import { TICKS_PER_SECOND, dateOf, formatDate } from "@coasterworks/sim";
-import type { LogEntry, Sim, World } from "@coasterworks/sim";
+import type { GuestStore, LogEntry, Sim, World } from "@coasterworks/sim";
 import {
   PROTOCOL_VERSION,
   SpeedSchema,
@@ -11,7 +11,7 @@ import {
   type ResultPayload,
   type Speed,
 } from "./messages.js";
-import { encodeSnapshot } from "./snapshot.js";
+import { encodeSnapshot, type GuestSection, type SnapshotParts } from "./snapshot.js";
 import type { Frame, MessageTransport } from "./transport.js";
 
 /** The clock and the repeating timer the host runs on. The app supplies them; `src` has no globals. */
@@ -38,6 +38,8 @@ interface ClientState {
   readonly transport: MessageTransport;
   /** The terrain version this client was last sent, or -1 if it has had none. */
   lastTerrainVersion: number;
+  /** The path version this client was last sent, or -1 if it has had none. */
+  lastPathVersion: number;
   helloDone: boolean;
 }
 
@@ -60,6 +62,50 @@ function publicEntry(entry: LogEntry): LogEntryPublic {
   };
   if (entry.undoneBy !== undefined) out.undoneBy = entry.undoneBy;
   return out;
+}
+
+/**
+ * The live guests as the arrays a snapshot carries, copied so that nothing the sim does next can
+ * change them. Between ticks the live guests fill slots `0..count-1`, and those are copied as they
+ * are. A store that is not packed, such as one a tick left half done when it threw, has gaps, and
+ * then the live slots are gathered one by one; either way the section and the count agree.
+ */
+function guestSection(store: GuestStore): GuestSection {
+  if (!store.fragmented) {
+    const count = store.count;
+    return {
+      count,
+      id: store.id.slice(0, count),
+      x: store.x.slice(0, count),
+      y: store.y.slice(0, count),
+      state: store.state.slice(0, count),
+      color: store.color.slice(0, count),
+      happiness: store.happiness.slice(0, count),
+    };
+  }
+  const slots: number[] = [];
+  for (let slot = 0; slot < store.live.length; slot++) {
+    if (store.live[slot] === 1) slots.push(slot);
+  }
+  const count = slots.length;
+  const section: GuestSection = {
+    count,
+    id: new Int32Array(count),
+    x: new Int32Array(count),
+    y: new Int32Array(count),
+    state: new Uint8Array(count),
+    color: new Uint8Array(count),
+    happiness: new Uint8Array(count),
+  };
+  slots.forEach((slot, i) => {
+    section.id[i] = store.id[slot] as number;
+    section.x[i] = store.x[slot] as number;
+    section.y[i] = store.y[slot] as number;
+    section.state[i] = store.state[slot] as number;
+    section.color[i] = store.color[slot] as number;
+    section.happiness[i] = store.happiness[slot] as number;
+  });
+  return section;
 }
 
 function errorText(error: unknown): string {
@@ -87,8 +133,19 @@ export class SimHostServer {
   /** Set when a fault stopped the sim, until a client or `setSpeed` resumes it. */
   private isHalted = false;
   private lastHaltReason: string | undefined;
-  /** Bumped by every mutation; a client holding an older version needs the terrain again. */
+  /**
+   * Bumped by a command in the `terrain` category, by undoing or redoing one, and when the sim
+   * holds a different world; a client holding an older version needs the terrain again.
+   */
   private terrainVersion = 0;
+  /**
+   * Bumped whenever the world's `pathVersion` moves, and when the sim holds a different world; a
+   * client holding an older version needs the paths again. The host keeps its own count because a
+   * new world's `pathVersion` starts over at 0, which a client may already hold.
+   */
+  private pathVersion = 0;
+  /** The world's own `pathVersion` as of the last time this host looked. */
+  private seenPathVersion: number;
   /** Where the scheduler's accounting of real time stands; see `advance`. */
   private lastTickAt: number;
   private lastSnapshotAt: number;
@@ -119,6 +176,7 @@ export class SimHostServer {
     this.lastTickAt = this.lastSnapshotAt = this.timers?.now() ?? 0;
     this.trackedWorld = sim.world;
     this.loggedCount = sim.world.log.length;
+    this.seenPathVersion = sim.world.pathVersion;
   }
 
   get speed(): Speed {
@@ -149,7 +207,12 @@ export class SimHostServer {
   /** Starts serving a transport. It may be called before `start()`, and for any number of clients. */
   attach(transport: MessageTransport): void {
     if (this.clients.has(transport)) return;
-    const client: ClientState = { transport, lastTerrainVersion: -1, helloDone: false };
+    const client: ClientState = {
+      transport,
+      lastTerrainVersion: -1,
+      lastPathVersion: -1,
+      helloDone: false,
+    };
     this.clients.set(transport, client);
     transport.onMessage((frame) => this.handleMessage(client, frame));
     transport.onClose(() => this.detach(transport));
@@ -344,13 +407,13 @@ export class SimHostServer {
       return;
     }
     client.helloDone = true;
-    const { terrain, meta } = this.sim.world;
+    const { terrain, park } = this.sim.world;
     this.sendMessage(client, {
       t: "welcome",
       protocol: PROTOCOL_VERSION,
       width: terrain.width,
       height: terrain.height,
-      name: meta.name,
+      name: park.name,
       speed: this.currentSpeed,
       halted: this.isHalted,
     });
@@ -361,7 +424,7 @@ export class SimHostServer {
 
   /**
    * Notices that the sim now holds a different world, such as a loaded save. Its log is not news,
-   * so counting starts from where it ends, and the terrain is new to every client.
+   * so counting starts from where it ends, and its terrain and paths are new to every client.
    */
   private syncWorld(): void {
     const world = this.sim.world;
@@ -370,6 +433,35 @@ export class SimHostServer {
     this.loggedCount = world.log.length;
     this.worldChanged = true;
     this.terrainVersion++;
+    this.pathVersion++;
+    this.seenPathVersion = world.pathVersion;
+  }
+
+  /** Counts a change to the world's paths or entrance, which its `pathVersion` records. */
+  private trackPaths(): void {
+    const seen = this.sim.world.pathVersion;
+    if (seen === this.seenPathVersion) return;
+    this.seenPathVersion = seen;
+    this.pathVersion++;
+  }
+
+  /**
+   * Whether a log entry changed the terrain: it is a command in the `terrain` category, or it
+   * undoes or redoes one. Everything else leaves the terrain as the clients hold it.
+   */
+  private touchesTerrain(world: World, entry: LogEntry): boolean {
+    let name = entry.name;
+    if (name === "undo" || name === "redo") {
+      const target = (entry.input as { target?: unknown } | null)?.target;
+      // The target is usually among the newest entries, so look from the end, as undo does.
+      let original: LogEntry | undefined;
+      for (let i = world.log.length - 1; i >= 0 && !original; i--) {
+        if (world.log[i]?.id === target) original = world.log[i];
+      }
+      if (!original) return false;
+      name = original.name;
+    }
+    return this.sim.registry.command(name)?.category === "terrain";
   }
 
   /** The park changed: tell every client, in the order things happened. */
@@ -379,7 +471,8 @@ export class SimHostServer {
 
   /**
    * Tells every client what was logged since the last announcement, then shows them the park,
-   * with terrain for any that do not hold the new version.
+   * with terrain and paths for any that do not hold the current versions. The terrain version
+   * moves only if what was logged touched the terrain; the path version follows the world's.
    */
   private announce(): void {
     this.syncWorld();
@@ -388,11 +481,14 @@ export class SimHostServer {
     const to = world.log.length;
     this.loggedCount = to;
     this.worldChanged = false;
-    this.terrainVersion++;
+    let terrainChanged = false;
     for (let i = from; i < to; i++) {
       const entry = world.log[i];
-      if (entry) this.broadcast({ t: "event", kind: "log", entry: publicEntry(entry) });
+      if (!entry) continue;
+      if (this.touchesTerrain(world, entry)) terrainChanged = true;
+      this.broadcast({ t: "event", kind: "log", entry: publicEntry(entry) });
     }
+    if (terrainChanged) this.terrainVersion++;
     this.broadcastSnapshot();
     this.onMutate?.(world);
   }
@@ -415,8 +511,17 @@ export class SimHostServer {
     }
   }
 
-  private buildSnapshot(withTerrain: boolean): Uint8Array {
-    const { tick, terrain, finance } = this.sim.world;
+  /**
+   * The one place a snapshot is made, for a join, a broadcast, a periodic send and a halt alike.
+   * The terrain and the paths are in it only when asked for; the park and the guests are in every
+   * one, read from the world as it is now.
+   */
+  private buildSnapshot(withTerrain: boolean, withPaths: boolean): Uint8Array {
+    const { tick, terrain, finance, park, guests } = this.sim.world;
+    const section = guestSection(guests);
+    const parts: SnapshotParts = { guests: section };
+    if (withTerrain) parts.terrain = terrain;
+    if (withPaths) parts.paths = terrain.path;
     return encodeSnapshot(
       {
         tick,
@@ -428,34 +533,68 @@ export class SimHostServer {
         date: formatDate(dateOf(tick)),
         terrainVersion: this.terrainVersion,
         hasTerrain: withTerrain,
+        pathVersion: this.pathVersion,
+        hasPaths: withPaths,
+        guestCount: section.count,
         width: terrain.width,
         height: terrain.height,
+        park: {
+          name: park.name,
+          open: park.open,
+          entryFee: park.entryFee,
+          entrance:
+            park.entrance === null
+              ? null
+              : { x: park.entrance.x, y: park.entrance.y, side: park.entrance.side },
+          rating: park.rating,
+          guestsInPark: park.guestsInPark,
+          totalAdmissions: park.totalAdmissions,
+        },
       },
-      withTerrain ? terrain : undefined,
+      parts,
     );
   }
 
-  /** Sends one client a full snapshot, terrain included. */
+  /** Sends one client a full snapshot, terrain and paths included. */
   private sendSnapshot(client: ClientState): void {
-    this.deliverSnapshot(client, this.buildSnapshot(true), true);
+    this.trackPaths();
+    this.deliverSnapshot(client, this.buildSnapshot(true, true), true, true);
   }
 
-  /** Sends every client a snapshot, with terrain only for those that are behind. */
+  /**
+   * Sends every client a snapshot, with the terrain and the paths only for those that are behind.
+   * Clients that need the same layers are sent the same frame, which is built once.
+   */
   private broadcastSnapshot(): void {
-    let plain: Uint8Array | undefined;
-    let full: Uint8Array | undefined;
+    this.trackPaths();
+    const frames = new Map<number, Uint8Array>();
     for (const client of this.helloClients()) {
-      const behind = client.lastTerrainVersion < this.terrainVersion;
-      const frame = behind
-        ? (full ??= this.buildSnapshot(true))
-        : (plain ??= this.buildSnapshot(false));
-      this.deliverSnapshot(client, frame, behind);
+      const withTerrain = client.lastTerrainVersion < this.terrainVersion;
+      const withPaths = client.lastPathVersion < this.pathVersion;
+      const kind = (withTerrain ? 1 : 0) + (withPaths ? 2 : 0);
+      let frame = frames.get(kind);
+      if (!frame) {
+        frame = this.buildSnapshot(withTerrain, withPaths);
+        frames.set(kind, frame);
+      }
+      this.deliverSnapshot(client, frame, withTerrain, withPaths);
     }
     if (this.timers) this.lastSnapshotAt = this.timers.now();
   }
 
-  private deliverSnapshot(client: ClientState, frame: Uint8Array, withTerrain: boolean): void {
-    if (this.send(client, frame) && withTerrain) client.lastTerrainVersion = this.terrainVersion;
+  /**
+   * Sends one client a snapshot, and remembers which layers it now holds only once the send worked,
+   * so a client that missed a frame is behind, and is sent them again, in the next one.
+   */
+  private deliverSnapshot(
+    client: ClientState,
+    frame: Uint8Array,
+    withTerrain: boolean,
+    withPaths: boolean,
+  ): void {
+    if (!this.send(client, frame)) return;
+    if (withTerrain) client.lastTerrainVersion = this.terrainVersion;
+    if (withPaths) client.lastPathVersion = this.pathVersion;
   }
 
   private helloClients(): ClientState[] {

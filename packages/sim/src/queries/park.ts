@@ -57,7 +57,7 @@ export const parkBounds = defineQuery({
 export const financeSummary = defineQuery({
   name: "finance_summary",
   description:
-    "Summarizes the park's money, all in cents. `cash` and `loan`; `thisMonth` { entry, rides, shops, running, wages, net } for the month so far, where `net` is income less running costs and wages; `lastMonth`, the month that has just ended (or null in the first month); and `history`, up to the last 12 finished months, oldest first, each { year, month, entry, rides, shops, running, wages, net } with `month` 0-based (March = 0).",
+    "Summarizes the park's money, all in cents. `cash` and `loan`; `thisMonth` { entry, rides, shops, running, wages, net } for the month so far, where `net` is income less running costs and wages; `lastMonth`, the month that has just ended (or null in the first month); and `history`, up to the last 12 finished months, oldest first, each { year, month, entry, rides, shops, running, wages, net } with `month` 0-based (March = 0). Loan interest is taken from `cash` at the start of each month but is not part of `running` or `net`.",
   category: "finance",
   input: z.object({}),
   run: (world) => {

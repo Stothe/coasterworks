@@ -50,6 +50,9 @@ function liveHost(): LiveHost {
     status: "ready" as const,
     name: "Queryland",
     terrain: null,
+    paths: null,
+    guests: null,
+    park: null,
     events: [],
     client: {
       query: async () => ({ ok: true, result: catalog }),

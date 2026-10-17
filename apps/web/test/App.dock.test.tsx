@@ -1,10 +1,11 @@
-import type { SimClient, Speed } from "@coasterworks/protocol";
+import type { SimClient } from "@coasterworks/protocol";
 import { createDefaultRegistry, type ExecResult } from "@coasterworks/sim";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { uiStore } from "../src/state/uiStore";
 import { useHost, type HostState } from "../src/state/useHost";
+import { snapshotOf } from "./snapshotSource";
 import type { ViewportProps } from "../src/viewport/Viewport";
 
 vi.mock("../src/state/useHost", () => ({ useHost: vi.fn() }));
@@ -25,22 +26,11 @@ const command = vi.fn<(name: string, input: unknown) => Promise<ExecResult>>();
 function host(): HostState {
   return {
     status: "ready",
-    snapshot: {
-      header: {
-        tick: 0,
-        speed: 1 as Speed,
-        halted: false,
-        cash: 1_000_000,
-        loan: 0,
-        monthStartCash: 1_000_000,
-        date: "March 1, Year 1",
-        terrainVersion: 0,
-        hasTerrain: false,
-        width: 16,
-        height: 16,
-      },
-    },
+    snapshot: snapshotOf(),
     terrain: null,
+    paths: null,
+    guests: null,
+    park: null,
     events: [],
     client: {
       query: async () => ({ ok: true, result: catalog }),

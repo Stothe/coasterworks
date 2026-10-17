@@ -1,4 +1,4 @@
-import { createWorld } from "@coasterworks/sim";
+import { Sim, createWorld } from "@coasterworks/sim";
 import { describe, expect, it, vi } from "vitest";
 import {
   PROTOCOL_VERSION,
@@ -63,7 +63,7 @@ describe("handshake", () => {
   it("refuses another protocol version, then closes that transport", () => {
     const { host } = setup();
     const peer = connectPeer(host);
-    peer.send({ t: "hello", protocol: 2 });
+    peer.send({ t: "hello", protocol: 1 });
     expect(peer.messages("error")).toEqual([
       { t: "error", message: "Unsupported protocol version" },
     ]);
@@ -912,8 +912,11 @@ describe("a client that calls back into the host while it is being sent to", () 
       expect(b.kinds()).toEqual(["event", "snapshot", "event", "snapshot"]);
       // What B was last shown is the newest state, not the state when the first event went out.
       expect(b.lastSnapshot().header.cash).toBe(sim.world.finance.cash);
-      expect(b.lastSnapshot().header.terrainVersion).toBe(2);
-      expect(b.lastSnapshot().terrain?.corners).toEqual(sim.world.terrain.corners);
+      // The raise sent the terrain; the loan that followed it did not touch it.
+      const [raised, borrowed] = b.snapshots();
+      expect(raised?.header).toMatchObject({ terrainVersion: 1, hasTerrain: true });
+      expect(raised?.terrain?.corners).toEqual(sim.world.terrain.corners);
+      expect(borrowed?.header).toMatchObject({ terrainVersion: 1, hasTerrain: false });
     },
   );
 
@@ -1198,5 +1201,563 @@ describe("a fault in the sim", () => {
     clock.advance(25);
     clock.fire();
     expect(peer.messages("error")[0]?.message).toBe("Simulation halted: plain text");
+  });
+});
+
+const LOAN = { amount: 100_000 };
+/** A tile on the west edge of the 8 by 8 test park. */
+const GATE = { x: 0, y: 3 };
+
+/** Opens `sim`'s park at the west gate and steps it until at least `guests` have arrived. */
+function admit(sim: Sim, guests: number): void {
+  expect(sim.execute("park_set_entrance", GATE, "agent").ok).toBe(true);
+  expect(sim.execute("park_open", {}, "agent").ok).toBe(true);
+  for (let i = 0; i < 4000 && sim.world.guests.count < guests; i++) sim.step(1);
+  expect(sim.world.guests.count).toBeGreaterThanOrEqual(guests);
+}
+
+describe("protocol 2", () => {
+  it("is protocol 2", () => {
+    expect(PROTOCOL_VERSION).toBe(2);
+  });
+
+  it("welcomes with protocol 2 and the park's name, not the world's", () => {
+    const sim = makeSim();
+    expect(sim.execute("park_rename", { name: "Renamed Park" }, "agent").ok).toBe(true);
+    expect(sim.world.meta.name).toBe("Test Park");
+    const peer = connectPeer(new SimHostServer(sim));
+    peer.hello();
+    expect(peer.messages("welcome")[0]).toMatchObject({
+      t: "welcome",
+      protocol: 2,
+      name: "Renamed Park",
+    });
+  });
+
+  it("tells a client that renames the park the new name in the next welcome", () => {
+    const { host } = setup();
+    const player = joined(host);
+    player.send({ t: "command", id: 1, name: "park_rename", input: { name: "Wonderland" } });
+    const late = connectPeer(host);
+    late.hello();
+    expect(late.messages("welcome")[0]?.name).toBe("Wonderland");
+    expect(late.lastSnapshot().header.park.name).toBe("Wonderland");
+  });
+
+  it("refuses protocol 1, as the host that spoke it would refuse protocol 2", () => {
+    const { host } = setup();
+    const peer = connectPeer(host);
+    peer.send({ t: "hello", protocol: 1 });
+    expect(peer.kinds()).toEqual(["error"]);
+    expect(peer.messages("error")[0]?.message).toBe("Unsupported protocol version");
+    expect(peer.closed).toBe(true);
+  });
+
+  it("describes the park in every snapshot", () => {
+    const { sim, clock, host } = setup();
+    const peer = connectPeer(host);
+    peer.hello();
+    expect(peer.lastSnapshot().header.park).toEqual({
+      name: "Test Park",
+      open: false,
+      entryFee: sim.world.park.entryFee,
+      entrance: null,
+      rating: sim.world.park.rating,
+      guestsInPark: 0,
+      totalAdmissions: 0,
+    });
+    peer.clear();
+    peer.send({ t: "command", id: 1, name: "park_set_entrance", input: GATE });
+    peer.send({ t: "command", id: 2, name: "park_set_entry_fee", input: { cents: 2_500 } });
+    peer.send({ t: "command", id: 3, name: "park_open", input: {} });
+    expect(peer.lastSnapshot().header.park).toMatchObject({
+      open: true,
+      entryFee: 2_500,
+      entrance: { x: 0, y: 3, side: 3 },
+    });
+    // A periodic snapshot reads the park as it is then: the sim's own counts, not a stale copy.
+    sim.world.park.rating = 777;
+    sim.world.park.guestsInPark = 5;
+    sim.world.park.totalAdmissions = 9;
+    peer.clear();
+    clock.advance(50);
+    host.tick();
+    expect(peer.lastSnapshot().header.park).toMatchObject({
+      rating: sim.world.park.rating,
+      guestsInPark: sim.world.park.guestsInPark,
+      totalAdmissions: sim.world.park.totalAdmissions,
+    });
+  });
+});
+
+describe("resending the terrain", () => {
+  it("does not resend terrain after a loan", () => {
+    const { sim, host } = setup();
+    const peer = joined(host);
+    peer.send({ t: "command", id: 1, name: "finance_take_loan", input: LOAN });
+    expect(peer.kinds()).toEqual(["result", "event", "snapshot"]);
+    expect(peer.messages("event")[0]?.entry.name).toBe("finance_take_loan");
+    const snapshot = peer.lastSnapshot();
+    expect(snapshot.header).toMatchObject({
+      hasTerrain: false,
+      terrainVersion: 0,
+      loan: LOAN.amount,
+      cash: sim.world.finance.cash,
+    });
+    expect(snapshot).not.toHaveProperty("terrain");
+  });
+
+  it("resends terrain after a raise, and not after the loan that follows it", () => {
+    const { host } = setup();
+    const peer = joined(host);
+    peer.send({ t: "command", id: 1, name: "terrain_raise", input: RAISE });
+    expect(peer.lastSnapshot().header).toMatchObject({ hasTerrain: true, terrainVersion: 1 });
+    peer.send({ t: "command", id: 2, name: "finance_take_loan", input: LOAN });
+    expect(peer.lastSnapshot().header).toMatchObject({ hasTerrain: false, terrainVersion: 1 });
+    peer.send({ t: "command", id: 3, name: "terrain_raise", input: RAISE });
+    expect(peer.lastSnapshot().header).toMatchObject({ hasTerrain: true, terrainVersion: 2 });
+  });
+
+  it("goes by the command's category, so any terrain command resends terrain", () => {
+    const { sim, host } = setup();
+    const peer = joined(host);
+    peer.send({
+      t: "command",
+      id: 1,
+      name: "terrain_set_surface",
+      input: { x: 0, y: 0, w: 2, h: 2, surface: 3 },
+    });
+    const snapshot = peer.lastSnapshot();
+    expect(snapshot.header.hasTerrain).toBe(true);
+    expect(snapshot.terrain?.surface).toEqual(sim.world.terrain.surface);
+  });
+
+  it("does not resend terrain for other categories: path, park, finance", () => {
+    const { host } = setup();
+    const peer = joined(host);
+    const inputs: Array<[string, unknown]> = [
+      ["path_build", { x: 2, y: 2, w: 2, h: 1, kind: "foot" }],
+      ["park_set_entrance", GATE],
+      ["park_set_entry_fee", { cents: 500 }],
+      ["park_rename", { name: "Nowhere" }],
+      ["finance_take_loan", LOAN],
+    ];
+    inputs.forEach(([name, input], i) => {
+      peer.clear();
+      peer.send({ t: "command", id: i + 1, name, input });
+      expect(peer.messages("result")[0]?.result).toMatchObject({ ok: true });
+      expect(peer.lastSnapshot().header, name).toMatchObject({
+        hasTerrain: false,
+        terrainVersion: 0,
+      });
+    });
+  });
+
+  it("resends terrain after undoing a terrain command, and after redoing it", () => {
+    const { sim, host } = setup();
+    const peer = joined(host);
+    const flat = sim.world.terrain.corners.slice();
+    peer.send({ t: "command", id: 1, name: "terrain_raise", input: RAISE });
+    const raised = sim.world.terrain.corners.slice();
+    peer.send({ t: "command", id: 2, name: "finance_take_loan", input: LOAN });
+    peer.send({ t: "command", id: 3, name: "terrain_raise", input: { x: 4, y: 4, w: 1, h: 1 } });
+    peer.clear();
+
+    peer.send({ t: "undo", id: 4 });
+    expect(peer.lastSnapshot().header).toMatchObject({ hasTerrain: true, terrainVersion: 3 });
+    peer.send({ t: "redo", id: 5 });
+    expect(peer.lastSnapshot().header).toMatchObject({ hasTerrain: true, terrainVersion: 4 });
+    expect(peer.lastSnapshot().terrain?.corners).toEqual(sim.world.terrain.corners);
+
+    // Undo the raise at (4, 4), then the loan, then the first raise.
+    peer.send({ t: "undo", id: 6 });
+    peer.clear();
+    peer.send({ t: "undo", id: 7 });
+    expect(peer.messages("event")[0]?.entry.name).toBe("undo");
+    expect(peer.lastSnapshot().header).toMatchObject({ hasTerrain: false, terrainVersion: 5 });
+    peer.send({ t: "undo", id: 8 });
+    expect(peer.lastSnapshot().header).toMatchObject({ hasTerrain: true, terrainVersion: 6 });
+    expect(peer.lastSnapshot().terrain?.corners).toEqual(flat);
+    expect(raised).not.toEqual(flat);
+  });
+
+  it("does not resend terrain after undoing or redoing a loan", () => {
+    const { host } = setup();
+    const peer = joined(host);
+    peer.send({ t: "command", id: 1, name: "finance_take_loan", input: LOAN });
+    peer.clear();
+    peer.send({ t: "undo", id: 2 });
+    expect(peer.messages("event")[0]?.entry.name).toBe("undo");
+    expect(peer.lastSnapshot().header).toMatchObject({ hasTerrain: false, terrainVersion: 0 });
+    peer.send({ t: "redo", id: 3 });
+    expect(peer.messages("event").at(-1)?.entry.name).toBe("redo");
+    expect(peer.lastSnapshot().header).toMatchObject({ hasTerrain: false, terrainVersion: 0 });
+  });
+
+  it("sends every client the terrain after a raise, and none after a loan", () => {
+    const { sim, host } = setup();
+    const a = joined(host);
+    const b = joined(host);
+    a.send({ t: "command", id: 1, name: "terrain_raise", input: RAISE });
+    for (const peer of [a, b]) {
+      expect(peer.lastSnapshot().terrain?.corners).toEqual(sim.world.terrain.corners);
+    }
+    a.clear();
+    b.clear();
+    b.send({ t: "command", id: 1, name: "finance_take_loan", input: LOAN });
+    for (const peer of [a, b]) expect(peer.lastSnapshot().header.hasTerrain).toBe(false);
+  });
+
+  it("sends a late client the terrain whatever was commanded since", () => {
+    const { sim, host } = setup();
+    const early = joined(host);
+    early.send({ t: "command", id: 1, name: "finance_take_loan", input: LOAN });
+    const late = connectPeer(host);
+    late.hello();
+    expect(late.lastSnapshot().header).toMatchObject({ hasTerrain: true, terrainVersion: 0 });
+    expect(late.lastSnapshot().terrain?.corners).toEqual(sim.world.terrain.corners);
+  });
+
+  it("resends terrain after an MCP-style terrain command announced with notifyExternalMutation", () => {
+    const { sim, host } = setup();
+    const peer = joined(host);
+    expect(sim.execute("terrain_raise", RAISE, "agent").ok).toBe(true);
+    host.notifyExternalMutation();
+    expect(peer.kinds()).toEqual(["event", "snapshot"]);
+    expect(peer.lastSnapshot().header).toMatchObject({ hasTerrain: true, terrainVersion: 1 });
+    expect(peer.lastSnapshot().terrain?.corners).toEqual(sim.world.terrain.corners);
+  });
+
+  it("does not resend terrain after an MCP-style loan announced with notifyExternalMutation", () => {
+    const { sim, host } = setup();
+    const peer = joined(host);
+    expect(sim.execute("finance_take_loan", LOAN, "agent").ok).toBe(true);
+    host.notifyExternalMutation();
+    expect(peer.kinds()).toEqual(["event", "snapshot"]);
+    expect(peer.lastSnapshot().header).toMatchObject({ hasTerrain: false, terrainVersion: 0 });
+  });
+
+  it("resends terrain after an external undo of a terrain command, not of a loan", () => {
+    const { sim, host } = setup();
+    const peer = joined(host);
+    sim.execute("terrain_raise", RAISE, "agent");
+    host.notifyExternalMutation();
+    peer.clear();
+    sim.undo("agent");
+    host.notifyExternalMutation();
+    expect(peer.lastSnapshot().header).toMatchObject({ hasTerrain: true, terrainVersion: 2 });
+    sim.execute("finance_take_loan", LOAN, "agent");
+    sim.undo("agent");
+    host.notifyExternalMutation();
+    expect(peer.lastSnapshot().header).toMatchObject({ hasTerrain: false, terrainVersion: 2 });
+  });
+
+  it("notices a terrain command among others by the log growing on the next tick", () => {
+    const { sim, clock, host } = setup();
+    const peer = joined(host);
+    sim.execute("finance_take_loan", LOAN, "agent");
+    sim.execute("park_rename", { name: "Elsewhere" }, "agent");
+    clock.advance(25);
+    host.tick();
+    expect(peer.kinds()).toEqual(["event", "event", "snapshot"]);
+    expect(peer.lastSnapshot().header).toMatchObject({ hasTerrain: false, terrainVersion: 0 });
+
+    peer.clear();
+    sim.execute("finance_take_loan", LOAN, "agent");
+    sim.execute("terrain_raise", RAISE, "agent");
+    sim.execute("park_rename", { name: "Elsewhere Again" }, "agent");
+    clock.advance(25);
+    host.tick();
+    expect(peer.kinds()).toEqual(["event", "event", "event", "snapshot"]);
+    expect(peer.lastSnapshot().header).toMatchObject({ hasTerrain: true, terrainVersion: 1 });
+  });
+
+  it("resends terrain, once, when the sim is given a different world", () => {
+    const { sim, clock, host } = setup();
+    const peer = joined(host);
+    sim.replaceWorld(createWorld({ width: 4, height: 6, seed: 2, name: "Other" }));
+    clock.advance(25);
+    host.tick();
+    expect(peer.lastSnapshot().header).toMatchObject({
+      hasTerrain: true,
+      terrainVersion: 1,
+      width: 4,
+      height: 6,
+    });
+    peer.clear();
+    peer.send({ t: "command", id: 1, name: "finance_take_loan", input: LOAN });
+    expect(peer.lastSnapshot().header).toMatchObject({ hasTerrain: false, terrainVersion: 1 });
+  });
+});
+
+describe("resending the paths", () => {
+  it("sends the paths with the first snapshot, then only when they change", () => {
+    const { sim, host } = setup();
+    const peer = connectPeer(host);
+    peer.hello();
+    const first = peer.lastSnapshot();
+    expect(first.header).toMatchObject({ hasPaths: true, pathVersion: 0 });
+    expect(first.paths).toEqual(sim.world.terrain.path);
+    expect(first.paths).toHaveLength(64);
+
+    for (const [name, input] of [
+      ["finance_take_loan", LOAN],
+      ["terrain_raise", RAISE],
+      ["park_rename", { name: "Quiet" }],
+      ["park_set_entry_fee", { cents: 100 }],
+    ] as const) {
+      peer.clear();
+      peer.send({ t: "command", id: 1, name, input });
+      expect(peer.lastSnapshot().header, name).toMatchObject({ hasPaths: false, pathVersion: 0 });
+      expect(peer.lastSnapshot()).not.toHaveProperty("paths");
+    }
+  });
+
+  it("sends the paths after a path is built, and the layer holds it", () => {
+    const { sim, host } = setup();
+    const peer = joined(host);
+    peer.send({
+      t: "command",
+      id: 1,
+      name: "path_build",
+      input: { x: 2, y: 2, w: 3, h: 1, kind: "queue" },
+    });
+    const snapshot = peer.lastSnapshot();
+    expect(snapshot.header).toMatchObject({ hasPaths: true, pathVersion: 1, hasTerrain: false });
+    expect(snapshot.paths).toEqual(sim.world.terrain.path);
+    expect(snapshot.paths?.[2 * 8 + 2]).toBe(2);
+    expect(snapshot.paths?.[2 * 8 + 5]).toBe(0);
+    peer.send({ t: "command", id: 2, name: "finance_take_loan", input: LOAN });
+    expect(peer.lastSnapshot().header).toMatchObject({ hasPaths: false, pathVersion: 1 });
+  });
+
+  it("sends the paths after undoing and redoing a path, and after removing one", () => {
+    const { sim, host } = setup();
+    const peer = joined(host);
+    peer.send({
+      t: "command",
+      id: 1,
+      name: "path_build",
+      input: { x: 2, y: 2, w: 2, h: 1, kind: "foot" },
+    });
+    peer.send({ t: "undo", id: 2 });
+    expect(peer.lastSnapshot().header).toMatchObject({ hasPaths: true, pathVersion: 2 });
+    expect(peer.lastSnapshot().paths?.every((tile) => tile === 0)).toBe(true);
+    peer.send({ t: "redo", id: 3 });
+    expect(peer.lastSnapshot().header).toMatchObject({ hasPaths: true, pathVersion: 3 });
+    expect(peer.lastSnapshot().paths?.[2 * 8 + 2]).toBe(1);
+    peer.send({
+      t: "command",
+      id: 4,
+      name: "path_remove",
+      input: { x: 2, y: 2, w: 1, h: 1 },
+    });
+    expect(peer.lastSnapshot().header).toMatchObject({ hasPaths: true, pathVersion: 4 });
+    expect(peer.lastSnapshot().paths).toEqual(sim.world.terrain.path);
+  });
+
+  it("sends the paths when the entrance is placed, because it clears the tile under it", () => {
+    const { sim, host } = setup();
+    const peer = joined(host);
+    peer.send({ t: "command", id: 1, name: "park_set_entrance", input: GATE });
+    expect(peer.lastSnapshot().header).toMatchObject({ hasPaths: true, pathVersion: 1 });
+    expect(peer.lastSnapshot().header.park.entrance).toEqual({ x: 0, y: 3, side: 3 });
+    expect(peer.lastSnapshot().paths).toEqual(sim.world.terrain.path);
+  });
+
+  it("sends paths to a client that is behind and to nobody else", () => {
+    const { sim, clock, host } = setup();
+    const a = joined(host);
+    const b = joined(host);
+    a.send({
+      t: "command",
+      id: 1,
+      name: "path_build",
+      input: { x: 1, y: 1, w: 1, h: 1, kind: "foot" },
+    });
+    expect(a.lastSnapshot().header.hasPaths).toBe(true);
+    expect(b.lastSnapshot().header.hasPaths).toBe(true);
+
+    // A late client is behind on everything; the two that are up to date hear no paths.
+    const c = connectPeer(host);
+    c.hello();
+    expect(c.lastSnapshot().header).toMatchObject({ hasPaths: true, pathVersion: 1 });
+    expect(c.lastSnapshot().paths).toEqual(sim.world.terrain.path);
+    a.clear();
+    b.clear();
+    c.clear();
+    clock.advance(50);
+    host.tick();
+    for (const peer of [a, b, c]) {
+      expect(peer.lastSnapshot().header).toMatchObject({ hasPaths: false, pathVersion: 1 });
+    }
+
+    // Asking for a snapshot gives that client everything and nobody else anything.
+    a.clear();
+    b.clear();
+    b.send({ t: "snapshot", id: 7 });
+    expect(b.lastSnapshot().header).toMatchObject({ hasTerrain: true, hasPaths: true });
+    expect(a.received).toEqual([]);
+  });
+
+  it("sends the paths again after a different world, though its version matches", () => {
+    const { sim, clock, host } = setup();
+    const peer = joined(host);
+    // The new world's path layer is at version 0, the same as the one the client was sent.
+    const other = createWorld({ width: 8, height: 8, seed: 3, name: "Other" });
+    other.terrain.path[10] = 1;
+    sim.replaceWorld(other);
+    clock.advance(25);
+    host.tick();
+    const snapshot = peer.lastSnapshot();
+    expect(snapshot.header).toMatchObject({ hasPaths: true, hasTerrain: true });
+    expect(snapshot.paths?.[10]).toBe(1);
+    peer.clear();
+    peer.send({ t: "command", id: 1, name: "finance_take_loan", input: LOAN });
+    expect(peer.lastSnapshot().header).toMatchObject({ hasPaths: false, hasTerrain: false });
+  });
+
+  it("sends the paths after an MCP-style path command, and notices one on the next tick", () => {
+    const { sim, clock, host } = setup();
+    const peer = joined(host);
+    sim.execute("path_build", { x: 3, y: 3, w: 1, h: 1, kind: "foot" }, "agent");
+    host.notifyExternalMutation();
+    expect(peer.lastSnapshot().header).toMatchObject({ hasPaths: true, pathVersion: 1 });
+    expect(peer.lastSnapshot().paths?.[3 * 8 + 3]).toBe(1);
+    peer.clear();
+    sim.execute("path_build", { x: 4, y: 3, w: 1, h: 1, kind: "foot" }, "agent");
+    clock.advance(25);
+    host.tick();
+    expect(peer.lastSnapshot().header).toMatchObject({ hasPaths: true, pathVersion: 2 });
+    expect(peer.lastSnapshot().paths?.[3 * 8 + 4]).toBe(1);
+  });
+});
+
+describe("guests in snapshots", () => {
+  it("sends an empty guest section while there are no guests", () => {
+    const { clock, host } = setup();
+    const peer = connectPeer(host);
+    peer.hello();
+    for (const snapshot of peer.snapshots()) {
+      expect(snapshot.header.guestCount).toBe(0);
+      expect(snapshot.guests.count).toBe(0);
+      expect(snapshot.guests.id).toHaveLength(0);
+    }
+    peer.clear();
+    clock.advance(50);
+    host.tick();
+    expect(peer.lastSnapshot().guests).toMatchObject({ count: 0 });
+    expect(peer.lastSnapshot().header.guestCount).toBe(0);
+  });
+
+  it("sends every guest in every snapshot, with the sim's own values", () => {
+    const sim = makeSim();
+    admit(sim, 3);
+    const host = new SimHostServer(sim, { timers: fakeTimers() });
+    const peer = connectPeer(host);
+    peer.hello();
+    const g = sim.world.guests;
+    const check = (snapshot: ReturnType<Peer["lastSnapshot"]>) => {
+      expect(snapshot.header.guestCount).toBe(g.count);
+      expect(snapshot.guests.count).toBe(g.count);
+      expect(snapshot.guests.id).toEqual(g.id.slice(0, g.count));
+      expect(snapshot.guests.x).toEqual(g.x.slice(0, g.count));
+      expect(snapshot.guests.y).toEqual(g.y.slice(0, g.count));
+      expect(snapshot.guests.state).toEqual(g.state.slice(0, g.count));
+      expect(snapshot.guests.color).toEqual(g.color.slice(0, g.count));
+      expect(snapshot.guests.happiness).toEqual(g.happiness.slice(0, g.count));
+    };
+    check(peer.lastSnapshot());
+    expect(peer.lastSnapshot().guests.count).toBeGreaterThanOrEqual(3);
+
+    // Without terrain or paths, after a command, and after a speed change.
+    peer.clear();
+    peer.send({ t: "command", id: 1, name: "finance_take_loan", input: LOAN });
+    expect(peer.lastSnapshot().header).toMatchObject({ hasTerrain: false, hasPaths: false });
+    check(peer.lastSnapshot());
+    peer.clear();
+    peer.send({ t: "speed", id: 2, speed: 4 });
+    check(peer.lastSnapshot());
+    peer.clear();
+    peer.send({ t: "snapshot", id: 3 });
+    check(peer.lastSnapshot());
+  });
+
+  it("shows a guest moving between two periodic snapshots", () => {
+    const sim = makeSim();
+    admit(sim, 1);
+    const clock = fakeTimers();
+    const host = new SimHostServer(sim, { timers: clock });
+    const peer = connectPeer(host);
+    peer.hello();
+    peer.clear();
+
+    clock.advance(50);
+    host.tick();
+    const before = peer.lastSnapshot();
+    peer.clear();
+    clock.advance(200);
+    host.tick();
+    const after = peer.lastSnapshot();
+    expect(after.header.tick).toBeGreaterThan(before.header.tick);
+
+    // The first guest walks in from the lane outside the west edge, so it moves along x.
+    const id = before.guests.id[0] as number;
+    const was = before.guests.id.indexOf(id);
+    const now = after.guests.id.indexOf(id);
+    expect(was).toBeGreaterThanOrEqual(0);
+    expect(now).toBeGreaterThanOrEqual(0);
+    expect(after.guests.x[now]).toBeGreaterThan(before.guests.x[was] as number);
+    expect(after.guests.y[now]).toBe(before.guests.y[was]);
+  });
+
+  it("sends the live guests when a fault leaves the store unpacked", () => {
+    const sim = makeSim();
+    admit(sim, 3);
+    const g = sim.world.guests;
+    const gone = g.id[0] as number;
+    // What a tick that threw after a guest left, and before the store was packed, leaves behind.
+    g.live[0] = 0;
+    g.count--;
+    g.fragmented = true;
+    const peer = connectPeer(new SimHostServer(sim, { timers: fakeTimers() }));
+    peer.hello();
+    const { guests, header } = peer.lastSnapshot();
+    expect(header.guestCount).toBe(g.count);
+    expect(guests.count).toBe(g.count);
+    expect(Array.from(guests.id)).not.toContain(gone);
+    const live: number[] = [];
+    for (let slot = 0; slot < g.live.length; slot++) if (g.live[slot] === 1) live.push(g.id[slot]!);
+    expect(Array.from(guests.id)).toEqual(live);
+  });
+
+  it("sends a fresh section each time, never a view of the sim's arrays", () => {
+    const sim = makeSim();
+    admit(sim, 1);
+    const clock = fakeTimers();
+    const host = new SimHostServer(sim, { timers: clock });
+    const peer = connectPeer(host);
+    peer.hello();
+    const first = peer.lastSnapshot();
+    const x = Array.from(first.guests.x);
+    sim.step(40);
+    expect(Array.from(first.guests.x)).toEqual(x);
+    expect(first.guests.x.buffer).not.toBe(sim.world.guests.x.buffer);
+  });
+});
+
+describe("a protocol 1 host", () => {
+  it("is refused by SimClient.connect through the existing error path", async () => {
+    const [hostSide, clientSide] = createLinkedTransports();
+    // What a protocol 1 host does with a hello that names protocol 2.
+    hostSide.onMessage((frame) => {
+      const hello = JSON.parse(frame as string) as { protocol: number };
+      if (hello.protocol !== 1) {
+        hostSide.send(JSON.stringify({ t: "error", message: "Unsupported protocol version" }));
+        hostSide.close();
+      }
+    });
+    const client = new SimClient(clientSide);
+    await expect(client.connect()).rejects.toThrow("Unsupported protocol version");
   });
 });
