@@ -73,6 +73,8 @@ export interface ViewportProps {
   rides?: readonly RidePublic[] | null;
   /** Reads what every ride is doing in the latest snapshot, on the same terms as `getGuests`. */
   getRideStatus?(): RideStatusSection | null;
+  /** The sim's speed (0 paused, 1, 2, 4 or 8), which the rides move by. 1 when not given. */
+  simSpeed?: number;
   /** Filled with the view's handle while the view is up. */
   ref?: Ref<ViewportHandle>;
 }
@@ -343,6 +345,7 @@ export function Viewport(props: ViewportProps) {
     park();
     scene.setGridVisible(latest.current.placement !== null);
     scene.setTimeOfDay(timeOfDay(latest.current.tick));
+    scene.setSimSpeed(latest.current.simSpeed ?? 1);
 
     const outline = () => {
       const { terrain, placement } = latest.current;
@@ -642,6 +645,10 @@ export function Viewport(props: ViewportProps) {
   useEffect(() => {
     parkRef.current?.();
   }, [props.paths]);
+
+  useEffect(() => {
+    live.current?.scene.setSimSpeed(props.simSpeed ?? 1);
+  }, [props.simSpeed]);
 
   // The build grid shows while there is something to place, and only then.
   useEffect(() => {

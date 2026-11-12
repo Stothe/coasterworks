@@ -67,6 +67,8 @@ export interface GuestMoment {
   id: ArrayLike<number>;
   x: ArrayLike<number>;
   y: ArrayLike<number>;
+  /** Each guest's `GuestState`, when known: a guest getting on or off a ride is not walked. */
+  state?: ArrayLike<number>;
   atMs: number;
 }
 
@@ -77,6 +79,8 @@ export interface GuestPlaces {
   /** In the snapshot's units, 1/32 of a tile, but no longer whole numbers. */
   x: Float32Array;
   y: Float32Array;
+  /** Each guest's state in `latest` (0 where `latest` has none). */
+  state: Uint8Array;
   /**
    * For each guest its index in `previous`, or -1 when it is drawn where `latest` has it because
    * it was not in `previous` or is too far from where it was to have walked there.
@@ -93,6 +97,7 @@ export function createGuestPlaces(capacity: number): GuestPlaces {
     id: new Int32Array(capacity),
     x: new Float32Array(capacity),
     y: new Float32Array(capacity),
+    state: new Uint8Array(capacity),
     from: new Int32Array(capacity),
     k: 1,
   };
@@ -169,12 +174,20 @@ export function interpolateGuests(
       }
     }
     out.id[i] = id;
+    const state = latest.state ? (latest.state[i] as number) : 0;
+    out.state[i] = state;
     if (j >= 0 && previous) {
       const px = previous.x[j] as number;
       const py = previous.y[j] as number;
       const dx = x - px;
       const dy = y - py;
-      if (dx * dx + dy * dy <= GUEST_JUMP_UNITS * GUEST_JUMP_UNITS) {
+      // A guest riding is at the ride's middle, out of sight: getting on or off is a jump, not a
+      // walk from or to the middle.
+      const boarding =
+        previous.state !== undefined &&
+        latest.state !== undefined &&
+        (previous.state[j] === RIDING) !== (state === RIDING);
+      if (!boarding && dx * dx + dy * dy <= GUEST_JUMP_UNITS * GUEST_JUMP_UNITS) {
         out.x[i] = px + dx * k;
         out.y[i] = py + dy * k;
         out.from[i] = j;
@@ -1177,6 +1190,7 @@ export function createGuests(ctx: RenderContext): GuestsModule {
     latest.id = section.id;
     latest.x = section.x;
     latest.y = section.y;
+    latest.state = section.state;
     latest.atMs = atMs;
     hasLatest = true;
     // The carried places are where guests were one span ago, as far as the timing goes.

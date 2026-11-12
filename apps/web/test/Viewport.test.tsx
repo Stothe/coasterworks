@@ -56,6 +56,7 @@ vi.mock("@coasterworks/render", () => ({
       setGuests: record("setGuests"),
       setRides: record("setRides"),
       setRideStatus: record("setRideStatus"),
+      setSimSpeed: record("setSimSpeed"),
       setEntrance: record("setEntrance"),
       setGridVisible: record("setGridVisible"),
       setQuality: record("setQuality"),
@@ -568,6 +569,19 @@ describe("Viewport: the rides", () => {
     view.rerender(<Viewport {...props} rides={second} />);
     frames(100);
     expect(callsTo("setRides")).toEqual([[first], [second]]);
+  });
+
+  it("gives the scene the sim's speed, so rides move in sim time, and again when it changes", () => {
+    const props: ViewportProps = { terrain, tick: 0, client, onResult: vi.fn(), simSpeed: 4 };
+    const view = render(<Viewport {...props} />);
+    expect(callsTo("setSimSpeed").at(-1)).toEqual([4]);
+    view.rerender(<Viewport {...props} simSpeed={0} />);
+    expect(callsTo("setSimSpeed").at(-1)).toEqual([0]);
+  });
+
+  it("runs the scene at speed 1 when the host gives none", () => {
+    mount();
+    expect(callsTo("setSimSpeed").at(-1)).toEqual([1]);
   });
 
   it("gives null rides and no status when the host has none", () => {

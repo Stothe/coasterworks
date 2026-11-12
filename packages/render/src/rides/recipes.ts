@@ -66,6 +66,11 @@ export interface RideModel {
   readonly id: string;
   readonly detail: RideDetail;
   readonly box: RideBox;
+  /**
+   * The boxes a ride is picked by, each on the footprint's middle, y from the ground: one (`box`)
+   * for most models, several for one with open areas that must not be clicked on.
+   */
+  readonly picks: readonly RideBox[];
   /** Radians a second at full speed. 0 for a stall, which does not move. */
   readonly spinRate: number;
   /** Triangles one instance draws, instanced parts counted for every instance. */
@@ -197,11 +202,13 @@ function modelOf(
   geometries: BufferGeometry[],
   triangles: number,
   instantiate: (material: Material) => RideInstance,
+  picks: readonly RideBox[] = [box],
 ): RideModel {
   return {
     id,
     detail,
     box,
+    picks,
     spinRate,
     triangles,
     geometries,
@@ -499,6 +506,12 @@ function bigWheel(detail: RideDetail): RideModel {
       instance.pose(0);
       return instance;
     },
+    [
+      // The base and the feet of the A-frames, then the wheel's own plane (rims, hub and the top
+      // of the frames): the wheel's open areas to the sides and corners are not it.
+      { halfX: 0.92, halfZ: 1.9, height: 0.5 },
+      { halfX: WHEEL_RIM_X + 0.1, halfZ: R + 0.17, height: H + R + 0.1 },
+    ],
   );
 }
 

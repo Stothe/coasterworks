@@ -122,6 +122,11 @@ export interface SceneHandle {
    */
   setRideStatus(status: RideStatusSection | null): void;
   /**
+   * How fast the sim runs: 0 paused, 1, 2, 4 or 8. Rides move in sim time, so they hold still
+   * while paused and run faster with the sim. 1 until told.
+   */
+  setSimSpeed(speed: number): void;
+  /**
    * Draws a ride of `type` see-through on its footprint at (`x`, `y`) turned `rot` (quarter turns
    * clockwise), tinted green when `ok` and red when the sim would refuse it; null hides it.
    */
@@ -587,6 +592,9 @@ export function createScene(canvas: HTMLCanvasElement, opts: SceneOptions = {}):
     },
     setPlacementGhost(ghost: PlacementGhost | null): void {
       rides?.setPlacementGhost(ghost);
+    },
+    setSimSpeed(speed: number): void {
+      rides?.setSimSpeed(speed);
     },
     setGridVisible(on: boolean): void {
       overlay?.setGridVisible(on);

@@ -344,6 +344,7 @@ describe("the terrain tray's charge", () => {
       "paths",
       "ref",
       "rides",
+      "simSpeed",
       "terrain",
       "tick",
     ]);

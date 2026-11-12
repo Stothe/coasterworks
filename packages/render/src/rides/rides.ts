@@ -42,7 +42,13 @@ export type RidesModule = SceneModule & {
   setRideStatus(status: RideStatusSection | null): void;
   setPlacementGhost(ghost: PlacementGhost | null): void;
   /**
-   * The ride a world-space ray hits first (its box: footprint and height), with how far along
+   * How fast the sim runs: 0 is paused, 1, 2, 4 and 8 are multipliers. Rides move in sim time:
+   * paused they hold their pose, and at 8x they ease up and down, and turn, eight times faster.
+   */
+  setSimSpeed(speed: number): void;
+  /**
+   * The ride a world-space ray hits first (its pick boxes: most are one box of footprint and
+   * height, a big wheel's are its base and its disc), with how far along
    * the ray (in units of the ray's direction made unit length), or null. With `reach`, only a
    * hit nearer than that counts.
    */
@@ -102,13 +108,8 @@ interface Entry {
   motion: RideMotion;
   /** Whether a status has been seen yet: the first one sets the speed outright. */
   seen: boolean;
-  /** The world box the ride is picked by. */
-  minX: number;
-  maxX: number;
-  minY: number;
-  maxY: number;
-  minZ: number;
-  maxZ: number;
+  /** The world boxes the ride is picked by, six numbers each: minX, maxX, minY, maxY, minZ, maxZ. */
+  boxes: number[];
 }
 
 /**
@@ -160,6 +161,7 @@ export function createRides(ctx: RenderContext): RidesModule {
   let status: RideStatusSection | null = null;
   let ghostSpec: PlacementGhost | null = null;
   let ghost: { model: RideModel; instance: RideInstance; ok: boolean } | null = null;
+  let simSpeed = 1;
 
   const castsShadow = () => ctx.quality !== "low";
   const receivesShadow = () => !(ctx.software && ctx.quality === "low");
@@ -186,7 +188,7 @@ export function createRides(ctx: RenderContext): RidesModule {
     }
   }
 
-  /** Places `instance` on the footprint of a `type` ride at (x, y) turned `rot`; returns its box. */
+  /** Places `instance` on the footprint of a `type` ride at (x, y) turned `rot`; returns its pick boxes. */
   function seat(
     instance: RideInstance,
     model: RideModel,
@@ -194,7 +196,7 @@ export function createRides(ctx: RenderContext): RidesModule {
     x: number,
     y: number,
     rot: Rot,
-  ): [number, number, number, number, number, number] {
+  ): number[] {
     const content = typeById(type);
     const footprint = content ? rotatedFootprint(content.footprint, rot) : { w: 1, h: 1 };
     const front: Side = content && content.kind === "stall" ? (content.front as Side) : 2;
@@ -209,9 +211,13 @@ export function createRides(ctx: RenderContext): RidesModule {
     group.matrixAutoUpdate = false;
     group.updateMatrixWorld(true);
     const across = side === 1 || side === 3;
-    const hx = across ? model.box.halfZ : model.box.halfX;
-    const hz = across ? model.box.halfX : model.box.halfZ;
-    return [cx - hx, cx + hx, ground, ground + model.box.height, cz - hz, cz + hz];
+    const boxes: number[] = [];
+    for (const box of model.picks) {
+      const hx = across ? box.halfZ : box.halfX;
+      const hz = across ? box.halfX : box.halfZ;
+      boxes.push(cx - hx, cx + hx, ground, ground + box.height, cz - hz, cz + hz);
+    }
+    return boxes;
   }
 
   function shade(instance: RideInstance, ghostly: boolean): void {
@@ -227,14 +233,7 @@ export function createRides(ctx: RenderContext): RidesModule {
     ctx.scene.add(instance.group);
     // Rides of a kind do not turn in step.
     const motion = { angle: (place.id * 2.399) % (Math.PI * 2), speed: 0 };
-    const [minX, maxX, minY, maxY, minZ, maxZ] = seat(
-      instance,
-      model,
-      place.type,
-      place.x,
-      place.y,
-      place.rot,
-    );
+    const boxes = seat(instance, model, place.type, place.x, place.y, place.rot);
     instance.pose(motion.angle, 0);
     return {
       id: place.id,
@@ -247,12 +246,7 @@ export function createRides(ctx: RenderContext): RidesModule {
       instance,
       motion,
       seen: false,
-      minX,
-      maxX,
-      minY,
-      maxY,
-      minZ,
-      maxZ,
+      boxes,
     };
   }
 
@@ -277,14 +271,7 @@ export function createRides(ctx: RenderContext): RidesModule {
           kept.x = place.x;
           kept.y = place.y;
           kept.rot = place.rot;
-          [kept.minX, kept.maxX, kept.minY, kept.maxY, kept.minZ, kept.maxZ] = seat(
-            kept.instance,
-            kept.model,
-            kept.type,
-            kept.x,
-            kept.y,
-            kept.rot,
-          );
+          kept.boxes = seat(kept.instance, kept.model, kept.type, kept.x, kept.y, kept.rot);
         }
         next.push(kept);
       } else {
@@ -355,6 +342,8 @@ export function createRides(ctx: RenderContext): RidesModule {
   }
 
   function update(frame: FrameInfo): void {
+    // Rides move in sim time: the frame's seconds, scaled by the sim's speed (0 holds them).
+    const dt = frame.dt * simSpeed;
     const s = status;
     let j = 0;
     for (const e of entries) {
@@ -372,7 +361,7 @@ export function createRides(ctx: RenderContext): RidesModule {
         e.seen = true;
         e.motion.speed = motionTarget(phase, e.open);
       }
-      stepMotion(e.motion, phase, e.open, frame.dt, e.model.spinRate);
+      stepMotion(e.motion, phase, e.open, dt, e.model.spinRate);
       e.instance.pose(e.motion.angle, e.motion.speed);
     }
   }
@@ -383,14 +372,27 @@ export function createRides(ctx: RenderContext): RidesModule {
       status = next;
     },
     setPlacementGhost: showGhost,
+    setSimSpeed(speed: number): void {
+      simSpeed = speed > 0 ? speed : 0;
+    },
     pickAt(ray: Ray, reach = Infinity): { id: number; distance: number } | null {
       let best = reach;
       let hit: number | null = null;
       for (const e of entries) {
-        const t = rayBoxDistance(ray, e.minX, e.maxX, e.minY, e.maxY, e.minZ, e.maxZ);
-        if (t < best) {
-          best = t;
-          hit = e.id;
+        for (let b = 0; b < e.boxes.length; b += 6) {
+          const t = rayBoxDistance(
+            ray,
+            e.boxes[b] as number,
+            e.boxes[b + 1] as number,
+            e.boxes[b + 2] as number,
+            e.boxes[b + 3] as number,
+            e.boxes[b + 4] as number,
+            e.boxes[b + 5] as number,
+          );
+          if (t < best) {
+            best = t;
+            hit = e.id;
+          }
         }
       }
       return hit === null ? null : { id: hit, distance: best };
@@ -399,14 +401,7 @@ export function createRides(ctx: RenderContext): RidesModule {
     setTerrain(): void {
       // The ground under the rides may have moved.
       for (const e of entries) {
-        [e.minX, e.maxX, e.minY, e.maxY, e.minZ, e.maxZ] = seat(
-          e.instance,
-          e.model,
-          e.type,
-          e.x,
-          e.y,
-          e.rot,
-        );
+        e.boxes = seat(e.instance, e.model, e.type, e.x, e.y, e.rot);
       }
       if (ghost && ghostSpec)
         seat(ghost.instance, ghost.model, ghostSpec.type, ghostSpec.x, ghostSpec.y, ghostSpec.rot);

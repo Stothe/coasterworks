@@ -75,9 +75,10 @@ function LiveStatusPills({
 function LiveViewport({
   source,
   ...rest
-}: Omit<ViewportProps, "tick"> & { source: SnapshotSource }) {
+}: Omit<ViewportProps, "tick" | "simSpeed"> & { source: SnapshotSource }) {
   const tick = useSnapshot(source, (snapshot) => snapshot?.header.tick ?? 0);
-  return <Viewport {...rest} tick={tick} />;
+  const simSpeed = useSnapshot(source, (snapshot) => snapshot?.header.speed ?? 1);
+  return <Viewport {...rest} tick={tick} simSpeed={simSpeed} />;
 }
 
 export function App() {

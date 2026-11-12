@@ -323,6 +323,76 @@ describe("createRides", () => {
     expect(() => h.step(0.05)).not.toThrow();
   });
 
+  describe("on sim time", () => {
+    /** How far the wheel (children: frame, spin node, gondolas) has turned from `from`. */
+    const spinOf = (h: ReturnType<typeof harness>) => {
+      const e = (h.scene.children[0] as Object3D).children[1]?.matrix.elements as number[];
+      return Math.atan2(e[6] as number, e[5] as number);
+    };
+    const turned = (a: number, b: number) => ((a - b + 3 * Math.PI) % (2 * Math.PI)) - Math.PI;
+    /** A wheel that was seen stopped, then told to run, with the sim at `speed`. */
+    const starting = (speed: number) => {
+      const h = harness();
+      h.rides.setRides([ride(1, "big_wheel", 8, 2)]);
+      h.rides.setSimSpeed(speed);
+      h.rides.setRideStatus(status([[1, 1]]));
+      h.step(0.05);
+      h.rides.setRideStatus(status([[1, 2]]));
+      return h;
+    };
+
+    it("holds a running ride's pose while the sim is paused", () => {
+      const h = harness();
+      h.rides.setRides([ride(1, "big_wheel", 8, 2)]);
+      h.rides.setRideStatus(status([[1, 2]]));
+      h.step(0.05);
+      const before = (h.scene.children[0] as Object3D).children.map((c) =>
+        c.matrix.elements.slice(),
+      );
+      h.rides.setSimSpeed(0);
+      for (let i = 0; i < 200; i++) h.step(0.05);
+      const after = (h.scene.children[0] as Object3D).children.map((c) =>
+        c.matrix.elements.slice(),
+      );
+      expect(after).toEqual(before);
+      // And it picks up again where it was.
+      h.rides.setSimSpeed(1);
+      for (let i = 0; i < 20; i++) h.step(0.05);
+      expect((h.scene.children[0] as Object3D).children[1]?.matrix.elements).not.toEqual(before[1]);
+    });
+
+    it("eases and turns eight times sooner at 8x, as in the sim's own time", () => {
+      // The same eight sim seconds: 80 frames of 0.1 s at 1x, 80 frames of 0.0125 s at 8x.
+      const slow = starting(1);
+      const fast = starting(8);
+      const slowStart = spinOf(slow);
+      const fastStart = spinOf(fast);
+      for (let i = 0; i < 80; i++) {
+        slow.step(0.1);
+        fast.step(0.0125);
+      }
+      const slowTurn = turned(spinOf(slow), slowStart);
+      const fastTurn = turned(spinOf(fast), fastStart);
+      expect(slowTurn).toBeGreaterThan(1);
+      expect(fastTurn).toBeCloseTo(slowTurn, 6);
+      // Not yet at speed after a wall second at 1x, but there after one at 8x.
+      const a = starting(1);
+      const b = starting(8);
+      for (let i = 0; i < 20; i++) {
+        a.step(0.05);
+        b.step(0.05);
+      }
+      const perFrame = (h: ReturnType<typeof harness>, dt: number) => {
+        const was = spinOf(h);
+        h.step(dt);
+        return turned(spinOf(h), was) / dt;
+      };
+      // The wheel turns 0.32 radians per sim second at full speed.
+      expect(perFrame(a, 0.05)).toBeLessThan(0.32 * 0.8);
+      expect(perFrame(b, 0.05) / 8).toBeGreaterThan(0.32 * 0.95);
+    });
+  });
+
   it("draws the placement ghost see-through, tinted by whether it may go there", () => {
     const h = harness();
     h.rides.setPlacementGhost({ type: "drinks_stand", x: 4, y: 4, rot: 0, ok: true });
@@ -415,6 +485,26 @@ describe("picking rides", () => {
     const back = { origin: { x: 15, y: GROUND + 0.5, z: 1.5 }, direction: { x: -1, y: 0, z: 0 } };
     expect(h.rides.pickAt(back)?.id).toBe(2);
     expect(h.rides.pickAt(back, 2)).toBeNull();
+  });
+
+  it("lets a ray through the big wheel's empty corners go by, but hits its disc, frame and base", () => {
+    const h = harness();
+    h.rides.setRides([ride(1, "big_wheel", 0, 0)]);
+    // The wheel stands on x 0..2, z 0..4 (its disc is in the plane x = 1, the centre); the axle is 2.1 high.
+    const along = (y: number, z: number, x: number, dir: "x" | "z") => ({
+      origin: dir === "x" ? { x: -5, y: GROUND + y, z } : { x, y: GROUND + y, z: -5 },
+      direction: dir === "x" ? { x: 1, y: 0, z: 0 } : { x: 0, y: 0, z: 1 },
+    });
+    // The top corner of the old footprint-wide box: clear.
+    expect(h.rides.pickAt(along(3.4, 0, 1.6, "z"))).toBeNull();
+    expect(h.rides.pickAt(along(3.4, 3.85, 0, "x"))).toBeNull();
+    // Through the disc, the frame and the base.
+    expect(h.rides.pickAt(along(3.4, 2, 1, "x"))?.id).toBe(1);
+    expect(h.rides.pickAt(along(2.1, 2, 1, "x"))?.id).toBe(1);
+    expect(h.rides.pickAt(along(0.2, 0.7, 0.2, "z"))?.id).toBe(1);
+    // From above, the base's top is what is hit, not the disc's height.
+    const down = { origin: { x: 0.2, y: GROUND + 9, z: 0.3 }, direction: { x: 0, y: -1, z: 0 } };
+    expect(h.rides.pickAt(down)?.distance).toBeCloseTo(8.5, 5);
   });
 
   it("measures distances along the ray made unit length", () => {

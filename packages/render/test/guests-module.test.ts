@@ -293,4 +293,25 @@ describe("createGuests", () => {
     expect(h.guests.pickAt(down(3.5, 3.5))).toEqual({ id: 1 });
     expect(h.guests.pickAt(down(9.5, 9.5))).toEqual({ id: 3 });
   });
+
+  it("puts a guest that gets off a ride where the snapshot has it, not sliding from the middle", () => {
+    const h = harness();
+    const first = section([[1, 6.5, 6.5]]);
+    first.state.set([GuestState.RIDING]);
+    h.guests.setGuests(first, 1000);
+    const second = section([[1, 8.5, 6.5]]);
+    second.state.set([GuestState.HEADING]);
+    h.guests.setGuests(second, 1050);
+    // The start of the span, when a walking guest is still where the snapshot before had it.
+    h.update(1050);
+    expect(h.place(0)[0]).toBeCloseTo(8.5, 5);
+    // A guest that stays walking still slides.
+    const third = section([[1, 9.5, 6.5]]);
+    third.state.set([GuestState.HEADING]);
+    h.guests.setGuests(third, 1100);
+    h.update(1100);
+    expect(h.place(0)[0]).toBeCloseTo(8.5, 5);
+    h.update(1125);
+    expect(h.place(0)[0]).toBeCloseTo(9, 5);
+  });
 });
