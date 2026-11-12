@@ -50,12 +50,25 @@ interface Live {
 function LiveStatusPills({
   source,
   ...rest
-}: Omit<StatusPillsProps, "cash" | "monthChange" | "date"> & { source: SnapshotSource }) {
+}: Omit<StatusPillsProps, "cash" | "monthChange" | "date" | "guests" | "rating"> & {
+  source: SnapshotSource;
+}) {
   const cash = useSnapshot(source, (snapshot) => snapshot?.header.cash);
+  const guests = useSnapshot(source, (snapshot) => snapshot?.header.park.guestsInPark);
+  const rating = useSnapshot(source, (snapshot) => snapshot?.header.park.rating);
   const monthStartCash = useSnapshot(source, (snapshot) => snapshot?.header.monthStartCash);
   const date = useSnapshot(source, (snapshot) => snapshot?.header.date);
   if (cash === undefined || monthStartCash === undefined || date === undefined) return null;
-  return <StatusPills cash={cash} monthChange={cash - monthStartCash} date={date} {...rest} />;
+  return (
+    <StatusPills
+      cash={cash}
+      monthChange={cash - monthStartCash}
+      date={date}
+      {...(guests !== undefined && { guests })}
+      {...(rating !== undefined && { rating })}
+      {...rest}
+    />
+  );
 }
 
 /** The view, with the time of day following the sim's tick. */
@@ -383,6 +396,8 @@ export function App() {
               ctx={ctx}
               lastCharge={lastCharge}
               onError={(message) => push(message, { kind: "error" })}
+              source={host}
+              execute={execute}
               disabled={disconnected}
             />
             <Dock

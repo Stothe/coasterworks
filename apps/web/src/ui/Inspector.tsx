@@ -1,4 +1,5 @@
 import type { TerrainData } from "@coasterworks/render";
+import { useMemo } from "react";
 import type { ExecResult } from "@coasterworks/sim";
 import type { Action, ActionContext, InspectorTab } from "../actions/types";
 import { uiStore, useUiStore } from "../state/uiStore";
@@ -6,6 +7,9 @@ import type { SnapshotSource } from "../state/useSnapshot";
 import { useParkInfo } from "../state/useParkInfo";
 import type { TileRect, TimelineEntry } from "../state/useTimeline";
 import { ParkFinances } from "./inspector/ParkFinances";
+import { useParkState } from "../state/useParkState";
+import { EntranceInspector } from "./inspector/EntranceInspector";
+import { GuestInspector, type QueryFn } from "./inspector/GuestInspector";
 import { ParkOverview } from "./inspector/ParkOverview";
 import { TileInspector } from "./inspector/TileInspector";
 import { tileInfo } from "./inspector/tileInfo";
@@ -74,6 +78,10 @@ export function Inspector(props: InspectorProps) {
     >
       {selection?.kind === "tile" ? (
         <TilePanel {...props} x={selection.x} y={selection.y} />
+      ) : selection?.kind === "guest" ? (
+        <GuestPanel {...props} id={selection.id} />
+      ) : selection?.kind === "entrance" ? (
+        <EntrancePanel {...props} />
       ) : (
         <ParkPanel {...props} />
       )}
@@ -111,6 +119,28 @@ function TilePanel({
   );
 }
 
+function GuestPanel({ ctx, id }: InspectorProps & { id: number }) {
+  const client = ctx?.client ?? null;
+  const query = useMemo<QueryFn | null>(
+    () => (client ? (name, input) => client.query(name, input) : null),
+    [client],
+  );
+  return (
+    <Panel title="Guest" actions={closeButton}>
+      <GuestInspector id={id} query={query} />
+    </Panel>
+  );
+}
+
+function EntrancePanel({ source, ctx, execute, notify }: InspectorProps) {
+  const park = useParkState(source);
+  return (
+    <Panel title="Park entrance" actions={closeButton}>
+      <EntranceInspector park={park} execute={execute} notify={notify} disabled={ctx === null} />
+    </Panel>
+  );
+}
+
 function ParkPanel({
   source,
   parkName,
@@ -125,6 +155,7 @@ function ParkPanel({
   // The tile's tab is no tab of the park's: a park that is shown while it is current shows Overview.
   const shown: ParkTab = tab === "tile" ? "overview" : tab;
   const info = useParkInfo(source, parkName);
+  const park = useParkState(source);
   return (
     <Panel title={parkName ?? "Park"} actions={closeButton}>
       {info && <Status>{info.date}</Status>}
@@ -133,7 +164,7 @@ function ParkPanel({
         value={shown}
         onValueChange={(next) => uiStore.getState().openInspector(next as ParkTab)}
         tabs={[
-          { id: "overview", label: "Overview", content: <ParkOverview info={info} /> },
+          { id: "overview", label: "Overview", content: <ParkOverview info={info} park={park} /> },
           {
             id: "finances",
             label: "Finances",

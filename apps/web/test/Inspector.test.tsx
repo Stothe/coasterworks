@@ -168,7 +168,9 @@ describe("Inspector: the park", () => {
     renderInspector();
     expect(screen.getByText("$15,000.00")).toBeTruthy();
     expect(screen.getByText("$5,000.00")).toBeTruthy();
-    expect(screen.getAllByText("Coming with guests")).toHaveLength(2);
+    // And the gate and guests, from the snapshot's park.
+    expect(screen.getByText("Admissions")).toBeTruthy();
+    expect(screen.queryByText("Coming with guests")).toBeNull();
   });
 
   it("Timeline says so when nothing has happened", () => {

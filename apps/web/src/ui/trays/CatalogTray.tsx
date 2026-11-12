@@ -2,7 +2,7 @@ import type { Action, ActionContext, DockTool } from "../../actions/types";
 import { EmptyState } from "../kit";
 
 /** The dock tools whose trays list the sim's commands of the category of the same name. */
-export type CatalogTool = Exclude<DockTool, "terrain" | "park">;
+export type CatalogTool = Exclude<DockTool, "terrain" | "path" | "park">;
 
 export interface CatalogTrayProps {
   tool: CatalogTool;
@@ -41,7 +41,7 @@ export function CatalogTray({ tool, actions, ctx, onError, disabled = false }: C
     return (
       <EmptyState
         title="Coming with the next update"
-        hint="Paths, rides, scenery, shops and staff are coming soon."
+        hint="Rides, scenery, shops and staff are coming soon."
       />
     );
   }

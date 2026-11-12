@@ -405,16 +405,14 @@ function action(id: string, category: Action["category"], extra: Partial<Action>
 }
 
 describe("CatalogTray", () => {
-  const catalogTools: DockTool[] = ["path", "ride", "scenery", "shop", "staff"];
+  const catalogTools: DockTool[] = ["ride", "scenery", "shop", "staff"];
 
   it.each(catalogTools)(
     "says it is coming with the next update when %s has no commands",
     (tool) => {
       renderTray({ tool, actions: [action("terrain_raise", "terrain"), action("ui.pause", "ui")] });
       expect(screen.getByText("Coming with the next update")).toBeTruthy();
-      expect(
-        screen.getByText("Paths, rides, scenery, shops and staff are coming soon."),
-      ).toBeTruthy();
+      expect(screen.getByText("Rides, scenery, shops and staff are coming soon.")).toBeTruthy();
       expect(screen.queryByRole("button")).toBeNull();
     },
   );
@@ -447,7 +445,6 @@ describe("CatalogTray", () => {
   });
 
   it.each([
-    ["path", "path"],
     ["ride", "ride"],
     ["scenery", "scenery"],
     ["shop", "shop"],
@@ -534,11 +531,12 @@ describe("costHintOf", () => {
 describe("ParkTray", () => {
   it("has Overview, Finances and Timeline, which open the inspector on that tab", () => {
     renderTray({ tool: "park" });
-    expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual([
-      "Overview",
-      "Finances",
-      "Timeline",
-    ]);
+    const panels = screen.getByRole("group", { name: "Park panels" });
+    expect(
+      within(panels)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Overview", "Finances", "Timeline"]);
     for (const [name, tab] of [
       ["Overview", "overview"],
       ["Finances", "finances"],

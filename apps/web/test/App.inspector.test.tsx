@@ -159,9 +159,7 @@ describe("the status pills open the inspector", () => {
     fireEvent.click(datePill());
     expect(store().inspector).toEqual({ open: true, tab: "overview" });
     expect(store().selection).toEqual({ kind: "park" });
-    expect(
-      await within(inspector() as HTMLElement).findAllByText("Coming with guests"),
-    ).toHaveLength(2);
+    expect(await within(inspector() as HTMLElement).findByText("Admissions")).toBeTruthy();
   });
 
   it("the pills still show the cash and the date", async () => {
@@ -443,7 +441,7 @@ describe("what the player reads", () => {
     press("3");
     fireEvent.click(cashPill());
     const text = document.body.textContent ?? "";
-    expect(text).toContain("Paths, rides, scenery, shops and staff are coming soon.");
+    expect(text).toContain("Rides, scenery, shops and staff are coming soon.");
     expect(text).not.toMatch(/\bPlan [A-Z0-9]\b|next task|Task \d|coming in the next/i);
   });
 });
