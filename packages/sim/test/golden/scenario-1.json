@@ -94,6 +94,11 @@
     { "undo": true },
     { "redo": true },
     { "exec": ["ride_rename", { "id": 4, "name": "Golden Loop" }] },
+    { "exec": ["ride_test", { "id": 4 }] },
+    { "tick": 100 },
+    { "undo": true },
+    { "redo": true },
+    { "tick": 200 },
     { "tick": 400 }
   ]
 }

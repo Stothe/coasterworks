@@ -5,6 +5,7 @@ import {
   coasterComplete,
   coasterExtendTo,
   coasterRemovePiece,
+  rideTest,
 } from "./commands/coaster.js";
 import { financeRepayLoan, financeTakeLoan } from "./commands/finance.js";
 import {
@@ -77,6 +78,7 @@ export function createDefaultRegistry(): Registry {
   registry.register(coasterAddPiece);
   registry.register(coasterRemovePiece);
   registry.register(coasterComplete);
+  registry.register(rideTest);
   registry.register(coasterBuildFromPoints);
   registry.register(coasterExtendTo);
   registry.register(simAdvance);

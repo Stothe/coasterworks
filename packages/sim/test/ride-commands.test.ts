@@ -709,6 +709,7 @@ describe("ride invariants", () => {
       /entrance/,
     ],
     ["a phase out of range", (w) => void ((w.rides[0] as RideRecord).phase = 4), /phase/],
+    ["a phase past testing", (w) => void ((w.rides[0] as RideRecord).phase = 5), /phase/],
   ];
 
   function twoRides(): World {

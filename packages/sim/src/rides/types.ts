@@ -12,11 +12,14 @@ export const MAX_RIDE_PRICE = 20_00;
 /** Longest ride name, in characters. */
 export const MAX_RIDE_NAME = 40;
 
-/** What a ride is doing: idle, loading, running, or unloading. */
-export const RidePhase = { IDLE: 0, LOADING: 1, RUNNING: 2, UNLOADING: 3 } as const;
+/**
+ * What a ride is doing: idle, loading, running, or unloading; or, for a coaster only, running a
+ * test (`ride_test`: its train goes round empty).
+ */
+export const RidePhase = { IDLE: 0, LOADING: 1, RUNNING: 2, UNLOADING: 3, TESTING: 4 } as const;
 
 /** Highest `RidePhase` value. */
-export const MAX_RIDE_PHASE = 3;
+export const MAX_RIDE_PHASE = 4;
 
 /** A tile on the map. */
 export interface Tile {

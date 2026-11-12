@@ -146,6 +146,7 @@ describe("tools", () => {
       coaster_add_piece: ["id", "piece"],
       coaster_remove_piece: ["id"],
       coaster_complete: ["id"],
+      ride_test: ["id"],
       coaster_get: ["id"],
       coaster_piece_options: ["id"],
       coaster_build_from_points: ["family", "points"],
@@ -187,6 +188,7 @@ describe("tools", () => {
       "coaster_complete",
       "coaster_build_from_points",
       "coaster_extend_to",
+      "ride_test",
     ]) {
       expect(byName.get(name)?.annotations, name).toMatchObject({ readOnlyHint: false });
     }
@@ -216,6 +218,7 @@ describe("tools", () => {
       "coaster_complete",
       "coaster_build_from_points",
       "coaster_extend_to",
+      "ride_test",
     ]) {
       expect(byName.get(name), name).toMatchObject({ kind: "command" });
       expect(byName.get(name)?.inputSchema.type, name).toBe("object");

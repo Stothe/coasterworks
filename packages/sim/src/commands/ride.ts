@@ -119,7 +119,7 @@ function monthOf(tick: number): number {
 export const rideDemolish = defineCommand({
   name: "ride_demolish",
   description:
-    "Demolishes a ride or stall by id and frees its tiles. Guests queuing for it step out of the queue and wander; guests on it are let off at once at its exit (or, if the exit has no path, on the nearest path tile), without finishing the ride. Guests buying at a stall, or on their way to it, wander off unserved and are not charged. Refunds half of what the type cost to build (for a coaster, half of what all its track pieces cost together), rounded down to the cent, straight into cash (the command's own cost is 0); a coaster's track goes with it. Undoing it puts the ride (and a coaster's track) back as it was, with the same id, name, price and stats (this month's takings and customers start from nothing if the month has changed since), but empty and idle (the guests it let go stay where they are), and takes the refund back, so the undo is refused if the park no longer has that much cash.",
+    "Demolishes a ride or stall by id and frees its tiles. Guests queuing for it step out of the queue and wander; guests on it are let off at once at its exit (or, if the exit has no path, on the nearest path tile), without finishing the ride. Guests buying at a stall, or on their way to it, wander off unserved and are not charged. Refunds half of what the type cost to build (for a coaster, half of what all its track pieces cost together), rounded down to the cent, straight into cash (the command's own cost is 0); a coaster's track goes with it, and a test run under way ends. Undoing it puts the ride (and a coaster's track) back as it was, with the same id, name, price and stats (this month's takings and customers start from nothing if the month has changed since), but empty and idle (the guests it let go stay where they are; a coaster demolished during a test run comes back untested, its train on the platform), and takes the refund back, so the undo is refused if the park no longer has that much cash.",
   category: "ride",
   input: idSchema,
   undoable: true,
@@ -163,7 +163,7 @@ function openCommand(open: boolean) {
   return defineCommand({
     name: open ? "ride_open" : "ride_close",
     description: open
-      ? "Opens a ride or stall by id to guests. Opening an open ride changes nothing. Free. A coaster opens only once its circuit is complete and a test run has passed."
+      ? "Opens a ride or stall by id to guests. Opening an open ride changes nothing. Free. A coaster opens only once its circuit is complete and a test run (`ride_test`) has passed, and not while one is under way."
       : "Closes a ride or stall by id to guests: guests queuing for it step out of the queue and wander, and guests on it finish the ride they are on. At a stall, guests being served or on their way to it wander off unserved and are not charged. Closing a closed ride changes nothing. Free. Undoing it reopens the ride but does not bring the queue back.",
     category: "ride",
     input: idSchema,

@@ -9,7 +9,7 @@ import type { TrackIndex } from "../track/occupancy.js";
 import type { TrackRecord } from "../track/record.js";
 
 /** Version of the save-file schema. Bump when the serialized world shape changes. */
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 /** Highest corner height. Heights are integers in half-unit steps, 0..MAX_HEIGHT. */
 export const MAX_HEIGHT = 63;

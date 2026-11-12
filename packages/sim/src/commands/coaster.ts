@@ -51,15 +51,22 @@ import {
   type PointFit,
 } from "../track/fit.js";
 import { applyPiece, endPose, pieceTiles, poseAtTile, type Dir, type Pose } from "../track/pose.js";
+import { cancelTest, startTest } from "../systems/coasters.js";
 import {
   MAX_TRACK_PIECES,
+  copyStats,
+  copyTest,
+  copyTrain,
   copyTrack,
   findTrack,
   insertTrack,
   pieceCost,
   takeTrack,
   trackRefund,
+  type TestProgress,
   type TrackRecord,
+  type TrackStats,
+  type TrainState,
 } from "../track/record.js";
 import { MAX_MAP, type World } from "../world/types.js";
 import { defineCommand } from "./define.js";
@@ -79,6 +86,8 @@ export const CLOSE_FIRST = "Close the coaster before changing its track";
 export const TOO_MANY_PIECES = `A coaster can have at most ${MAX_TRACK_PIECES} pieces`;
 export const RUN_A_TEST = "Run a test first";
 export const COMPLETE_FIRST = "Complete the circuit first";
+export const TEST_RUNNING = "Wait for the test run to finish";
+export const CLOSE_TO_TEST = "Close the coaster before testing it";
 
 /** The family named `id`, or the reason there is none. */
 function familyFor(id: string): CoasterFamily | string {
@@ -270,6 +279,9 @@ function beginCoaster(
     complete,
     tested: false,
     stats: null,
+    failure: null,
+    train: null,
+    test: null,
   };
   insertTrack(world, track);
   indexAddTrack(index, track);
@@ -318,18 +330,34 @@ export const coasterAddPiece = defineCommand({
   },
 });
 
-/** What removing a piece saves: the piece, the refund it paid, and the flags it cleared. */
+/**
+ * What removing a piece saves: the piece, the refund it paid, and the test result it cleared
+ * (the last four are missing from entries logged before test runs, when they were all empty).
+ */
 interface RemoveUndo {
   piece: string;
   refund: number;
   complete: boolean;
   tested: boolean;
+  stats?: TrackStats | null;
+  failure?: string | null;
+  train?: TrainState | null;
+}
+
+/** A copy of `track`'s test result, for undo data. */
+function testResult(track: TrackRecord) {
+  return {
+    tested: track.tested,
+    stats: track.stats === null ? null : copyStats(track.stats),
+    failure: track.failure,
+    train: track.train === null ? null : copyTrain(track.train),
+  };
 }
 
 export const coasterRemovePiece = defineCommand({
   name: "coaster_remove_piece",
   description:
-    "Removes the last piece of a coaster's track, by the coaster's ride id, and refunds half of what it cost, rounded down to the cent, straight into cash (the command's own cost is 0). A complete circuit becomes incomplete and untested. The first station piece cannot be removed (demolish the coaster instead), and an open coaster must be closed first. Undoing it lays the piece again and takes the refund back, so the undo is refused if the park no longer has that much cash.",
+    "Removes the last piece of a coaster's track, by the coaster's ride id, and refunds half of what it cost, rounded down to the cent, straight into cash (the command's own cost is 0). A complete circuit becomes incomplete and untested: its test result is cleared and a train stalled out on the track goes back to the station. The first station piece cannot be removed (demolish the coaster instead), an open coaster must be closed first, and a test run must finish first. Undoing it lays the piece again and takes the refund back, so the undo is refused if the park no longer has that much cash.",
   category: "ride",
   input: z.object({ id: z.int().min(1) }),
   undoable: true,
@@ -337,6 +365,7 @@ export const coasterRemovePiece = defineCommand({
     const found = coasterOf(world, id);
     if (typeof found === "string") return found;
     if (found.ride.open) return CLOSE_FIRST;
+    if (found.track.test !== null) return TEST_RUNNING;
     return found.track.pieces.length <= 1 ? KEEP_FIRST_STATION : null;
   },
   apply: (world, { id }): RemoveUndo => {
@@ -346,9 +375,12 @@ export const coasterRemovePiece = defineCommand({
     indexRemovePiece(index, id, track.pieces.length, endPose(track.start, track.pieces), piece);
     const refund = Math.floor(pieceCost(track.family, piece) / 2);
     world.finance.cash += refund;
-    const undo = { piece, refund, complete: track.complete, tested: track.tested };
+    const undo: RemoveUndo = { piece, refund, complete: track.complete, ...testResult(track) };
     track.complete = false;
     track.tested = false;
+    track.stats = null;
+    track.failure = null;
+    track.train = null;
     world.rideVersion++;
     return undo;
   },
@@ -359,6 +391,9 @@ export const coasterRemovePiece = defineCommand({
     track.pieces.push(undo.piece);
     track.complete = undo.complete;
     track.tested = undo.tested;
+    track.stats = undo.stats ?? null;
+    track.failure = undo.failure ?? null;
+    track.train = undo.train ?? null;
     world.finance.cash -= undo.refund;
     world.rideVersion++;
   },
@@ -389,8 +424,63 @@ export function coasterOpenRefusal(world: World, ride: RideRecord): string | nul
   if (ride.kind !== "coaster") return null;
   const track = findTrack(world, ride.id);
   if (track === undefined || !track.complete) return COMPLETE_FIRST;
+  if (track.test !== null) return TEST_RUNNING;
   return track.tested ? null : RUN_A_TEST;
 }
+
+/** Why `ride_test` must refuse ride `id`, or null if it may run. */
+export function testRefusal(world: World, id: number): string | null {
+  const found = coasterOf(world, id);
+  if (typeof found === "string") return found;
+  const { ride, track } = found;
+  if (ride.open) return CLOSE_TO_TEST;
+  if (!track.complete) return COMPLETE_FIRST;
+  return track.test !== null ? TEST_RUNNING : null;
+}
+
+/** What starting a test saves: the result and train it replaced, and the ride's phase. */
+interface TestUndo {
+  tested: boolean;
+  stats: TrackStats | null;
+  failure: string | null;
+  train: TrainState | null;
+  test: TestProgress | null;
+  phase: number;
+  phaseTicks: number;
+}
+
+export const rideTest = defineCommand({
+  name: "ride_test",
+  description:
+    "Runs a test of a coaster, by its ride id: its train goes round the circuit once, empty, in the sim's own time (the ride's phase is TESTING, 4, until it is done; a run of a small coaster takes a minute or so of park time). Free. A run that comes back to rest at the platform passes: the coaster is tested and `coaster_get` gives its stats (length, ride time, top speed, biggest drop, drops, airtime and the vertical and lateral G forces); then it can open. A train that stops out on the track fails the test (\"The train stalled\"): it rolls back to rest in the nearest dip, and `coaster_get` gives the reason as `track.failure`. Starting a test clears the last result, and a train stalled out on the track goes back to the station for it. Refused unless the coaster's circuit is complete and the coaster closed, and while a test is under way. Undoing it stops the run (or takes a finished one's result away) and puts back the result from before.",
+  category: "ride",
+  input: z.object({ id: z.int().min(1) }),
+  undoable: true,
+  validate: (world, { id }) => testRefusal(world, id),
+  apply: (world, { id }): TestUndo => {
+    const { ride, track } = coaster(world, id);
+    const undo: TestUndo = {
+      ...testResult(track),
+      test: track.test === null ? null : copyTest(track.test),
+      phase: ride.phase,
+      phaseTicks: ride.phaseTicks,
+    };
+    startTest(world, track);
+    world.rideVersion++;
+    return undo;
+  },
+  revert: (world, { id }, undo: TestUndo) => {
+    const { ride, track } = coaster(world, id);
+    track.tested = undo.tested;
+    track.stats = undo.stats === null ? null : copyStats(undo.stats);
+    track.failure = undo.failure;
+    track.train = undo.train === null ? null : copyTrain(undo.train);
+    track.test = undo.test === null ? null : copyTest(undo.test);
+    ride.phase = undo.phase;
+    ride.phaseTicks = undo.phaseTicks;
+    world.rideVersion++;
+  },
+});
 
 /** What demolishing a coaster saves beyond the ride record: its track. */
 export interface CoasterDemolish {
@@ -401,6 +491,9 @@ export interface CoasterDemolish {
 /** Takes coaster `id`'s track out of the world and its index; returns it and the refund owed. */
 export function demolishTrack(world: World, id: number): CoasterDemolish {
   const index = trackIndex(world);
+  // A test under way ends with it: an undo gives the coaster back untested.
+  const standing = findTrack(world, id);
+  if (standing !== undefined) cancelTest(world, standing);
   const track = takeTrack(world, id);
   indexRemoveTrack(index, track);
   return { track: copyTrack(track), refund: trackRefund(track) };

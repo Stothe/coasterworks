@@ -42,7 +42,8 @@ import {
   stationAccess,
 } from "../track/occupancy.js";
 import { applyPiece, pieceRefusal, poseAtTile, posesEqual, type Dir } from "../track/pose.js";
-import { MAX_TRACK_PIECES } from "../track/record.js";
+import { FINE, TrainMode, buildLine } from "../track/physics.js";
+import { MAX_TRACK_PIECES, type TrackRecord } from "../track/record.js";
 import { MONTHS_PER_YEAR } from "../time.js";
 import { MAX_HEIGHT, type World } from "../world/types.js";
 
@@ -68,17 +69,18 @@ const MAX_SURFACE = 4;
  *   - at most 255 rides and stalls, sorted by id, each id above 0, below `nextRideId` and used once,
  *     with `nextRideId` at most 65,536; each ride's type exists in the content and has the ride's
  *     kind, its rotation is 0 to 3, its price 0 to $20.00, its name 1 to 40 characters, its phase 0
- *     to 3, and its counters and guest ids not negative; its entrance, exit and service tiles are
- *     the ones its type, position and rotation give; and the occupant layer holds exactly each
+ *     to 4 (4, testing, only for a coaster), and its counters and guest ids not negative; its
+ *     entrance, exit and service tiles are the ones its type, position and rotation give; and the occupant layer holds exactly each
  *     ride's id on its footprint tiles (which are on the map and overlap no other ride's) and 0
  *     everywhere else; every guest id in a ride's queue or riders is a live guest, queuing (or
  *     riding) for that ride, listed in no other queue or ride, and every queuing (or riding) guest
  *     is in its ride's queue (or riders); a ride has at most its type's capacity of riders, and
  *     none while idle
  *   - a coaster (kind `coaster`) names a coaster family, has its entrance and exit beside its
- *     first station tile, marks no tiles, and has no riders yet; `tracks` holds one track per
- *     coaster, in id order, each of which replays piece by piece under the placement rules (see
- *     `checkTracks`)
+ *     first station tile, marks no tiles, has no riders yet and is idle or testing; `tracks` holds
+ *     one track per coaster, in id order, each of which replays piece by piece under the
+ *     placement rules, with a test-run state that agrees with itself and its coaster (see
+ *     `checkTracks` and `testRunRefusal`)
  *   - log ids start above 0, strictly increase, and are all below `nextId`
  *   - every id on the undo and redo stacks names a log entry, and no id is on the stacks twice,
  *     which covers an id on both
@@ -352,6 +354,9 @@ function rideProblem(world: World): string | null {
         }
       }
     }
+    if (ride.phase === RidePhase.TESTING && ride.kind !== "coaster") {
+      return `${label} has phase ${ride.phase} (testing), which only a coaster has`;
+    }
     if (ride.phase === RidePhase.IDLE && ride.riders.length > 0) {
       return `${label} is idle with ${ride.riders.length} riders`;
     }
@@ -368,8 +373,11 @@ function rideProblem(world: World): string | null {
           return `${label} has ${key} ${showTile(ride[key])}, expected ${showTile(tiles[key])}`;
         }
       }
-      if (ride.riders.length > 0 || ride.phase !== RidePhase.IDLE) {
-        return `${label} is a coaster with riders or out of its idle phase, which has no trains yet`;
+      if (ride.riders.length > 0) {
+        return `${label} is a coaster with riders, whose trains carry none yet`;
+      }
+      if (ride.phase !== RidePhase.IDLE && ride.phase !== RidePhase.TESTING) {
+        return `${label} is a coaster in phase ${ride.phase}, not idle or testing`;
       }
       continue;
     }
@@ -540,6 +548,61 @@ function checkTracks(world: World): string | null {
     }
     if (track.tested && !track.complete) return `${label} is tested but not complete`;
     if (ride.open && !track.tested) return `coaster ${ride.id} is open but has not been tested`;
+    const run = testRunRefusal(track, ride);
+    if (run !== null) return `${label} ${run}`;
+  }
+  return null;
+}
+
+/**
+ * The test-run state of a track: it has stats exactly when it is tested, and a failure only when
+ * it is not; a train out of the station only on a complete circuit, in a known mode, at most a
+ * circuit from the platform either way; a test under way exactly while its coaster is TESTING,
+ * with the train moving (not STOPPED) and the coaster closed; and a train that is moving only
+ * on a test (trains carry no riders yet).
+ */
+function testRunRefusal(track: TrackRecord, ride: RideRecord): string | null {
+  if (track.tested !== (track.stats !== null)) {
+    return track.tested ? "is tested but has no stats" : "has stats but is not tested";
+  }
+  if (track.failure !== null && (track.tested || track.failure.length === 0)) {
+    return "has a failed test but is tested";
+  }
+  if (track.stats !== null) {
+    for (const [key, value] of Object.entries(track.stats)) {
+      if (key === "minVerticalG" || key === "maxVerticalG") continue;
+      if (value < 0) return `has stats.${key} ${value}, below 0`;
+    }
+  }
+  const { train, test } = track;
+  if (train !== null) {
+    if (!track.complete) return "has a train out but is not complete";
+    if (
+      !Number.isInteger(train.mode) ||
+      train.mode < TrainMode.DEPART ||
+      train.mode > TrainMode.STOPPED
+    ) {
+      return `has a train in mode ${train.mode}`;
+    }
+    if (train.ticks < 0 || train.modeTicks < 0) return "has a train with negative ticks";
+    const length = buildLine(track.start, track.pieces).length * FINE;
+    if (Math.abs(train.travelled) > length) return "has a train more than a circuit away";
+    if (train.mode === TrainMode.STOPPED) {
+      if (train.speed !== 0) return "has a stopped train that is moving";
+      if (test !== null) return "has a test under way with its train stopped";
+    } else if (test === null) {
+      return "has a train moving with no test under way";
+    }
+  }
+  if ((test !== null) !== (ride.phase === RidePhase.TESTING)) {
+    return test !== null
+      ? "has a test under way but its coaster is not testing"
+      : "is testing with no test under way";
+  }
+  if (test !== null) {
+    if (train === null) return "has a test under way with no train";
+    if (ride.open) return "has a test under way but its coaster is open";
+    if (track.tested || track.failure !== null) return "has a test under way and a result";
   }
   return null;
 }

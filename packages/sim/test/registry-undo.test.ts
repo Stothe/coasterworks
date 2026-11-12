@@ -169,6 +169,14 @@ const FIXTURES: Record<string, Fixture> = {
     },
   },
   coaster_complete: { input: { id: 3 }, setup: (world) => placeCoaster(world, SMALL_CIRCUIT) },
+  // A complete circuit, whose test run starts: the train leaves and the coaster shows TESTING.
+  ride_test: {
+    input: { id: 3 },
+    setup: (world) => {
+      placeCoaster(world, SMALL_CIRCUIT);
+      (world.tracks[0] as { complete: boolean }).complete = true;
+    },
+  },
   // A station by two rides, so the ride id counter and the sorted lists have to come back.
   coaster_build_from_points: {
     input: {

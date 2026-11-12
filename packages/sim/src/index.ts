@@ -95,7 +95,18 @@ export {
   pieceWeight,
 } from "./track/fit.js";
 export type { FitLimits, FitPoint, FitResult, FitStart, FitWork, PointFit } from "./track/fit.js";
-export type { TrackRecord } from "./track/record.js";
+export type { TestProgress, TrackRecord, TrackStats, TrainState } from "./track/record.js";
+export {
+  FINE,
+  TrainMode,
+  buildLine,
+  frontOf,
+  pointAt,
+  trainForces,
+  trainSpec,
+} from "./track/physics.js";
+export type { Forces, Line, LinePoint, TrainSpec } from "./track/physics.js";
+export { RUN_TOO_LONG, TRAIN_STALLED, coasterSystem } from "./systems/coasters.js";
 export { LOAN_MAX, financeSystem } from "./systems/finance.js";
 export { guestSystem } from "./systems/guests.js";
 export { rideSystem } from "./systems/rides.js";

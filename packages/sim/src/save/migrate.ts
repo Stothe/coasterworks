@@ -178,6 +178,21 @@ const migrateV6ToV7: Migration = (doc) => {
 };
 
 /**
+ * Schema 7 to 8: coasters gained test runs. A track saved before then was never tested, so it has
+ * no stats, no failure, its train parked on the platform and no test under way.
+ */
+const migrateV7ToV8: Migration = (doc) => {
+  if (!isRecord(doc)) throw new SaveError(CORRUPT_MESSAGE);
+  if (!Array.isArray(doc.tracks)) return doc; // the schema check refuses it and says why
+  return {
+    ...doc,
+    tracks: doc.tracks.map((track: unknown) =>
+      isRecord(track) ? { ...track, failure: null, train: null, test: null } : track,
+    ),
+  };
+};
+
+/**
  * Migrations keyed by the schema version they upgrade FROM, so `MIGRATIONS[1]` turns a schema 1
  * document into a schema 2 one. When `SCHEMA_VERSION` goes up, add the entry for the version it
  * left behind.
@@ -189,6 +204,7 @@ export const MIGRATIONS: Record<number, Migration> = {
   4: migrateV4ToV5,
   5: migrateV5ToV6,
   6: migrateV6ToV7,
+  7: migrateV7ToV8,
 };
 
 /** The document's schema version. Throws `SaveError` if it has none. */

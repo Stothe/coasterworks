@@ -237,7 +237,36 @@ const trackSchema = z.object({
   pieces: z.array(z.string()),
   complete: z.boolean(),
   tested: z.boolean(),
-  stats: z.null(),
+  stats: z
+    .object({
+      length: int,
+      rideTime: int,
+      maxSpeed: int,
+      maxDrop: int,
+      drops: int,
+      airtime: int,
+      maxVerticalG: int,
+      minVerticalG: int,
+      maxLateralG: int,
+    })
+    .nullable(),
+  failure: z.string().nullable(),
+  train: z.object({ mode: int, travelled: int, speed: int, ticks: int, modeTicks: int }).nullable(),
+  test: z
+    .object({
+      maxSpeed: int,
+      maxDrop: int,
+      drops: int,
+      airtime: int,
+      maxVerticalG: int,
+      minVerticalG: int,
+      maxLateralG: int,
+      lastZ: int,
+      peakZ: int,
+      descending: z.boolean(),
+      stalled: z.boolean(),
+    })
+    .nullable(),
 });
 
 // Ranges (a fee of at most $100, a rating of at most 999, counters that are not negative, at most

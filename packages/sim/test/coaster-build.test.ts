@@ -154,6 +154,9 @@ describe("building a coaster piece by piece", () => {
         complete: true,
         tested: false,
         stats: null,
+        failure: null,
+        train: null,
+        test: null,
       },
     ]);
     // Coasters leave the occupant layer alone.

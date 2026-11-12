@@ -53,6 +53,12 @@ const scenario = () => parseScenario(JSON.parse(scenarioText));
  *    station, a two-piece lift, two large-curve U-turns, a drop and two straights, removes the
  *    last curve (with an undo and a redo, which take the refund back and pay it again), lays it
  *    again, completes the circuit (undone and redone) and renames the coaster.
+ *  - Plan E Task 4 (coaster physics and test runs): re-recorded (3bb4278fee8f344a to
+ *    6697c562479fd0d1). Tracks now carry their test-run state (stats, failure, train, test),
+ *    which `hashWorld` covers with them. After renaming the coaster the scenario starts a test
+ *    run, lets it go 100 ticks, undoes it (the train is back on the platform) and redoes it (the
+ *    run starts again), and runs 200 ticks before the last 400; the run passes at its 505th tick,
+ *    so the coaster ends tested with its stats.
  */
 describe("golden scenario 1", () => {
   it("ends on the recorded hash", () => {
@@ -110,6 +116,7 @@ describe("golden scenario 1", () => {
       "coaster_add_piece",
       "coaster_remove_piece",
       "coaster_complete",
+      "ride_test",
       "sim_advance",
       "tick",
       "undo",
@@ -127,8 +134,9 @@ describe("runScenario", () => {
     expect(sim.world.terrain.width).toBe(32);
     expect(sim.world.meta.name).toBe("golden");
     // 120 ticks, then 70 days, then 2,400 ticks and 31 days with the park open, 500 more with the
-    // carousel shut (its last riders get off), then 400 with the park shut.
-    expect(sim.world.tick).toBe(120 + 70 * 400 + 2400 + 31 * 400 + 500 + 400);
+    // carousel shut (its last riders get off), then, with the park shut, 100 into the coaster's
+    // test run (undone and redone, which starts it again), 200 more, and the last 400.
+    expect(sim.world.tick).toBe(120 + 70 * 400 + 2400 + 31 * 400 + 500 + 100 + 200 + 400);
     expect(sim.world.log.some((entry) => entry.name === "undo")).toBe(true);
   });
 
@@ -178,7 +186,11 @@ describe("runScenario", () => {
     const { world } = runScenario(scenario());
     expect(world.tracks).toHaveLength(1);
     const track = world.tracks[0]!;
-    expect(track).toMatchObject({ id: 4, family: "steel_coaster", complete: true, tested: false });
+    expect(track).toMatchObject({ id: 4, family: "steel_coaster", complete: true, tested: true });
+    // Its test run passed: the train is back at rest on the platform with the stats.
+    expect(track).toMatchObject({ failure: null, train: null, test: null });
+    expect(track.stats).toMatchObject({ length: 24392, drops: 1, maxDrop: 512 });
+    expect(world.rides.find((ride) => ride.id === 4)?.phase).toBe(0);
     expect(track.pieces).toHaveLength(12);
     expect(track.pieces.filter((p) => p.endsWith("_lift"))).toHaveLength(2);
     expect(track.pieces.filter((p) => p === "right_large_curve")).toHaveLength(4);
