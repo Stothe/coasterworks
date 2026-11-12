@@ -589,6 +589,42 @@ describe("ride queries", () => {
     expect(all[0]).toMatchObject({ footprint: { w: 3, h: 3 }, excitement: 420, intensity: 180 });
   });
 
+  it("ride_check says whether a build would be taken, and why not, without changing anything", () => {
+    const { world, sim } = builtPark();
+    const before = hashWorld(world);
+    // Free flat ground: taken, at the type's cost.
+    expect(query(sim, "ride_check", { type: "carousel", x: 20, y: 20, rot: 0 })).toEqual({
+      ok: true,
+      reason: null,
+      cost: carousel.cost,
+    });
+    // On the carousel already there: the same reason the build gives.
+    const onTop = { type: "carousel", x: 5, y: 5, rot: 0 };
+    const refused = query(sim, "ride_check", onTop) as { ok: boolean; reason: string };
+    expect(refused.ok).toBe(false);
+    expect(refused.reason).toBe(canPlaceRide(world, carousel, 5, 5, 0));
+    expect(sim.execute("ride_build", onTop)).toEqual({ ok: false, error: refused.reason });
+    // A stall type is checked as a stall; an unknown type is a reason, not an error.
+    expect(query(sim, "ride_check", { type: "snack_stand", x: 20, y: 12, rot: 2 })).toMatchObject({
+      ok: true,
+      cost: snack.cost,
+    });
+    expect(query(sim, "ride_check", { type: "nope", x: 20, y: 12, rot: 0 })).toEqual({
+      ok: false,
+      reason: "Unknown ride type: nope",
+      cost: 0,
+    });
+    // Without the cash: refused as the build would be.
+    const cash = world.finance.cash;
+    world.finance.cash = 5;
+    const poor = query(sim, "ride_check", { type: "carousel", x: 20, y: 20, rot: 0 }) as {
+      reason: string;
+    };
+    expect(poor.reason).toMatch(/^Not enough cash/);
+    world.finance.cash = cash;
+    expect(hashWorld(world)).toBe(before);
+  });
+
   it("park_status counts rides and stalls", () => {
     const { sim } = builtPark();
     run(sim, "stall_build", { type: "restrooms", x: 20, y: 4, rot: 0 });

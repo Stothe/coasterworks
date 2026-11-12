@@ -71,6 +71,9 @@ export const KEYMAP: readonly KeyBinding[] = [
   { combo: "-", actionId: "ui.speed.down" },
   { combo: "_", actionId: "ui.speed.down" },
   ...DOCK_TOOLS.map((tool, index) => ({ combo: String(index + 1), actionId: `ui.tool.${tool}` })),
+  // Before Raise, whose key it shares: with a ride or stall in hand R turns it, and else it is
+  // not enabled and the key goes on to Raise.
+  { combo: "r", actionId: "ui.rotate" },
   ...TERRAIN_VERBS.map(({ verb, key }) => ({
     combo: key.toLowerCase(),
     actionId: `ui.terrain.${verb}`,
@@ -204,8 +207,16 @@ export function matchCombo(event: KeyLike, combo: string, mac: boolean = isMac()
  * presses the button).
  */
 export function bindingFor(event: KeyboardEvent, mac: boolean = isMac()): KeyBinding | undefined {
+  return bindingsFor(event, mac)[0];
+}
+
+/**
+ * Every binding a key press could run, in the map's order: a key two actions share (R turns a
+ * ride in hand, else takes up Raise) runs the first of them that is enabled.
+ */
+export function bindingsFor(event: KeyboardEvent, mac: boolean = isMac()): KeyBinding[] {
   const typing = isTyping(event.target) || isInMenu(event.target);
-  return KEYMAP.find(
+  return KEYMAP.filter(
     (binding) =>
       (!typing || binding.when === "always") &&
       matchCombo(event, binding.combo, mac) &&

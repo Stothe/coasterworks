@@ -22,7 +22,7 @@ function setup(opts: { width?: number; height?: number } = {}) {
 }
 
 describe("default registry", () => {
-  it("registers the fourteen queries, after the commands, with their categories", () => {
+  it("registers the fifteen queries, after the commands, with their categories", () => {
     const queries = createDefaultRegistry()
       .catalog()
       .filter((e) => e.kind === "query");
@@ -40,6 +40,7 @@ describe("default registry", () => {
       ["ride_list", "ride", false],
       ["ride_get", "ride", false],
       ["content_list", "ride", false],
+      ["ride_check", "ride", false],
       ["catalog_list", "sim", false],
     ]);
   });

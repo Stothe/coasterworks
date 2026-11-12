@@ -13,6 +13,7 @@
     "e2e": "playwright test"
   },
   "dependencies": {
+    "@coasterworks/content": "workspace:*",
     "@coasterworks/protocol": "workspace:*",
     "@coasterworks/render": "workspace:*",
     "@coasterworks/sim": "workspace:*",

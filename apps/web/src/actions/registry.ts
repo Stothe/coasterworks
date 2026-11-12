@@ -1,3 +1,4 @@
+import { RIDE_TYPES, STALL_TYPES } from "@coasterworks/content";
 import type { Speed } from "@coasterworks/protocol";
 import type { CatalogEntry, ExecResult } from "@coasterworks/sim";
 import { shortcutOf } from "../state/keys";
@@ -32,6 +33,10 @@ export interface UiHandlers {
   terrain(verb: TerrainVerb): void;
   /** One brush size larger (`1`) or smaller (`-1`), stopping at the ends. */
   brush(direction: 1 | -1): void;
+  /** Turns the ride or stall in hand a quarter turn clockwise. */
+  rotate(): void;
+  /** True while a ride or stall is in hand, which is when there is something to turn. */
+  canRotate(): boolean;
 }
 
 /**
@@ -68,6 +73,13 @@ const TITLES: Readonly<Record<string, string>> = {
   park_set_entry_fee: "Set entry fee",
   park_open: "Open park",
   park_close: "Close park",
+  ride_build: "Build ride",
+  stall_build: "Build shop or stall",
+  ride_open: "Open ride",
+  ride_close: "Close ride",
+  ride_set_price: "Set ride price",
+  ride_rename: "Rename ride",
+  ride_demolish: "Demolish ride",
   finance_take_loan: "Take loan",
   finance_repay_loan: "Repay loan",
   sim_advance: "Advance time",
@@ -79,6 +91,15 @@ const TITLES: Readonly<Record<string, string>> = {
  */
 const PLACEMENT_DEFAULTS: Readonly<Record<string, Record<string, unknown>>> = {
   path_build: { kind: "foot" },
+};
+
+/**
+ * The type a build from the bar puts in hand: the first the content has of its kind. The tray then
+ * shows its card among the others, for the player to pick another.
+ */
+const FIRST_TYPE: Readonly<Record<string, string | undefined>> = {
+  ride_build: RIDE_TYPES[0]?.id,
+  stall_build: STALL_TYPES[0]?.id,
 };
 
 /** True for an input that is one tile and nothing else: integer `x` and `y`. */
@@ -114,7 +135,12 @@ function commandAction(entry: CatalogEntry, deps: UiActionDeps): Action {
     run: () => {},
   };
 
-  if (isRectSchema(schema)) {
+  const firstType = FIRST_TYPE[entry.name];
+  if (firstType !== undefined) {
+    // A ride or stall is placed like the trays place it: in hand, turned with R, clicked down.
+    action.placement = "tile";
+    action.run = () => deps.startPlacement(entry.name, { type: firstType, rot: 0 });
+  } else if (isRectSchema(schema)) {
     // The player drags out the rectangle; everything else the command needs comes with the tool.
     const defaults = { ...defaultsFromSchema(schema), ...PLACEMENT_DEFAULTS[entry.name] };
     for (const key of RECT_KEYS) delete defaults[key];
@@ -272,6 +298,14 @@ function uiActions({ ui }: UiActionDeps): Action[] {
       ["brush", "size", "larger"],
       () => ui.brush(1),
       { hidden: true },
+    ),
+    uiAction(
+      "ui.rotate",
+      "Rotate",
+      "Turn the ride or stall being placed a quarter turn.",
+      ["rotate", "turn", "ride", "stall", "shop"],
+      () => ui.rotate(),
+      { hidden: true, enabled: () => ui.canRotate(), offline: true },
     ),
     uiAction(
       "ui.inspector.park",

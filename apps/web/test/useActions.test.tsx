@@ -30,6 +30,8 @@ function makeDeps(): UiActionDeps {
       cancel: vi.fn(),
       terrain: vi.fn(),
       brush: vi.fn(),
+      rotate: vi.fn(),
+      canRotate: () => false,
     },
   };
 }

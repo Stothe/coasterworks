@@ -29,6 +29,8 @@ const deps: UiActionDeps = {
     cancel: noop,
     terrain: noop,
     brush: noop,
+    rotate: noop,
+    canRotate: () => false,
   },
 };
 const actions = buildActions(createDefaultRegistry().catalog(), deps);

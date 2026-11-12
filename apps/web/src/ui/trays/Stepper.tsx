@@ -20,7 +20,13 @@ export interface StepperProps {
   /** Whether each button can be pressed, when `onStep` decides that rather than `value`. */
   canDecrease?: boolean;
   canIncrease?: boolean;
+  /** How the field shows `value`; by default as a whole number. */
+  format?(value: number): string;
+  /** What a typed text is as a value, or null if it is none; by default whole numbers only. */
+  parse?(text: string): number | null;
 }
+
+const wholeNumber = (text: string) => (/^\d+$/.test(text) ? Number(text) : null);
 
 const button = "hud-button min-w-8 rounded-md text-base font-medium text-muted hover:text-ink";
 
@@ -41,23 +47,25 @@ export function Stepper({
   onStep,
   canDecrease = value > min,
   canIncrease = value < max,
+  format = String,
+  parse = wholeNumber,
 }: StepperProps) {
   // What is in the field while it is being typed in: null when it just shows the value.
   const [draft, setDraft] = useState<string | null>(null);
-  const valid =
-    draft === null || (/^\d+$/.test(draft) && Number(draft) >= min && Number(draft) <= max);
-
-  const inRange = (text: string) =>
-    /^\d+$/.test(text) && Number(text) >= min && Number(text) <= max;
+  /** The typed text as a value in range, or null. */
+  const taken = (text: string) => {
+    const n = parse(text);
+    return n !== null && n >= min && n <= max ? n : null;
+  };
+  const valid = draft === null || taken(draft) !== null;
   const step = (by: -1 | 1) => {
     setDraft(null);
     if (onStep) onStep(by);
     else onChange(Math.min(max, Math.max(min, value + by)));
   };
   const commit = () => {
-    if (commitOnBlur && draft !== null && inRange(draft) && Number(draft) !== value) {
-      onChange(Number(draft));
-    }
+    const typed = draft === null ? null : taken(draft);
+    if (commitOnBlur && typed !== null && typed !== value) onChange(typed);
     setDraft(null);
   };
 
@@ -74,15 +82,16 @@ export function Stepper({
       </button>
       <input
         type="text"
-        inputMode="numeric"
+        inputMode={parse === wholeNumber ? "numeric" : "decimal"}
         aria-label={inputLabel}
         aria-invalid={!valid || undefined}
         disabled={disabled}
-        value={draft ?? String(value)}
+        value={draft ?? format(value)}
         onChange={(event) => {
           const text = event.target.value;
           setDraft(text);
-          if (!commitOnBlur && inRange(text)) onChange(Number(text));
+          const typed = taken(text);
+          if (!commitOnBlur && typed !== null) onChange(typed);
         }}
         onKeyDown={(event) => {
           if (commitOnBlur && event.key === "Enter") commit();

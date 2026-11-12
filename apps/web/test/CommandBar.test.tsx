@@ -60,6 +60,8 @@ function setup(extra: CatalogEntry[] = [], tweak?: (actions: Action[]) => Action
     cancel: vi.fn(),
     terrain: vi.fn(),
     brush: vi.fn(),
+    rotate: vi.fn(),
+    canRotate: () => false,
   };
   const deps: UiActionDeps = {
     startPlacement: (command, defaults) => uiStore.getState().startPlacement(command, defaults),
@@ -310,6 +312,8 @@ describe("CommandBar: the list", () => {
         cancel: noop,
         terrain: noop,
         brush: noop,
+        rotate: noop,
+        canRotate: () => false,
       },
     };
     const actions = buildActions(catalog, deps);

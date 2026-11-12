@@ -5,7 +5,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { uiStore } from "../src/state/uiStore";
 import { ratingTone, ratingWord, type ParkState } from "../src/state/useParkState";
 import { EntranceInspector } from "../src/ui/inspector/EntranceInspector";
-import { GUEST_POLL_MS, GuestInspector, type GuestView } from "../src/ui/inspector/GuestInspector";
+import {
+  GUEST_POLL_MS,
+  GuestInspector,
+  doingOf,
+  type GuestView,
+} from "../src/ui/inspector/GuestInspector";
 import { StatusPills } from "../src/ui/StatusPills";
 import { Tray } from "../src/ui/Tray";
 import { makeSource } from "./snapshotSource";
@@ -237,6 +242,32 @@ describe("GuestInspector", () => {
     expect(screen.getByRole("meter", { name: "Thirst" }).getAttribute("aria-valuenow")).toBe("230");
     expect(screen.getAllByRole("meter")).toHaveLength(6);
     expect(screen.getByText("“I'm thirsty”")).toBeTruthy();
+  });
+
+  it("says which ride or stall the guest is queuing for, on, or buying at", async () => {
+    let view = guest({ state: "queuing", ride: { id: 1, name: "Carousel 1", doing: "queuing" } });
+    const query = vi.fn(async (): Promise<QueryResult<unknown>> => ({ ok: true, result: view }));
+    const { unmount } = render(<GuestInspector id={4} query={query} />);
+    expect(await screen.findByText("Queuing for Carousel 1")).toBeTruthy();
+    unmount();
+    view = guest({ state: "riding", ride: { id: 2, name: "Big Wheel 1", doing: "riding" } });
+    const second = render(<GuestInspector id={4} query={query} />);
+    expect(await screen.findByText("On Big Wheel 1")).toBeTruthy();
+    second.unmount();
+    view = guest({ state: "buying", ride: { id: 3, name: "Snack Stand 1", doing: "buying" } });
+    render(<GuestInspector id={4} query={query} />);
+    expect(await screen.findByText("At Snack Stand 1")).toBeTruthy();
+  });
+
+  it("words each state, with or without a ride", () => {
+    expect(
+      doingOf({ state: "heading", ride: { id: 1, name: "Carousel 1", doing: "heading" } }),
+    ).toBe("Heading for Carousel 1");
+    expect(doingOf({ state: "queuing", ride: null })).toBe("Queuing");
+    expect(doingOf({ state: "riding" })).toBe("On a ride");
+    expect(doingOf({ state: "buying", ride: null })).toBe("Buying something");
+    expect(doingOf({ state: "wandering", ride: null })).toBe("Walking around");
+    expect(doingOf({ state: "dancing", ride: null })).toBe("dancing");
   });
 
   it("asks again every second and keeps the last five thoughts, newest first", async () => {

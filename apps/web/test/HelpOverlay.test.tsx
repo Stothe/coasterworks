@@ -25,6 +25,8 @@ const deps: UiActionDeps = {
     cancel: noop,
     terrain: noop,
     brush: noop,
+    rotate: noop,
+    canRotate: () => false,
   },
 };
 const byId: ReadonlyMap<string, Action> = new Map(buildActions([], deps).map((a) => [a.id, a]));
@@ -66,7 +68,15 @@ describe("HelpOverlay", () => {
     const headings = within(overlay() as HTMLElement)
       .getAllByRole("heading", { level: 3 })
       .map((h) => h.textContent);
-    expect(headings).toEqual(["Tools", "Terrain", "Camera", "Speed", "History", "Panels"]);
+    expect(headings).toEqual([
+      "Tools",
+      "Terrain",
+      "Rides and shops",
+      "Camera",
+      "Speed",
+      "History",
+      "Panels",
+    ]);
   });
 
   it("lists the title of the action of every key of the map", () => {

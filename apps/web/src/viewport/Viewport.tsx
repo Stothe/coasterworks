@@ -26,6 +26,14 @@ import { brushRect, planPlacement, timeOfDay } from "./brush";
 import { classicCycle, onClassicViewRequest } from "./classicView";
 import { PathStroke, skippedMessage, type Tile } from "./drawPath";
 import { framingDistance } from "./framing";
+import {
+  OFF_THE_MAP,
+  footprintAt,
+  isBuildCommand,
+  isRideCheck,
+  rotOf,
+  type RideCheck,
+} from "./ridePlacement";
 
 /** What the app can ask of the view. */
 export interface ViewportHandle {
@@ -40,10 +48,17 @@ export interface ViewportHandle {
    * pixels apart, or null if no guest is in view. For tests and the console: it is slow.
    */
   findGuest(): { clientX: number; clientY: number; id: number } | null;
+  /**
+   * A point in the window over the middle of tile (`x`, `y`): the mean of the points across the view
+   * that pick it, or null if it is not in view. For tests and the console: it is slow.
+   */
+  tileToScreen(x: number, y: number): { clientX: number; clientY: number } | null;
 }
 
 /** How far apart `findGuest` tries points, in CSS pixels. */
 const FIND_STEP = 6;
+/** How far apart `tileToScreen` tries points first, and then, for a tile that small, again. */
+const TILE_STEPS = [8, 3] as const;
 
 export interface ViewportProps {
   terrain: TerrainData | null;
@@ -312,6 +327,28 @@ export function Viewport(props: ViewportProps) {
         }
         return null;
       },
+      tileToScreen(x, y) {
+        const scene = live.current?.scene;
+        const canvas = canvasRef.current;
+        if (!scene || !canvas) return null;
+        const box = canvas.getBoundingClientRect();
+        for (const step of TILE_STEPS) {
+          let sumX = 0;
+          let sumY = 0;
+          let hits = 0;
+          for (let py = box.top + step; py < box.bottom; py += step) {
+            for (let px = box.left + step; px < box.right; px += step) {
+              const tile = scene.pickAt(px, py);
+              if (tile?.x !== x || tile.y !== y) continue;
+              sumX += px;
+              sumY += py;
+              hits++;
+            }
+          }
+          if (hits > 0) return { clientX: sumX / hits, clientY: sumY / hits };
+        }
+        return null;
+      },
     }),
     [],
   );
@@ -323,6 +360,7 @@ export function Viewport(props: ViewportProps) {
     // time the park loads; a change of quality goes to the scene already up, further down.
     const { pixelRatioCap, graphicsQuality: quality } = settingsStore.getState();
     const scene = createScene(canvas, { pixelRatioCap, quality });
+    let disposed = false;
     const mine: Live = {
       scene,
       hasTerrain: false,
@@ -347,9 +385,100 @@ export function Viewport(props: ViewportProps) {
     scene.setTimeOfDay(timeOfDay(latest.current.tick));
     scene.setSimSpeed(latest.current.simSpeed ?? 1);
 
+    // A ride or stall in hand is drawn see-through where it would go, green where the sim would
+    // build it and red where not, and the tray says why not. The sim is asked (`ride_check`) once
+    // the footprint moves to other tiles or turns, one question at a time: an answer that comes
+    // after the pointer has moved on asks again for where it is now. Until an answer comes the
+    // ghost keeps the colour it had.
+    let wanted: { key: string; type: string; x: number; y: number; rot: 0 | 1 | 2 | 3 } | null =
+      null;
+    let known: { key: string; check: RideCheck } | null = null;
+    let lastOk = false;
+    let asking = false;
+    const showGhost = () => {
+      if (wanted) {
+        const { type, x, y, rot } = wanted;
+        scene.setPlacementGhost({ type, x, y, rot, ok: lastOk });
+      } else scene.setPlacementGhost(null);
+    };
+    const settle = (key: string, check: RideCheck) => {
+      known = { key, check };
+      if (wanted?.key !== key) return;
+      lastOk = check.ok;
+      uiStore.getState().setPlacementCheck(check);
+      showGhost();
+    };
+    const askCheck = () => {
+      const target = wanted;
+      const { client } = latest.current;
+      if (!target || asking || !client || disposed) return;
+      if (known?.key === target.key) {
+        settle(target.key, known.check);
+        return;
+      }
+      if (target.x < 0 || target.y < 0) {
+        settle(target.key, { ok: false, reason: OFF_THE_MAP });
+        return;
+      }
+      asking = true;
+      const { key, type, x, y, rot } = target;
+      const done = (check: RideCheck | null) => {
+        asking = false;
+        if (disposed) return;
+        if (check) settle(key, check);
+        // The pointer moved on, or the park changed, while the sim was answering.
+        if (wanted && wanted.key !== known?.key) askCheck();
+      };
+      client.query("ride_check", { type, x, y, rot }).then(
+        (answer) =>
+          done(
+            !answer.ok
+              ? { ok: false, reason: answer.error }
+              : isRideCheck(answer.result)
+                ? { ok: answer.result.ok, reason: answer.result.reason }
+                : null,
+          ),
+        () => done(null),
+      );
+    };
+    /** Forgets what the sim said: the park has changed, and the same tiles may answer otherwise. */
+    const recheck = () => {
+      known = null;
+      askCheck();
+    };
+
     const outline = () => {
       const { terrain, placement } = latest.current;
       const at = hover.current;
+      if (placement && isBuildCommand(placement.command)) {
+        const type = String(placement.defaults["type"]);
+        const rot = rotOf(placement.defaults);
+        const area = at ? footprintAt(type, rot, at.x, at.y) : null;
+        const key = area && `${type}:${area.x}:${area.y}:${rot}`;
+        if (!area || !key) {
+          wanted = null;
+          showGhost();
+          scene.highlightTile(null);
+          return;
+        }
+        if (wanted?.key !== key) {
+          wanted = { key, type, x: area.x, y: area.y, rot };
+          showGhost();
+          askCheck();
+        }
+        // The outline is the part of the footprint on the map.
+        const x0 = Math.max(0, area.x);
+        const y0 = Math.max(0, area.y);
+        const x1 = Math.min(terrain?.width ?? 0, area.x + area.w);
+        const y1 = Math.min(terrain?.height ?? 0, area.y + area.h);
+        if (x1 > x0 && y1 > y0) scene.highlightTile(x0, y0, x1 - x0, y1 - y0);
+        else scene.highlightTile(null);
+        return;
+      }
+      if (wanted) {
+        wanted = null;
+        showGhost();
+      }
       const rect =
         at && terrain && placement
           ? brushRect(at.x, at.y, placement.size, terrain.width, terrain.height)
@@ -366,7 +495,6 @@ export function Viewport(props: ViewportProps) {
     // too steep) is told once, at the end. Esc, another tool or a cancelled pointer mid-drag puts
     // the stroke down: nothing of it is laid.
     let stroke: Stroke | null = null;
-    let disposed = false;
     const changedPreviews = () => {
       if (disposed) return;
       mine.previewVersion++;
@@ -504,12 +632,18 @@ export function Viewport(props: ViewportProps) {
           void sendStroke(done);
         },
       },
-      // With nothing in hand, a click on a guest looks at the guest rather than the tile under them.
+      // With nothing in hand, a click on a guest looks at the guest, and one on a ride or stall at
+      // that, rather than the tile under them. A guest in front of a ride is the guest.
       onPointClick: (clientX, clientY) => {
         if (latest.current.placement) return false;
         const guest = scene.pickGuestAt(clientX, clientY);
-        if (!guest) return false;
-        uiStore.getState().inspectGuest(guest.id);
+        if (guest) {
+          uiStore.getState().inspectGuest(guest.id);
+          return true;
+        }
+        const ride = scene.pickRideAt(clientX, clientY);
+        if (!ride) return false;
+        uiStore.getState().inspectRide(ride.id);
         return true;
       },
       onHover: (x, y) => {
@@ -531,9 +665,15 @@ export function Viewport(props: ViewportProps) {
         if (!client) return;
         const plan = planPlacement(placement, mods, x, y, terrain);
         if (!plan) return;
-        client
-          .command(plan.name, plan.input)
-          .then(onResult, (error: unknown) => onResult(failure(error)));
+        // A ride or stall stays in hand to build another; the tiles it took answer otherwise now.
+        const builds = isBuildCommand(plan.name);
+        client.command(plan.name, plan.input).then(
+          (result) => {
+            onResult(result);
+            if (builds && !disposed) recheck();
+          },
+          (error: unknown) => onResult(failure(error)),
+        );
       },
     });
 
@@ -590,8 +730,11 @@ export function Viewport(props: ViewportProps) {
       }
       const nextRides = latest.current.rides ?? null;
       if (nextRides !== rides) {
+        const changed = rides !== undefined;
         rides = nextRides;
         scene.setRides(nextRides);
+        // Someone built or took something down: where the ghost is may answer otherwise.
+        if (changed && wanted) recheck();
       }
       const nextStatus = latest.current.getRideStatus?.() ?? null;
       if (nextStatus !== rideStatus) {

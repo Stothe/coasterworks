@@ -1,8 +1,10 @@
 import type { ExecResult } from "@coasterworks/sim";
+import { useMemo } from "react";
 import type { Action, ActionContext } from "../actions/types";
 import type { SnapshotSource } from "../state/useSnapshot";
 import type { Tool } from "../state/uiStore";
 import { DOCK_ITEMS } from "./Dock";
+import { RidesTray, ShopsTray, type QueryFn } from "./trays/BuildTray";
 import { CatalogTray } from "./trays/CatalogTray";
 import { ParkTray } from "./trays/ParkTray";
 import { PathsTray } from "./trays/PathsTray";
@@ -43,6 +45,11 @@ export function Tray({
   execute = NOT_CONNECTED,
   disabled = false,
 }: TrayProps) {
+  const client = ctx?.client ?? null;
+  const query = useMemo<QueryFn | null>(
+    () => (client ? (name, input) => client.query(name, input) : null),
+    [client],
+  );
   if (tool === "select") return null;
   const label = DOCK_ITEMS.find((item) => item.tool === tool)?.label ?? tool;
   return (
@@ -54,6 +61,10 @@ export function Tray({
         <TerrainTray lastCharge={lastCharge} disabled={disabled} />
       ) : tool === "path" ? (
         <PathsTray lastCharge={lastCharge} disabled={disabled} />
+      ) : tool === "ride" ? (
+        <RidesTray query={query} lastCharge={lastCharge} disabled={disabled} />
+      ) : tool === "shop" ? (
+        <ShopsTray query={query} lastCharge={lastCharge} disabled={disabled} />
       ) : tool === "park" ? (
         <ParkTray source={source} execute={execute} onError={onError} disabled={disabled} />
       ) : (

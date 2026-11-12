@@ -1,3 +1,4 @@
+import { ALL_TYPES } from "@coasterworks/content";
 import type { SimClient } from "@coasterworks/protocol";
 import { createDefaultRegistry, type ExecResult } from "@coasterworks/sim";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
@@ -35,7 +36,11 @@ function host(): HostState {
     park: null,
     events: [],
     client: {
-      query: async () => ({ ok: true, result: catalog }),
+      // The catalog, and the types to build for the Rides and Shops trays.
+      query: async (name: string, input: { kind?: string }) =>
+        name === "content_list"
+          ? { ok: true, result: ALL_TYPES.filter((t) => t.kind === input.kind) }
+          : { ok: true, result: catalog },
       setSpeed: async () => {},
       command,
     } as unknown as SimClient,
@@ -141,18 +146,40 @@ describe("the dock in the app", () => {
     expect(screen.getAllByRole("group", { name: "Brush size" })).toHaveLength(1);
   });
 
-  it("3 shows the Rides tray, with a card for each of the sim's ride commands", async () => {
+  it("3 shows the Rides tray, with a card for each ride the sim can build", async () => {
     await ready();
     press("3");
     expect(store().tool).toBe("ride");
     expect(pressedTools()).toEqual(["Rides"]);
     const rides = screen.getByRole("region", { name: "Rides tray" });
-    expect(within(rides).getByRole("button", { name: /^Ride build/ })).toBeTruthy();
-    expect(within(rides).getByRole("button", { name: /^Ride demolish/ })).toBeTruthy();
-    expect(within(rides).queryByRole("button", { name: /^Stall build/ })).toBeNull();
-    expect(within(rides).queryByText("Coming with the next update")).toBeNull();
+    await act(async () => {});
+    expect(within(rides).getByRole("button", { name: /^Carousel/ })).toBeTruthy();
+    expect(within(rides).getByRole("button", { name: /^Big Wheel/ })).toBeTruthy();
+    // The commands are not cards: the cards are the rides.
+    expect(within(rides).queryByRole("button", { name: /^Build ride/ })).toBeNull();
+    expect(within(rides).queryByRole("button", { name: /^Snack Stand/ })).toBeNull();
     expect(screen.queryByRole("region", { name: "Terrain tray" })).toBeNull();
     expect(store().placement).toBeNull();
+  });
+
+  it("5 shows the Shops tray, and R turns the stall a card put in hand", async () => {
+    await ready();
+    press("5");
+    const shops = screen.getByRole("region", { name: "Shops tray" });
+    await act(async () => {});
+    fireEvent.click(within(shops).getByRole("button", { name: /^Snack Stand/ }));
+    expect(store().placement).toMatchObject({
+      command: "stall_build",
+      defaults: { type: "snack_stand", rot: 0 },
+    });
+    press("r");
+    press("r");
+    expect(store().placement?.defaults).toEqual({ type: "snack_stand", rot: 2 });
+    expect(store().tool).toBe("shop");
+    // With nothing to turn, R is Raise again.
+    press("Escape");
+    press("r");
+    expect(store().placement).toMatchObject({ command: "terrain_raise" });
   });
 
   it("1 brings the Terrain tray back with Raise in hand", async () => {

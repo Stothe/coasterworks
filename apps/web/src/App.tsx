@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { UiActionDeps } from "./actions/registry";
 import type { Action, ActionContext } from "./actions/types";
 import { useActions } from "./actions/useActions";
-import { bindingFor, stepSpeed } from "./state/keys";
+import { bindingsFor, stepSpeed } from "./state/keys";
 import { uiStore, useUiStore } from "./state/uiStore";
 import { useAgentToasts } from "./state/useAgentToasts";
 import { useHost, type HostState } from "./state/useHost";
@@ -25,6 +25,7 @@ import { TopRight } from "./ui/TopRight";
 import { Tray } from "./ui/Tray";
 import { requestClassicView } from "./viewport/classicView";
 import { Viewport, type ViewportHandle, type ViewportProps } from "./viewport/Viewport";
+import { isBuildCommand } from "./viewport/ridePlacement";
 import { BRUSH_SIZES } from "./viewport/terrainTools";
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -222,6 +223,8 @@ export function App() {
           const next = BRUSH_SIZES[BRUSH_SIZES.indexOf(store().brushSize) + direction];
           if (next !== undefined) store().setBrushSize(next);
         },
+        rotate: () => store().rotatePlacement(),
+        canRotate: () => isBuildCommand(store().placement?.command),
       },
     };
   }, [execute]);
@@ -273,20 +276,30 @@ export function App() {
       // While the command bar is up it has the keyboard: only Escape gets through to the app.
       const barOpen = uiStore.getState().commandBarOpen;
 
-      const binding = bindingFor(e);
+      // A key two actions share runs the first that can be done now (R turns a ride in hand, and
+      // else is Raise).
+      const bindings = bindingsFor(e);
+      if (bindings.length === 0 || !now.ctx) return;
+      const ctx = now.ctx;
+      const runnable = bindings.filter((binding) => {
+        const action = now.byId.get(binding.actionId);
+        return action && (!action.enabled || action.enabled(ctx));
+      });
+      // When none can, the first is the one the key is for, and it is left at that.
+      const binding = runnable[0] ?? bindings[0];
       if (!binding) return;
       // Holding a key repeats it; only undo and redo mean it.
       if (e.repeat && !binding.combo.startsWith("mod+")) return;
       if (barOpen && binding.actionId !== "ui.cancel") return;
       const action = now.byId.get(binding.actionId);
-      if (!action || !now.ctx) return;
+      if (!action) return;
       // Nobody is there to answer: only the keys that change the interface itself still work.
       if (now.disconnected && !action.offline) return;
-      if (action.enabled && !action.enabled(now.ctx)) return;
+      if (action.enabled && !action.enabled(ctx)) return;
       e.preventDefault();
       const report = (error: unknown) => now.onResult({ ok: false, error: messageOf(error) });
       try {
-        Promise.resolve(action.run(now.ctx)).catch(report);
+        Promise.resolve(action.run(ctx)).catch(report);
       } catch (error) {
         report(error);
       }
@@ -339,10 +352,11 @@ export function App() {
       ready: true,
       client,
       uiState: () => {
-        const { tool, placement } = uiStore.getState();
-        return { tool, placement };
+        const { tool, placement, placementCheck } = uiStore.getState();
+        return { tool, placement, placementCheck };
       },
       findGuest: () => viewport.current?.findGuest() ?? null,
+      tileToScreen: (x, y) => viewport.current?.tileToScreen(x, y) ?? null,
     };
     return () => {
       delete window.__coasterworks;
@@ -441,6 +455,7 @@ export function App() {
           notify={push}
           timeline={timeline}
           focusTile={focusRect}
+          rides={host.rides}
         />
         <Toast toasts={toasts} onDismiss={dismiss} besideInspector={inspectorOpen} />
         <HelpOverlay byId={byId} />

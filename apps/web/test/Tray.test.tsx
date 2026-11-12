@@ -405,7 +405,7 @@ function action(id: string, category: Action["category"], extra: Partial<Action>
 }
 
 describe("CatalogTray", () => {
-  const catalogTools: DockTool[] = ["ride", "scenery", "shop", "staff"];
+  const catalogTools: DockTool[] = ["scenery", "staff"];
 
   it.each(catalogTools)(
     "says it is coming with the next update when %s has no commands",
@@ -419,38 +419,36 @@ describe("CatalogTray", () => {
 
   it("lists the commands of its category as cards, and none of another's", () => {
     const actions = [
-      action("ride_build_carousel", "ride", {
-        title: "Build carousel",
-        description: "Builds a carousel. Costs $4,000.00 to build.",
+      action("scenery_plant_pine", "scenery", {
+        title: "Plant pine",
+        description: "Plants a pine. Costs $40.00 to plant.",
       }),
-      action("ride_demolish", "ride", {
-        title: "Demolish ride",
-        description: "Tears a ride down.",
+      action("scenery_remove", "scenery", {
+        title: "Remove scenery",
+        description: "Takes scenery away.",
       }),
       action("path_build", "path", { title: "Build path" }),
       action("terrain_raise", "terrain"),
     ];
-    renderTray({ tool: "ride", actions });
+    renderTray({ tool: "scenery", actions });
     const cards = screen.getAllByRole("button");
     expect(cards.map((c) => c.querySelector("span")?.textContent)).toEqual([
-      "Build carousel",
-      "Demolish ride",
+      "Plant pine",
+      "Remove scenery",
     ]);
     expect(screen.queryByText("Coming with the next update")).toBeNull();
     expect(screen.queryByText("Build path")).toBeNull();
     // The card says what it does, and what it costs when it says so.
-    expect(within(cards[0] as HTMLElement).getByText(/Builds a carousel/)).toBeTruthy();
-    expect(within(cards[0] as HTMLElement).getByText("Costs $4,000.00 to build")).toBeTruthy();
+    expect(within(cards[0] as HTMLElement).getByText(/Plants a pine/)).toBeTruthy();
+    expect(within(cards[0] as HTMLElement).getByText("Costs $40.00 to plant")).toBeTruthy();
     expect(within(cards[1] as HTMLElement).queryByText(/Costs/)).toBeNull();
   });
 
   it.each([
-    ["ride", "ride"],
     ["scenery", "scenery"],
-    ["shop", "shop"],
     ["staff", "staff"],
   ] as const)("lists the %s tool's commands under the %s category", (tool, category) => {
-    const other = tool === "ride" ? "shop" : "ride";
+    const other = tool === "scenery" ? "staff" : "scenery";
     renderTray({ tool, actions: [action("mine", category), action("theirs", other)] });
     expect(screen.getAllByRole("button").map((b) => b.textContent)).toEqual([
       expect.stringContaining("Title of mine"),
@@ -458,47 +456,56 @@ describe("CatalogTray", () => {
   });
 
   it("runs the action of the card that is clicked, with the context", () => {
-    const build = action("ride_build", "ride");
-    renderTray({ tool: "ride", actions: [build] });
-    click(/Title of ride_build/);
+    const build = action("scenery_plant", "scenery");
+    renderTray({ tool: "scenery", actions: [build] });
+    click(/Title of scenery_plant/);
     expect(build.run).toHaveBeenCalledExactlyOnceWith(ctx);
   });
 
   it("turns a card off while the connection is not made, or the action cannot be done", () => {
     const card = () =>
-      screen.getByRole("button", { name: /Title of ride_build/ }) as HTMLButtonElement;
-    const build = action("ride_build", "ride", { run: vi.fn() });
-    const { rerender, onError } = renderTray({ tool: "ride", actions: [build], ctx: null });
+      screen.getByRole("button", { name: /Title of scenery_plant/ }) as HTMLButtonElement;
+    const build = action("scenery_plant", "scenery", { run: vi.fn() });
+    const { rerender, onError } = renderTray({ tool: "scenery", actions: [build], ctx: null });
     expect(card().disabled).toBe(true);
     fireEvent.click(card());
     expect(build.run).not.toHaveBeenCalled();
 
-    const refused = action("ride_build", "ride", { enabled: () => false });
+    const refused = action("scenery_plant", "scenery", { enabled: () => false });
     rerender(
-      <Tray tool="ride" actions={[refused]} ctx={ctx} lastCharge={null} onError={onError} />,
+      <Tray tool="scenery" actions={[refused]} ctx={ctx} lastCharge={null} onError={onError} />,
     );
     expect(card().disabled).toBe(true);
     fireEvent.click(card());
     expect(refused.run).not.toHaveBeenCalled();
 
-    rerender(<Tray tool="ride" actions={[build]} ctx={ctx} lastCharge={null} onError={onError} />);
+    rerender(
+      <Tray tool="scenery" actions={[build]} ctx={ctx} lastCharge={null} onError={onError} />,
+    );
     expect(card().disabled).toBe(false);
     rerender(
-      <Tray tool="ride" actions={[build]} ctx={ctx} lastCharge={null} onError={onError} disabled />,
+      <Tray
+        tool="scenery"
+        actions={[build]}
+        ctx={ctx}
+        lastCharge={null}
+        onError={onError}
+        disabled
+      />,
     );
     expect(card().disabled).toBe(true);
   });
 
   it("reports an action that throws, or whose promise is rejected", async () => {
-    const throws = action("ride_throws", "ride", {
+    const throws = action("ride_throws", "scenery", {
       run: () => {
         throw new Error("nope");
       },
     });
-    const rejects = action("ride_rejects", "ride", {
+    const rejects = action("ride_rejects", "scenery", {
       run: () => Promise.reject(new Error("later")),
     });
-    const { onError } = renderTray({ tool: "ride", actions: [throws, rejects] });
+    const { onError } = renderTray({ tool: "scenery", actions: [throws, rejects] });
     click(/Title of ride_throws/);
     expect(onError).toHaveBeenLastCalledWith("nope");
     await act(async () => {

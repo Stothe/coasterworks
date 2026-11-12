@@ -129,12 +129,12 @@ describe("the page's hook for tests", () => {
     const hook = window.__coasterworks;
     expect(hook?.ready).toBe(true);
     // The park opens with nothing in hand.
-    expect(hook?.uiState()).toEqual({ tool: "select", placement: null });
+    expect(hook?.uiState()).toEqual({ tool: "select", placement: null, placementCheck: null });
     act(() => press("1"));
     expect(hook?.uiState().tool).toBe("terrain");
     expect(hook?.uiState().placement?.command).toBe("terrain_raise");
     act(() => press("Escape"));
-    expect(hook?.uiState()).toEqual({ tool: "select", placement: null });
+    expect(hook?.uiState()).toEqual({ tool: "select", placement: null, placementCheck: null });
   });
 });
 

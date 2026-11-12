@@ -31,7 +31,7 @@ import { guestGet, guestList, guestThoughts } from "./queries/guest.js";
 import { logRecent, undoState } from "./queries/log.js";
 import { financeSummary, parkBounds, parkStatus } from "./queries/park.js";
 import { pathCheckTiles } from "./queries/path.js";
-import { contentList, rideGet, rideList } from "./queries/ride.js";
+import { contentList, rideCheck, rideGet, rideList } from "./queries/ride.js";
 import { terrainGet } from "./queries/terrain.js";
 
 /** A registry holding every command and query in the sim. */
@@ -75,6 +75,7 @@ export function createDefaultRegistry(): Registry {
   registry.registerQuery(rideList);
   registry.registerQuery(rideGet);
   registry.registerQuery(contentList);
+  registry.registerQuery(rideCheck);
   // Reads the registry it is in, so a client can discover every command and query.
   registry.registerQuery(catalogListQuery(registry));
   return registry;

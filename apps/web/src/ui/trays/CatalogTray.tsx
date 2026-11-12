@@ -2,7 +2,7 @@ import type { Action, ActionContext, DockTool } from "../../actions/types";
 import { EmptyState } from "../kit";
 
 /** The dock tools whose trays list the sim's commands of the category of the same name. */
-export type CatalogTool = Exclude<DockTool, "terrain" | "path" | "park">;
+export type CatalogTool = Exclude<DockTool, "terrain" | "path" | "park" | "ride" | "shop">;
 
 export interface CatalogTrayProps {
   tool: CatalogTool;

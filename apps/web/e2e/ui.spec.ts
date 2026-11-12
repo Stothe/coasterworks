@@ -7,7 +7,11 @@ interface Hook {
     client?: {
       query(name: string, input: unknown): Promise<{ ok: boolean; result?: unknown }>;
     };
-    uiState?(): { tool: string; placement: { command: string } | null };
+    uiState?(): {
+      tool: string;
+      placement: { command: string } | null;
+      placementCheck: { ok: boolean; reason: string | null } | null;
+    };
   };
 }
 
@@ -134,7 +138,7 @@ test("a right click on a tile offers Raise terrain, and it is paid for", async (
   await expect.poll(async () => cents(await cashOf(page).innerText())).toBeLessThan(before);
 });
 
-test("3 is Rides, whose tray lists the ride commands; Scenery is still to come", async ({
+test("3 is Rides, whose tray lists the rides to build; Scenery is still to come", async ({
   page,
 }) => {
   await openPark(page);
@@ -142,7 +146,8 @@ test("3 is Rides, whose tray lists the ride commands; Scenery is still to come",
   await page.keyboard.press("3");
   const rides = page.getByRole("region", { name: "Rides tray" });
   await expect(rides).toBeVisible();
-  await expect(rides.getByRole("button", { name: /^Ride build/ })).toBeVisible();
+  await expect(rides.getByRole("button", { name: /^Carousel/ })).toBeVisible();
+  await expect(rides.getByRole("button", { name: /^Big Wheel/ })).toBeVisible();
   await expect(rides.getByText("Coming with the next update")).toHaveCount(0);
   await expect(page.getByRole("region", { name: "Terrain tray" })).toHaveCount(0);
   expect((await uiState(page))?.tool).toBe("ride");
@@ -170,14 +175,16 @@ test("? shows the keyboard map and Esc puts it away", async ({ page }) => {
 test("Esc returns to Select, with nothing in hand", async ({ page }) => {
   await openPark(page);
   // The park opens that way.
-  expect(await uiState(page)).toEqual({ tool: "select", placement: null });
+  expect(await uiState(page)).toEqual({ tool: "select", placement: null, placementCheck: null });
 
   await page.keyboard.press("1");
   await page.getByRole("button", { name: "Water", exact: true }).click();
   expect((await uiState(page))?.placement).not.toBeNull();
 
   await page.keyboard.press("Escape");
-  await expect.poll(() => uiState(page)).toEqual({ tool: "select", placement: null });
+  await expect
+    .poll(() => uiState(page))
+    .toEqual({ tool: "select", placement: null, placementCheck: null });
   const dock = page.getByRole("group", { name: "Tools" });
   await expect(dock.getByRole("button", { pressed: true })).toHaveCount(1);
   await expect(dock.getByRole("button", { name: "Select" })).toHaveAttribute(

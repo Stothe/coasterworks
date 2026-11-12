@@ -38,6 +38,7 @@ const fake = vi.hoisted(() => ({
     x: number,
     y: number,
   ) => { id: number } | null,
+  pickRideAt: ((_x: number, _y: number) => null) as (x: number, y: number) => { id: number } | null,
 }));
 vi.mock("@coasterworks/render", () => ({
   createScene: (_canvas: unknown, options: unknown) => {
@@ -63,6 +64,8 @@ vi.mock("@coasterworks/render", () => ({
       highlightTile: () => {},
       pickAt: (x: number, y: number) => fake.pickAt(x, y),
       pickGuestAt: (x: number, y: number) => fake.pickGuestAt(x, y),
+      pickRideAt: (x: number, y: number) => fake.pickRideAt(x, y),
+      setPlacementGhost: record("setPlacementGhost"),
       resize: () => {},
       render: record("render"),
       dispose: () => {},
@@ -105,6 +108,7 @@ beforeEach(() => {
   checking();
   fake.pickAt = () => ({ x: 2, y: 5 });
   fake.pickGuestAt = () => null;
+  fake.pickRideAt = () => null;
   fake.options = undefined;
   fake.calls = [];
   fake.rig = {
@@ -128,7 +132,11 @@ afterEach(() => {
 function mount(over: Partial<ViewportProps> = {}) {
   const props: ViewportProps = { terrain, tick: 0, client, onResult: vi.fn(), ...over };
   const view = render(<Viewport {...props} />);
-  return { props, canvas: view.getByLabelText("Park view") as HTMLCanvasElement };
+  return {
+    props,
+    canvas: view.getByLabelText("Park view") as HTMLCanvasElement,
+    rerender: (next: Partial<ViewportProps>) => view.rerender(<Viewport {...props} {...next} />),
+  };
 }
 const handlers = () => fake.handlers as ControlHandlers;
 const click = (x = 3, y = 4, mods = { shift: false, alt: false }) =>
@@ -998,5 +1006,161 @@ describe("Viewport: guests and the entrance", () => {
     expect(uiStore.getState().selection).toEqual({ kind: "entrance" });
     click(4, 6);
     expect(uiStore.getState().selection).toEqual({ kind: "tile", x: 4, y: 6 });
+  });
+});
+
+describe("Viewport: rides and stalls", () => {
+  /** The scene's ghosts, in order: what `setPlacementGhost` was last given and before. */
+  const ghosts = () =>
+    fake.calls.filter(([name]) => name === "setPlacementGhost").map(([, ghost]) => ghost);
+  const hoverAt = (x: number | null, y: number | null) => act(() => handlers().onHover(x, y));
+  /** Answers `ride_check` with `answer` for every question; returns the questions asked. */
+  function checks(answer: (input: Record<string, unknown>) => unknown) {
+    query.mockImplementation(async (name, input) =>
+      name === "ride_check"
+        ? { ok: true, result: answer(input as Record<string, unknown>) }
+        : { ok: true, result: { refused: [], changes: 0, cost: 0 } },
+    );
+    return () => query.mock.calls.filter(([name]) => name === "ride_check").map(([, i]) => i);
+  }
+  const carousel = () =>
+    act(() => uiStore.getState().startPlacement("ride_build", { type: "carousel", rot: 0 }));
+
+  it("looks at a ride clicked with nothing in hand, and a guest in front of it before it", () => {
+    mount();
+    fake.pickRideAt = () => ({ id: 7 });
+    expect(handlers().onPointClick?.(100, 100)).toBe(true);
+    expect(uiStore.getState().selection).toEqual({ kind: "ride", id: 7 });
+    expect(uiStore.getState().inspector.open).toBe(true);
+    fake.pickGuestAt = () => ({ id: 42 });
+    expect(handlers().onPointClick?.(100, 100)).toBe(true);
+    expect(uiStore.getState().selection).toEqual({ kind: "guest", id: 42 });
+  });
+
+  it("does not pick rides while placing", () => {
+    mount();
+    fake.pickRideAt = () => ({ id: 7 });
+    carousel();
+    expect(handlers().onPointClick?.(100, 100)).toBe(false);
+  });
+
+  it("draws the ghost centred on the hovered tile, coloured by what the sim says", async () => {
+    const asked = checks(({ x }) => ({
+      ok: x === 2,
+      reason: x === 2 ? null : "Ground is not flat",
+    }));
+    mount();
+    carousel();
+    hoverAt(3, 4);
+    await vi.waitFor(() => expect(ghosts().at(-1)).toMatchObject({ x: 2, y: 3, ok: true }));
+    expect(asked()).toEqual([{ type: "carousel", x: 2, y: 3, rot: 0 }]);
+    expect(ghosts().at(-1)).toEqual({ type: "carousel", x: 2, y: 3, rot: 0, ok: true });
+    expect(uiStore.getState().placementCheck).toEqual({ ok: true, reason: null });
+    hoverAt(4, 4);
+    await vi.waitFor(() => expect(ghosts().at(-1)).toMatchObject({ x: 3, ok: false }));
+    expect(uiStore.getState().placementCheck).toEqual({ ok: false, reason: "Ground is not flat" });
+    // Off the map: hidden.
+    hoverAt(null, null);
+    expect(ghosts().at(-1)).toBeNull();
+  });
+
+  it("asks one question at a time, and then for where the pointer is now", async () => {
+    let answer: ((value: QueryResult<unknown>) => void) | undefined;
+    query.mockImplementation(
+      (name) =>
+        new Promise((resolve) => {
+          if (name === "ride_check") answer = resolve;
+        }),
+    );
+    mount();
+    carousel();
+    hoverAt(3, 3);
+    hoverAt(4, 3);
+    hoverAt(5, 3);
+    expect(query).toHaveBeenCalledTimes(1);
+    await act(async () => answer?.({ ok: true, result: { ok: true, reason: null } }));
+    // The first answer is for tiles the pointer has left: the sim is asked about where it is.
+    await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(2));
+    expect(query.mock.calls[1]).toEqual(["ride_check", { type: "carousel", x: 4, y: 2, rot: 0 }]);
+    await act(async () =>
+      answer?.({ ok: true, result: { ok: false, reason: "Something is already here" } }),
+    );
+    expect(ghosts().at(-1)).toMatchObject({ x: 4, ok: false });
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
+  it("is red off the top or left of the map without asking", async () => {
+    const asked = checks(() => ({ ok: true, reason: null }));
+    mount();
+    carousel();
+    hoverAt(0, 3);
+    expect(ghosts().at(-1)).toMatchObject({ x: -1, ok: false });
+    expect(uiStore.getState().placementCheck).toEqual({
+      ok: false,
+      reason: "Area is outside the park",
+    });
+    expect(asked()).toEqual([]);
+  });
+
+  it("turns with the placement, and goes when it is put down", async () => {
+    const asked = checks(() => ({ ok: true, reason: null }));
+    mount();
+    act(() => uiStore.getState().startPlacement("ride_build", { type: "big_wheel", rot: 0 }));
+    hoverAt(5, 5);
+    await vi.waitFor(() => expect(ghosts().at(-1)).toMatchObject({ x: 5, y: 4, rot: 0 }));
+    act(() => uiStore.getState().rotatePlacement());
+    await vi.waitFor(() => expect(ghosts().at(-1)).toMatchObject({ x: 4, y: 5, rot: 1 }));
+    expect(asked().at(-1)).toEqual({ type: "big_wheel", x: 4, y: 5, rot: 1 });
+    act(() => uiStore.getState().cancel());
+    expect(ghosts().at(-1)).toBeNull();
+  });
+
+  it("builds where the ghost is, keeps it in hand, and asks again about the tiles it took", async () => {
+    const asked = checks(() => ({ ok: true, reason: null }));
+    const onResult = vi.fn();
+    command.mockResolvedValue({ ok: true, id: 3, cost: 120_000 });
+    mount({ onResult });
+    carousel();
+    hoverAt(3, 4);
+    await vi.waitFor(() => expect(asked()).toHaveLength(1));
+    click(3, 4);
+    await vi.waitFor(() => expect(onResult).toHaveBeenCalledTimes(1));
+    expect(command).toHaveBeenCalledExactlyOnceWith("ride_build", {
+      type: "carousel",
+      x: 2,
+      y: 3,
+      rot: 0,
+    });
+    expect(onResult).toHaveBeenCalledWith({ ok: true, id: 3, cost: 120_000 });
+    expect(uiStore.getState().placement).toMatchObject({ command: "ride_build" });
+    await vi.waitFor(() => expect(asked()).toHaveLength(2));
+  });
+
+  it("asks again when the rides change under the ghost", async () => {
+    const asked = checks(() => ({ ok: true, reason: null }));
+    const view = mount({ rides: [] });
+    // The first frame gives the scene the rides it was mounted with.
+    await vi.waitFor(() => expect(callsTo("setRides")).toHaveLength(1));
+    carousel();
+    hoverAt(3, 4);
+    await vi.waitFor(() => expect(asked()).toHaveLength(1));
+    const rides: RidePublic[] = [];
+    view.rerender({ rides });
+    await vi.waitFor(() => expect(asked()).toHaveLength(2));
+  });
+});
+
+describe("Viewport: tileToScreen", () => {
+  it("is the middle of the points that pick the tile, or null when none does", () => {
+    const ref = createRef<ViewportHandle>();
+    const { canvas } = mount({ ref });
+    canvas.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 100, bottom: 100, width: 100, height: 100 }) as DOMRect;
+    fake.pickAt = (x, y) => (x >= 40 && x < 60 && y >= 20 && y < 40 ? { x: 2, y: 3 } : null);
+    const point = ref.current?.tileToScreen(2, 3);
+    // Within a step of the middle of the tile's points.
+    expect(Math.abs((point?.clientX ?? 0) - 50)).toBeLessThan(4);
+    expect(Math.abs((point?.clientY ?? 0) - 30)).toBeLessThan(4);
+    expect(ref.current?.tileToScreen(9, 9)).toBeNull();
   });
 });

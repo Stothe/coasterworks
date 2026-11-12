@@ -1,5 +1,6 @@
 import type { TerrainData } from "@coasterworks/render";
 import { DAYS_PER_MONTH, MAX_HEIGHT, TICKS_PER_DAY } from "@coasterworks/sim";
+import { footprintAt, rotOf } from "./ridePlacement";
 import { DEFAULT_TERRAIN_OPTIONS, WATER_ABOVE } from "./terrainTools";
 
 export type BrushSize = 1 | 2 | 3;
@@ -61,7 +62,7 @@ export interface PlacedCommand {
  * (`heightMode` "tile", or no height given) or to the `height` it was given. Water fills to
  * `levelAbove` steps over that corner (two without it, or the `level` the placement gives
  * outright), held to the highest level the sim takes, and drains with Alt. Surface is grass
- * unless it is given one. `levelAbove` and `heightMode` are for this function only, and are left
+ * unless it is given one. A ride or a stall is built with its footprint centred on the click. `levelAbove` and `heightMode` are for this function only, and are left
  * out of the command.
  */
 export function planPlacement(
@@ -95,6 +96,16 @@ export function planPlacement(
           ? given["level"]
           : Math.min(MAX_HEIGHT, lowestCorner(terrain, x, y) + above);
       return { name: command, input: { ...given, ...rect, level: mods.alt ? 0 : level } };
+    }
+    // A ride or a stall goes where its turned footprint, centred on the click, has its top-left
+    // tile. A footprint off the top or left of the map is nothing to send: the sim takes no tile
+    // there, and its ghost has already said so.
+    case "ride_build":
+    case "stall_build": {
+      const rot = rotOf(given);
+      const area = footprintAt(String(given["type"]), rot, x, y);
+      if (!area || area.x < 0 || area.y < 0) return null;
+      return { name: command, input: { type: given["type"], x: area.x, y: area.y, rot } };
     }
     // The entrance takes its one tile, not an area.
     case "park_set_entrance":

@@ -1,7 +1,8 @@
-import { ALL_TYPES, typeById } from "@coasterworks/content";
+import { ALL_TYPES, typeById, type Rot } from "@coasterworks/content";
 import { z } from "zod";
 import { defineQuery } from "../commands/define.js";
-import { findRide, rideFootprint } from "../rides/rides.js";
+import { checkCash } from "../commands/execute.js";
+import { canPlaceRide, findRide, rideFootprint } from "../rides/rides.js";
 import { copyRide } from "../rides/types.js";
 
 /** A plain JSON copy of a content type, so nothing handed out points at the frozen data. */
@@ -57,4 +58,27 @@ export const contentList = defineQuery({
   input: z.object({ kind: z.enum(["ride", "stall"]).optional() }),
   run: (_world, { kind }) =>
     ALL_TYPES.filter((type) => kind === undefined || type.kind === kind).map(copyType),
+});
+
+/**
+ * Whether `ride_build` (or `stall_build`, for a stall type) would take a build here, and why not:
+ * what the placement ghost asks as the pointer moves, so it can turn green or red.
+ */
+export const rideCheck = defineQuery({
+  name: "ride_check",
+  description:
+    "Checks a ride or stall build without changing anything: `type` (a `content_list` id of either kind), the top-left tile (x, y) of the turned footprint and `rot` (0 to 3), as `ride_build` and `stall_build` take them. Returns `ok`, `reason` (why the build would be refused, as the build would say it, or null) and `cost` in cents (0 for an unknown type).",
+  category: "ride",
+  input: z.object({
+    type: z.string(),
+    x: z.int().min(0),
+    y: z.int().min(0),
+    rot: z.int().min(0).max(3),
+  }),
+  run: (world, { type: id, x, y, rot }) => {
+    const type = typeById(id);
+    if (type === undefined) return { ok: false, reason: `Unknown ride type: ${id}`, cost: 0 };
+    const reason = canPlaceRide(world, type, x, y, rot as Rot) ?? checkCash(world, type.cost);
+    return { ok: reason === null, reason, cost: type.cost };
+  },
 });
