@@ -9,7 +9,7 @@ import {
   tileIndex,
   type World,
 } from "../src/index.js";
-import { FIELD_CACHE_SIZE } from "../src/paths/routing.js";
+import { fieldCacheCapacity } from "../src/paths/routing.js";
 
 const CASH = 1_000_000_00;
 
@@ -264,10 +264,10 @@ describe("RouteCache.nextStep", () => {
   it("counts as a use of the target's field", () => {
     const world = open(10, 10);
     world.terrain.path.fill(PATH_FOOT);
-    const cache = new RouteCache(world.terrain);
-    for (let i = 0; i < FIELD_CACHE_SIZE; i++) cache.distanceField(i);
+    const cache = new RouteCache(world.terrain, undefined, 64);
+    for (let i = 0; i < 64; i++) cache.distanceField(i);
     cache.nextStep(99, 0);
-    cache.distanceField(FIELD_CACHE_SIZE);
+    cache.distanceField(64);
     expect(cache.has(0)).toBe(true);
     expect(cache.has(1)).toBe(false);
   });
@@ -440,11 +440,26 @@ describe("RouteCache LRU", () => {
   function allPath() {
     const world = open(10, 10);
     world.terrain.path.fill(PATH_FOOT);
-    return { world, cache: new RouteCache(world.terrain) };
+    return { world, cache: new RouteCache(world.terrain, undefined, 64) };
   }
 
-  it("keeps 64 fields", () => {
-    expect(FIELD_CACHE_SIZE).toBe(64);
+  it("holds as many fields as 8 million tiles' worth, between 64 and 512, unless told otherwise", () => {
+    expect(fieldCacheCapacity(16, 24)).toBe(512);
+    expect(fieldCacheCapacity(64, 64)).toBe(512);
+    expect(fieldCacheCapacity(128, 128)).toBe(488);
+    expect(fieldCacheCapacity(256, 256)).toBe(122);
+    expect(fieldCacheCapacity(1000, 1000)).toBe(64);
+    expect(new RouteCache(open(64, 64).terrain).capacity).toBe(512);
+    const big = open(256, 256);
+    const cache = new RouteCache(big.terrain);
+    expect(cache.capacity).toBe(122);
+    expect(new RouteCache(big.terrain, undefined, 64).capacity).toBe(64);
+    // A smaller map swapped in has room for more.
+    cache.sync(open(64, 64));
+    expect(cache.capacity).toBe(512);
+  });
+
+  it("keeps 64 fields when told to", () => {
     const { cache } = allPath();
     for (let i = 0; i < 64; i++) cache.distanceField(i);
     expect(cache.size).toBe(64);

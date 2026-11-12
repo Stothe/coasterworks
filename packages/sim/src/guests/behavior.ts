@@ -1,13 +1,13 @@
 import { typeById } from "@coasterworks/content";
 import { PATH_FOOT } from "../paths/paths.js";
-import { RouteCache, UNREACHABLE } from "../paths/routing.js";
+import { RouteCache, UNREACHABLE, type MultiSourceField } from "../paths/routing.js";
 import { queueCapacity, queueInfo, queueSlotTile } from "../rides/queue.js";
 import { findRide } from "../rides/rides.js";
 import type { RideRecord } from "../rides/types.js";
 import type { Rng } from "../rng.js";
 import { inBounds, tileBase } from "../terrain/terrain.js";
 import { TICKS_PER_DAY } from "../time.js";
-import type { World } from "../world/types.js";
+import type { Terrain, World } from "../world/types.js";
 import { TILE_UNITS, forEachGuest, laneTileX, laneTileY, removeGuest } from "./guests.js";
 import { THOUGHT } from "./thoughts.js";
 import {
@@ -445,16 +445,16 @@ function head(world: World, slot: number, routes: RouteCache): void {
   if (!atTarget(g, slot)) return;
 
   const here = ownIndex(world, slot);
-  if (ride !== undefined && ride.kind === "ride" && queueInfo(world, ride).dist.has(here)) {
+  if (ride !== undefined && ride.kind === "stall") {
+    headForStall(world, slot, ride, here, routes);
+    return;
+  }
+  if (ride !== undefined && queueInfo(world, ride).dist.has(here)) {
     joinQueue(world, slot, ride);
     return;
   }
   const dest = g.dest[slot] as number;
   if (here === dest) {
-    if (ride !== undefined && ride.kind === "stall") {
-      startBuying(world, slot);
-      return;
-    }
     g.state[slot] = GuestState.WANDERING;
     g.dest[slot] = NO_DEST;
     return;
@@ -791,9 +791,71 @@ function servedFor(need: Need): number {
 }
 
 /**
+ * The stalls of each need, as one multi-source distance field over the paths per need: for every
+ * tile, the steps to the nearest service tile of an open stall meeting that need, and which stall
+ * that is. Kept on the world beside the route cache and rebuilt (one flood per need, when first
+ * asked for) whenever the paths, the entrance or the rides change. Runtime only: never saved or
+ * hashed, since it is worked out again from the paths and the rides.
+ */
+export interface StallFields {
+  terrain: Terrain;
+  pathVersion: number;
+  rideVersion: number;
+  hunger: MultiSourceField | null;
+  thirst: MultiSourceField | null;
+  bathroom: MultiSourceField | null;
+}
+
+/**
+ * The field for `need` (see `StallFields`): `dist` is the steps from each tile to the service tile
+ * of the nearest open stall that meets it (`UNREACHABLE` if none can be reached), and `owner` that
+ * stall's id (0 for none). The stalls are seeded in ascending id order, so a tile equally near two
+ * of them belongs to the lower id. A stall whose service tile has no path is not in it.
+ */
+export function stallField(
+  world: World,
+  need: Need,
+  routes: RouteCache = guestRoutes(world),
+): MultiSourceField {
+  let fields = world.stallFields;
+  if (
+    fields === undefined ||
+    fields.terrain !== world.terrain ||
+    fields.pathVersion !== world.pathVersion ||
+    fields.rideVersion !== world.rideVersion
+  ) {
+    fields = {
+      terrain: world.terrain,
+      pathVersion: world.pathVersion,
+      rideVersion: world.rideVersion,
+      hunger: null,
+      thirst: null,
+      bathroom: null,
+    };
+    world.stallFields = fields;
+  }
+  const cached = fields[need];
+  if (cached !== null) return cached;
+  const width = world.terrain.width;
+  const targets: number[] = [];
+  const owners: number[] = [];
+  // `world.rides` is in id order, so the seeds are too.
+  for (const ride of world.rides) {
+    if (ride.kind !== "stall" || !ride.open || ride.service === null) continue;
+    const type = typeById(ride.type);
+    if (type === undefined || type.kind !== "stall" || type.meets !== need) continue;
+    targets.push(ride.service.y * width + ride.service.x);
+    owners.push(ride.id);
+  }
+  const field = routes.multiSourceField(targets, owners);
+  fields[need] = field;
+  return field;
+}
+
+/**
  * The open stall meeting `need` that a guest on tile `here` can walk to in the fewest steps along
- * the paths (to its service tile, by the route cache's distance field), the lowest id on a tie, or
- * undefined if it can reach none. A stall whose service tile has no path cannot be reached.
+ * the paths (to its service tile), the lowest id on a tie, or undefined if it can reach none: a
+ * look-up in the need's `stallField`. A stall whose service tile has no path cannot be reached.
  */
 export function nearestStall(
   world: World,
@@ -801,29 +863,65 @@ export function nearestStall(
   need: Need,
   routes: RouteCache,
 ): RideRecord | undefined {
-  const width = world.terrain.width;
-  let best: RideRecord | undefined;
-  let bestSteps = UNREACHABLE;
-  for (const ride of world.rides) {
-    if (ride.kind !== "stall" || !ride.open || ride.service === null) continue;
-    const type = typeById(ride.type);
-    if (type === undefined || type.kind !== "stall" || type.meets !== need) continue;
-    const steps = routes.distanceField(ride.service.y * width + ride.service.x)[here] as number;
-    if (steps < bestSteps) {
-      best = ride;
-      bestSteps = steps;
-    }
+  const field = stallField(world, need, routes);
+  if (here < 0 || here >= field.dist.length || field.dist[here] === UNREACHABLE) return undefined;
+  return findRide(world, field.owner[here] as number);
+}
+
+/**
+ * A guest heading for the stall `stall` walks down the field of the need the stall meets, a step
+ * at a time (the neighbour nearest a stall; north, east, south, west on a tie), rather than along a
+ * field of its own for that one stall. The tile it stands on says which stall it is now nearest:
+ * if that is another (one opened nearer, or this one closed), the guest heads for that one instead
+ * (`ride` and `dest` follow it, so closing or demolishing it lets the guest go). On a service tile
+ * it is there, and buys. With no stall it can reach it is lost.
+ */
+function headForStall(
+  world: World,
+  slot: number,
+  stall: RideRecord,
+  here: number,
+  routes: RouteCache,
+): void {
+  const type = typeById(stall.type);
+  if (type === undefined || type.kind !== "stall") {
+    clearRide(world, slot);
+    return;
   }
-  return best;
+  const field = stallField(world, type.meets, routes);
+  const steps = here < 0 ? UNREACHABLE : (field.dist[here] as number);
+  if (steps === UNREACHABLE) {
+    goLost(world, slot, routes);
+    return;
+  }
+  const g = world.guests;
+  const owner = field.owner[here] as number;
+  if (owner !== stall.id) {
+    const nearer = findRide(world, owner);
+    if (nearer === undefined || nearer.service === null) {
+      clearRide(world, slot);
+      return;
+    }
+    g.ride[slot] = owner;
+    g.dest[slot] = nearer.service.y * world.terrain.width + nearer.service.x;
+  }
+  if (steps === 0) {
+    startBuying(world, slot);
+    return;
+  }
+  setTarget(world, slot, routes.downhill(field.dist, here));
 }
 
 /**
  * The ride the guest in `slot`, standing on tile `here`, would most like to go on, or undefined if
- * none will do. A ride will do if it is open, its entrance can be reached along the paths, it is
- * not the guest's `lastRide`, its intensity is within `INTENSITY_WINDOW` of the guest's preference
- * (`intensityPref * 4`), and its queue is not full. Of those, the best scores
- * `excitement - |intensity - preference| / 2 - 4 * steps to the entrance` (the halving rounds
- * down); the lowest id wins a tie.
+ * none will do. A ride will do if it is open, its entrance can be reached along the paths (it is
+ * in the same connected piece of path as the guest: see `RouteCache.component`), the guest can pay
+ * its price, it is not the guest's `lastRide`, its intensity is within `INTENSITY_WINDOW` of the
+ * guest's preference (`intensityPref * 4`), and its queue is not full. Of those, the best scores
+ * `excitement - |intensity - preference| / 2 - 4 * the Manhattan distance to the entrance` (the
+ * halving rounds down); the lowest id wins a tie. Measuring as the crow flies (in whole tiles,
+ * along the grid) keeps the choice to a few sums a ride; only the ride chosen needs a distance
+ * field, to walk there by.
  */
 export function bestRide(
   world: World,
@@ -833,19 +931,26 @@ export function bestRide(
 ): RideRecord | undefined {
   const g = world.guests;
   const width = world.terrain.width;
+  const piece = routes.component(here);
+  if (piece < 0) return undefined;
+  const hy = Math.floor(here / width);
+  const hx = here - hy * width;
   const preference = (g.intensityPref[slot] as number) * 4;
   const last = g.lastRide[slot] as number;
+  const cash = g.cash[slot] as number;
   let best: RideRecord | undefined;
   let bestScore = 0;
   for (const ride of world.rides) {
     if (ride.kind !== "ride" || !ride.open || ride.entrance === null || ride.id === last) continue;
+    if (ride.price > cash) continue;
     const type = typeById(ride.type);
     if (type === undefined || type.kind !== "ride") continue;
     const gap = Math.abs(type.intensity - preference);
     if (gap > INTENSITY_WINDOW) continue;
     if (ride.queue.length >= queueCapacity(world, ride)) continue;
-    const steps = routes.distanceField(ride.entrance.y * width + ride.entrance.x)[here] as number;
-    if (steps === UNREACHABLE) continue;
+    const { x, y } = ride.entrance;
+    if (routes.component(y * width + x) !== piece) continue;
+    const steps = Math.abs(x - hx) + Math.abs(y - hy);
     const score = type.excitement - (gap >> 1) - steps * 4;
     if (best === undefined || score > bestScore) {
       best = ride;
@@ -867,7 +972,10 @@ function anyRideOpen(world: World): boolean {
  *  1. If hunger, thirst or the need for the toilet is at `NEED_SEEK_LEVEL` or more, it heads for
  *     the nearest open stall that meets the most pressing of them (see `nearestStall`). If there is
  *     none, it thinks so (at most once a `NEED_SEEK_THOUGHT_INTERVAL`, unless it has thought of
- *     something else since) and carries on.
+ *     something else since) and carries on. If that stall costs more than it has, it thinks it
+ *     cannot afford it and carries on; and a guest that has thought so (here, at a stall's counter
+ *     or at a ride's entrance) in the last `NEED_SEEK_THOUGHT_INTERVAL` does not look for a stall
+ *     at all (see `shortOfMoney`), so it does not keep walking to one it cannot pay.
  *  2. If any ride is open, it draws one number from `rng`: on one draw in two it goes for the ride
  *     it likes best (see `bestRide`), if any will do.
  *
@@ -879,22 +987,27 @@ function seekStallOrRide(world: World, slot: number, rng: Rng, routes: RouteCach
   if (here < 0) return false;
   const g = world.guests;
   const need = pressingNeed(g, slot);
-  if (need !== null) {
+  if (need !== null && !shortOfMoney(world, slot)) {
     const stall = nearestStall(world, here, need, routes);
     if (stall !== undefined && stall.service !== null) {
-      g.ride[slot] = stall.id;
-      g.dest[slot] = stall.service.y * world.terrain.width + stall.service.x;
-      g.state[slot] = GuestState.HEADING;
-      g.sinceAction[slot] = 0;
-      head(world, slot, routes);
-      return true;
-    }
-    const thought = nothingFor(need);
-    if (
-      g.thought[slot] !== thought ||
-      world.tick - (g.thoughtTick[slot] as number) >= NEED_SEEK_THOUGHT_INTERVAL
-    ) {
-      think(world, slot, thought);
+      if (stall.price > (g.cash[slot] as number)) {
+        think(world, slot, THOUGHT.CANT_AFFORD_RIDE);
+      } else {
+        g.ride[slot] = stall.id;
+        g.dest[slot] = stall.service.y * world.terrain.width + stall.service.x;
+        g.state[slot] = GuestState.HEADING;
+        g.sinceAction[slot] = 0;
+        head(world, slot, routes);
+        return true;
+      }
+    } else {
+      const thought = nothingFor(need);
+      if (
+        g.thought[slot] !== thought ||
+        world.tick - (g.thoughtTick[slot] as number) >= NEED_SEEK_THOUGHT_INTERVAL
+      ) {
+        think(world, slot, thought);
+      }
     }
   }
   if (!anyRideOpen(world) || rng.int(2) !== 0) return false;
@@ -902,6 +1015,20 @@ function seekStallOrRide(world: World, slot: number, rng: Rng, routes: RouteCach
   if (ride === undefined || !sendGuestToRide(world, slot, ride.id)) return false;
   head(world, slot, routes);
   return true;
+}
+
+/**
+ * Whether the guest has found it could not afford something in the last
+ * `NEED_SEEK_THOUGHT_INTERVAL` (a day): its last thought is that one. A guest's cash only changes
+ * when it pays, and paying always gives it another thought (served, or the ride was fun), so the
+ * thought it has is a record of whether its cash has changed since, with no field of its own.
+ */
+function shortOfMoney(world: World, slot: number): boolean {
+  const g = world.guests;
+  return (
+    g.thought[slot] === THOUGHT.CANT_AFFORD_RIDE &&
+    world.tick - (g.thoughtTick[slot] as number) < NEED_SEEK_THOUGHT_INTERVAL
+  );
 }
 
 /** A guest that has reached its stall's service tile stands there to be served. */

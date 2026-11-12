@@ -35,7 +35,8 @@ function placeOnTile(world: World, slot: number, index: number): void {
  * Boards `ride` from the front of its queue: guest by guest, as long as the guest at the front
  * stands on the entrance tile and fewer than `capacity` have got on, each pays the price and gets
  * on, or, if it cannot pay, steps out of the queue thinking it cannot afford it, is not charged,
- * and boarding goes on with the next. The first guest not on the entrance tile stops it, which
+ * takes the ride as its last (so it does not choose it again at once), and boarding goes on with
+ * the next. The first guest not on the entrance tile stops it, which
  * keeps the line first come, first served. Riders become RIDING, out of sight at the middle of the
  * footprint. Takings go to the park's cash, `park.income.rides`, `park.monthly.rides`, and the
  * ride's stats. Returns how many got on.
@@ -66,6 +67,8 @@ export function boardRide(world: World, ride: RideRecord, capacity: number): num
     if ((g.cash[slot] as number) < price) {
       think(world, slot, THOUGHT.CANT_AFFORD_RIDE);
       clearRide(world, slot);
+      // So that it does not choose the same ride straight away again.
+      g.lastRide[slot] = ride.id;
       continue;
     }
     g.cash[slot] = (g.cash[slot] as number) - price;

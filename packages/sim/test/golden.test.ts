@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { Sim, deserializeWorld, serializeWorld } from "../src/index.js";
 import { applySteps, parseScenario, runScenario } from "./golden/run.js";
 
 const scenarioText = readFileSync(new URL("./golden/scenario-1.json", import.meta.url), "utf8");
@@ -34,6 +35,13 @@ const scenario = () => parseScenario(JSON.parse(scenarioText));
  *    beside the footpath at (17, 27), turned to serve onto the path tile (16, 27), and is opened
  *    before the park opens, so thirsty guests walk to it, are served, and pay; ride and shop takings
  *    go into the month's books. The carousel stays closed, so no guest draws for a ride choice.
+ *  - Plan D2 Task 4 review fixes: re-recorded. Guests find stalls by one field per need, choose
+ *    rides by straight-line distance, and skip what they cannot afford. The carousel now has a
+ *    four-tile queue from its entrance (3, 23) down to a footpath along y = 26 that joins the main
+ *    path at (16, 26), and a footpath tile on its exit, and is opened before the park opens, so
+ *    the ride choice (and its one-in-two draw), the queue, boarding and paying are guarded too.
+ *    It is closed again 500 ticks before the park closes, so its last riders are off and home by
+ *    the end.
  */
 describe("golden scenario 1", () => {
   it("ends on the recorded hash", () => {
@@ -103,8 +111,9 @@ describe("runScenario", () => {
     const sim = runScenario(scenario());
     expect(sim.world.terrain.width).toBe(32);
     expect(sim.world.meta.name).toBe("golden");
-    // 120 ticks, then 70 days, then 2,400 ticks and 31 days with the park open, then 400 shut.
-    expect(sim.world.tick).toBe(120 + 70 * 400 + 2400 + 31 * 400 + 400);
+    // 120 ticks, then 70 days, then 2,400 ticks and 31 days with the park open, 500 more with the
+    // carousel shut (its last riders get off), then 400 with the park shut.
+    expect(sim.world.tick).toBe(120 + 70 * 400 + 2400 + 31 * 400 + 500 + 400);
     expect(sim.world.log.some((entry) => entry.name === "undo")).toBe(true);
   });
 
@@ -208,7 +217,7 @@ describe("runScenario", () => {
     // The scenario's carousel and drinks stand cost a little to run each day; nothing else is spent.
     expect(summary.thisMonth.running).toBeGreaterThan(0);
     const month = sim.world.park.monthly;
-    expect(summary.thisMonth.net).toBe(month.entry + month.shops - month.running);
+    expect(summary.thisMonth.net).toBe(month.entry + month.rides + month.shops - month.running);
     expect(sim.world.park.income.entry).toBe(sim.world.park.totalAdmissions * 300);
   });
 
@@ -218,9 +227,35 @@ describe("runScenario", () => {
     expect(stand?.stats.customers).toBeGreaterThan(0);
     expect(stand?.stats.income).toBe((stand?.stats.customers ?? 0) * 120);
     expect(world.park.income.shops).toBe(stand?.stats.income);
-    expect(world.park.income.rides).toBe(0);
     const booked = world.park.history.reduce((total, r) => total + r.shops, 0);
     expect(booked + world.park.monthly.shops).toBe(world.park.income.shops);
+  });
+
+  it("lets guests choose the carousel, queue and pay, so the hash is guarding rides too", () => {
+    const { world } = runScenario(scenario());
+    const carousel = world.rides.find((ride) => ride.type === "carousel");
+    expect(carousel?.stats.customers).toBeGreaterThan(0);
+    expect(carousel?.stats.income).toBe((carousel?.stats.customers ?? 0) * 150);
+    expect(world.park.income.rides).toBe(carousel?.stats.income);
+    const booked = world.park.history.reduce((total, r) => total + r.rides, 0);
+    expect(booked + world.park.monthly.rides).toBe(world.park.income.rides);
+  });
+
+  it("saved and reloaded while guests ride and buy, carries on exactly as a park that was not", () => {
+    // Up to the 2,400 ticks with the park open, and 1,500 of them.
+    const steps = scenario().steps;
+    const open = steps.findIndex((step) => "tick" in step && step.tick === 2400);
+    const sim = runScenario({ ...scenario(), steps: steps.slice(0, open) });
+    sim.step(1500);
+    const before = sim.world.rides.map((ride) => ride.stats.customers);
+    const twin = new Sim(deserializeWorld(serializeWorld(sim.world)));
+    expect(twin.hash()).toBe(sim.hash());
+    sim.step(3000);
+    twin.step(3000);
+    expect(twin.hash()).toBe(sim.hash());
+    // In those 3,000 ticks guests rode the carousel and bought drinks.
+    const after = sim.world.rides.map((ride) => ride.stats.customers);
+    expect(after.map((n, i) => n > (before[i] ?? 0))).toEqual([true, true]);
   });
 
   it("throws with the step number and the reason when a step fails", () => {

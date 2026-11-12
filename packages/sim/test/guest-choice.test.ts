@@ -4,11 +4,15 @@ import { Sim, deserializeWorld, serializeWorld, type World } from "../src/index.
 import {
   NEED_SEEK_LEVEL,
   WANDER_INTERVAL,
+  LEAVE_IDLE_TICKS,
   bestRide,
   guestRoutes,
   nearestStall,
   sendGuestToRide,
+  stallField,
 } from "../src/guests/behavior.js";
+import { UNREACHABLE } from "../src/paths/routing.js";
+import { TICKS_PER_DAY } from "../src/time.js";
 import { findGuest } from "../src/guests/guests.js";
 import { THOUGHT } from "../src/guests/thoughts.js";
 import { GuestState } from "../src/guests/types.js";
@@ -117,22 +121,6 @@ describe("stalls", () => {
     expect(stall.stats.customers).toBe(1);
     expect(world.park.income.shops).toBe(stall.price);
     expectSound(world);
-  });
-
-  it("a guest that cannot pay is served nothing, charged nothing, and still hungry", () => {
-    const sim = stallPark();
-    const { world } = sim;
-    const id = hungryGuest(world, { cash: 10 });
-    stepUntil(sim, () => at(world.guests.state, slotOf(world, id)) === GuestState.BUYING, 600);
-    const hunger = at(world.guests.hunger, slotOf(world, id));
-    sim.step(SNACK.serveTicks);
-    const slot = slotOf(world, id);
-    expect(at(world.guests.state, slot)).toBe(GuestState.WANDERING);
-    expect(at(world.guests.cash, slot)).toBe(10);
-    expect(at(world.guests.thought, slot)).toBe(THOUGHT.CANT_AFFORD_RIDE);
-    expect(at(world.guests.hunger, slot)).toBeGreaterThanOrEqual(hunger);
-    expect(world.park.income.shops).toBe(0);
-    expect(rideOf(world, 1).stats.customers).toBe(0);
   });
 
   it("with no open stall a hungry guest thinks there is nothing to eat and pays nothing", () => {
@@ -493,6 +481,182 @@ describe("the rating", () => {
     run(sim, "ride_close", { id: 1 });
     run(sim, "ride_close", { id: 2 });
     expect(openRideTypes(world)).toBe(1);
+  });
+});
+
+describe("need fields", () => {
+  it("give every tile its nearest open stall for a need and the steps to it, the lower id on a tie", () => {
+    const sim = makePark();
+    const { world } = sim;
+    // Drinks stands serving onto (8, 6) and (8, 16), and a snack stand onto (8, 18).
+    run(sim, "stall_build", { type: "drinks_stand", x: 9, y: 6, rot: 1 });
+    run(sim, "stall_build", { type: "drinks_stand", x: 9, y: 16, rot: 1 });
+    run(sim, "stall_build", { type: "snack_stand", x: 9, y: 18, rot: 1 });
+    for (const id of [1, 2, 3]) run(sim, "ride_open", { id });
+    guestRoutes(world);
+    const thirst = stallField(world, "thirst");
+    const tile = (y: number) => tileIndexOf(world, 8, y);
+    expect([at(thirst.dist, tile(6)), at(thirst.owner, tile(6))]).toEqual([0, 1]);
+    expect([at(thirst.dist, tile(16)), at(thirst.owner, tile(16))]).toEqual([0, 2]);
+    expect([at(thirst.dist, tile(20)), at(thirst.owner, tile(20))]).toEqual([4, 2]);
+    // (8, 11) is five steps from each: the lower id, seeded first, claims it.
+    expect([at(thirst.dist, tile(11)), at(thirst.owner, tile(11))]).toEqual([5, 1]);
+    expect([at(thirst.dist, tile(12)), at(thirst.owner, tile(12))]).toEqual([4, 2]);
+    // Off the paths, nothing.
+    expect(at(thirst.dist, tileIndexOf(world, 2, 2))).toBe(UNREACHABLE);
+    expect(at(thirst.owner, tileIndexOf(world, 2, 2))).toBe(0);
+    const hunger = stallField(world, "hunger");
+    expect([at(hunger.dist, tile(4)), at(hunger.owner, tile(4))]).toEqual([14, 3]);
+    expect(at(stallField(world, "bathroom").dist, tile(18))).toBe(UNREACHABLE);
+    // The same field until the rides or paths change; closing a stall takes it out.
+    expect(stallField(world, "thirst")).toBe(thirst);
+    run(sim, "ride_close", { id: 1 });
+    const closed = stallField(world, "thirst");
+    expect(closed).not.toBe(thirst);
+    expect([at(closed.dist, tile(11)), at(closed.owner, tile(11))]).toEqual([5, 2]);
+  });
+
+  it("let a guest choose a stall or a ride without a distance field for each", () => {
+    const sim = twoCarousels();
+    const { world } = sim;
+    run(sim, "stall_build", { type: "snack_stand", x: 9, y: 12, rot: 1 });
+    run(sim, "stall_build", { type: "snack_stand", x: 9, y: 20, rot: 1 });
+    run(sim, "ride_open", { id: 3 });
+    run(sim, "ride_open", { id: 4 });
+    const routes = guestRoutes(world);
+    const slot = placeGuest(world, { x: 8, y: 10 }, GuestState.WANDERING, { cash: 50_00 });
+    world.guests.intensityPref[slot] = LIKES_CAROUSEL;
+    const here = tileIndexOf(world, 8, 10);
+    expect(nearestStall(world, here, "hunger", routes)?.id).toBe(3);
+    expect(bestRide(world, slot, here, routes)?.id).toBe(1);
+    for (const ride of world.rides) {
+      const tile = ride.kind === "ride" ? ride.entrance : ride.service;
+      if (tile === null) throw new Error("no access tile");
+      expect(routes.has(tileIndexOf(world, tile.x, tile.y))).toBe(false);
+    }
+  });
+
+  it("lead a guest on its way to a stall to a nearer one that opens on the way, and it buys there", () => {
+    const sim = stallPark();
+    const { world } = sim;
+    const id = hungryGuest(world);
+    untilTurn(sim, id);
+    sim.step(1);
+    expect(at(world.guests.ride, slotOf(world, id))).toBe(1);
+    // A second snack stand, serving onto (8, 15), between the guest and the first.
+    run(sim, "stall_build", { type: "snack_stand", x: 9, y: 15, rot: 1 });
+    run(sim, "ride_open", { id: 2 });
+    stepUntil(sim, () => at(world.guests.state, slotOf(world, id)) === GuestState.BUYING, 400);
+    const slot = slotOf(world, id);
+    expect(at(world.guests.ride, slot)).toBe(2);
+    expect({ x: at(world.guests.x, slot) >> 5, y: at(world.guests.y, slot) >> 5 }).toEqual({
+      x: 8,
+      y: 15,
+    });
+    expectSound(world);
+    sim.step(SNACK.serveTicks);
+    expect(rideOf(world, 2).stats.customers).toBe(1);
+    expect(rideOf(world, 1).stats.customers).toBe(0);
+  });
+});
+
+describe("guests short of money", () => {
+  it("a guest that cannot afford the nearest stall thinks so once, and does not walk to it", () => {
+    const sim = stallPark();
+    const { world } = sim;
+    const id = hungryGuest(world, { cash: 10 });
+    untilTurn(sim, id);
+    sim.step(1);
+    let slot = slotOf(world, id);
+    expect(at(world.guests.thought, slot)).toBe(THOUGHT.CANT_AFFORD_RIDE);
+    expect(at(world.guests.ride, slot)).toBe(0);
+    const first = at(world.guests.thoughtTick, slot);
+    // Its next turns that day: no stall, and no second thought about it.
+    for (let turn = 0; turn < 2; turn++) {
+      untilTurn(sim, id);
+      sim.step(1);
+      slot = slotOf(world, id);
+      expect(at(world.guests.ride, slot)).toBe(0);
+      expect(at(world.guests.thoughtTick, slot)).toBe(first);
+    }
+    // A day later it looks again, and thinks it again.
+    stepUntil(sim, () => at(world.guests.thoughtTick, slotOf(world, id)) !== first, TICKS_PER_DAY);
+    expect(at(world.guests.thought, slotOf(world, id))).toBe(THOUGHT.CANT_AFFORD_RIDE);
+    expect(at(world.guests.thoughtTick, slotOf(world, id))).toBeGreaterThanOrEqual(
+      first + TICKS_PER_DAY,
+    );
+    expect(at(world.guests.cash, slotOf(world, id))).toBe(10);
+    expect(world.park.income.shops).toBe(0);
+    expectSound(world);
+  });
+
+  it("a guest whose stall puts its price up on the way is served nothing, charged nothing, and still hungry", () => {
+    const sim = stallPark();
+    const { world } = sim;
+    const id = hungryGuest(world, { cash: 10 });
+    run(sim, "ride_set_price", { id: 1, cents: 0 });
+    untilTurn(sim, id);
+    sim.step(1);
+    expect(at(world.guests.ride, slotOf(world, id))).toBe(1);
+    run(sim, "ride_set_price", { id: 1, cents: 150 });
+    stepUntil(sim, () => at(world.guests.state, slotOf(world, id)) === GuestState.BUYING, 600);
+    const hunger = at(world.guests.hunger, slotOf(world, id));
+    sim.step(SNACK.serveTicks);
+    const slot = slotOf(world, id);
+    expect(at(world.guests.state, slot)).toBe(GuestState.WANDERING);
+    expect(at(world.guests.cash, slot)).toBe(10);
+    expect(at(world.guests.thought, slot)).toBe(THOUGHT.CANT_AFFORD_RIDE);
+    expect(at(world.guests.hunger, slot)).toBeGreaterThanOrEqual(hunger);
+    expect(world.park.income.shops).toBe(0);
+    expect(rideOf(world, 1).stats.customers).toBe(0);
+  });
+
+  it("a guest that keeps failing to afford its stall still goes home when it has been idle too long", () => {
+    // Only the tile beside the gate has a path, and the snack stand serves onto it: the guest has
+    // nowhere else to walk.
+    const sim = makePark();
+    const { world } = sim;
+    run(sim, "path_remove", { x: 8, y: 4, w: 1, h: 18 });
+    run(sim, "stall_build", { type: "snack_stand", x: 9, y: 22, rot: 1 });
+    run(sim, "ride_open", { id: 1 });
+    const slot = placeGuest(world, { x: 8, y: 22 }, GuestState.WANDERING, {
+      hunger: 200,
+      thirst: 0,
+      energy: 255,
+      happiness: 200,
+      cash: 10,
+      sinceAction: 0,
+    });
+    const id = at(world.guests.id, slot);
+    stepUntil(
+      sim,
+      () => {
+        const s = findGuest(world, id);
+        return s < 0 || at(world.guests.state, s) === GuestState.LEAVING;
+      },
+      LEAVE_IDLE_TICKS + 2 * WANDER_INTERVAL,
+    );
+    // It went on idleness, not because it ran out of energy or spirits, and it never paid.
+    const left = findGuest(world, id);
+    expect(left).toBeGreaterThanOrEqual(0);
+    expect(at(world.guests.thought, left)).toBe(THOUGHT.GOING_HOME);
+    expect(at(world.guests.cash, left)).toBe(10);
+    expect(at(world.guests.energy, left)).toBeGreaterThanOrEqual(30);
+    expect(at(world.guests.happiness, left)).toBeGreaterThanOrEqual(60);
+  });
+
+  it("does not choose a ride it cannot afford", () => {
+    const sim = twoCarousels();
+    const { world } = sim;
+    const routes = guestRoutes(world);
+    const slot = placeGuest(world, { x: 8, y: 10 }, GuestState.WANDERING, { cash: 1_00 });
+    world.guests.intensityPref[slot] = LIKES_CAROUSEL;
+    const here = tileIndexOf(world, 8, 10);
+    expect(bestRide(world, slot, here, routes)?.id).toBe(1);
+    run(sim, "ride_set_price", { id: 1, cents: 1_01 });
+    expect(bestRide(world, slot, here, routes)?.id).toBe(2);
+    run(sim, "ride_set_price", { id: 2, cents: 2_00 });
+    expect(bestRide(world, slot, here, routes)).toBeUndefined();
   });
 });
 

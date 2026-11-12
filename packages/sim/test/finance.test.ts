@@ -161,3 +161,56 @@ describe("finance_summary", () => {
     expect(park.income.shops).toBeGreaterThan(0);
   });
 });
+
+describe("undoing a demolish", () => {
+  /** This month's takings by the stalls in `finance_summary`, and the month's shop income. */
+  function stallMonth(sim: Sim): { byStall: number; shops: number } {
+    const result = sim.query("finance_summary", {});
+    if (!result.ok) throw new Error(result.error);
+    const summary = result.result as {
+      thisMonth: { shops: number };
+      rides: Array<{ kind: string; monthIncome: number }>;
+    };
+    const byStall = summary.rides
+      .filter((ride) => ride.kind === "stall")
+      .reduce((sum, ride) => sum + ride.monthIncome, 0);
+    return { byStall, shops: summary.thisMonth.shops };
+  }
+
+  it("in the same month brings the stall's month figures back with it", () => {
+    const sim = busyPark();
+    sim.step(20 * TICKS_PER_DAY);
+    const before = rideStats(sim, 2);
+    expect(before.monthIncome).toBeGreaterThan(0);
+    run(sim, "ride_demolish", { id: 2 });
+    expect(sim.undo().ok).toBe(true);
+    expect(rideStats(sim, 2)).toEqual(before);
+    const month = stallMonth(sim);
+    expect(month.byStall).toBe(month.shops);
+  });
+
+  it("in a later month brings it back with nothing taken this month", () => {
+    const sim = busyPark();
+    sim.step(20 * TICKS_PER_DAY);
+    const before = rideStats(sim, 2);
+    expect(before.monthIncome).toBeGreaterThan(0);
+    run(sim, "ride_demolish", { id: 2 });
+    sim.step(MONTH);
+    expect(sim.undo().ok).toBe(true);
+    expect(rideStats(sim, 2)).toMatchObject({
+      income: before.income,
+      customers: before.customers,
+      monthIncome: 0,
+      monthCustomers: 0,
+    });
+    const month = stallMonth(sim);
+    expect(month.byStall).toBe(month.shops);
+    expect(validateWorldInvariants(sim.world)).toBeNull();
+  });
+});
+
+function rideStats(sim: Sim, id: number) {
+  const ride = sim.world.rides.find((r) => r.id === id);
+  if (ride === undefined) throw new Error(`no ride ${id}`);
+  return { ...ride.stats };
+}

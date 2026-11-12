@@ -33,6 +33,10 @@
     { "redo": true },
     { "exec": ["stall_build", { "type": "drinks_stand", "x": 17, "y": 27, "rot": 1 }] },
     { "exec": ["ride_open", { "id": 3 }] },
+    { "exec": ["path_build", { "x": 3, "y": 23, "w": 1, "h": 4, "kind": "queue" }] },
+    { "exec": ["path_build", { "x": 4, "y": 26, "w": 12, "h": 1, "kind": "foot" }] },
+    { "exec": ["path_build_tiles", { "tiles": [{ "x": 5, "y": 25 }], "kind": "foot" }] },
+    { "exec": ["ride_open", { "id": 2 }] },
     { "exec": ["park_open", {}] },
     { "exec": ["path_build", { "x": 17, "y": 25, "w": 2, "h": 1, "kind": "foot" }] },
     { "undo": true },
@@ -40,6 +44,8 @@
     { "exec": ["park_set_entry_fee", { "cents": 300 }] },
     { "tick": 2400 },
     { "exec": ["sim_advance", { "days": 31 }] },
+    { "exec": ["ride_close", { "id": 2 }] },
+    { "tick": 500 },
     { "exec": ["park_close", {}] },
     {
       "exec": [

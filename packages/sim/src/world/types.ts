@@ -1,3 +1,4 @@
+import type { StallFields } from "../guests/behavior.js";
 import type { GuestStore, Waypoints } from "../guests/types.js";
 import type { ParkState } from "../park/types.js";
 import type { RouteCache } from "../paths/routing.js";
@@ -102,6 +103,8 @@ export interface World {
   waypoints?: Waypoints | undefined;
   /** Each ride's queue tiles, rebuilt when the paths or rides change. Runtime only, like `routes`. */
   queues?: QueueCache | undefined;
+  /** Each need's distance field to its nearest open stall. Runtime only, like `routes`. */
+  stallFields?: StallFields | undefined;
   /** Root generator, seeded from `meta.seed`. Systems fork their own streams from it. */
   rng: Rng;
   /**

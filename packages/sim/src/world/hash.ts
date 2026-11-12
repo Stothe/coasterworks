@@ -30,7 +30,7 @@ function liveValues(g: GuestStore, array: GuestArray): GuestArray {
  * root rng state and the guests' stream, every ride record and the ride id counter, the log
  * length, the id counter, the undo/redo stacks, and the world's name and seed. `meta.created` is
  * left out so the same park hashes the same whenever it was created, and `pathVersion`,
- * `rideVersion`, `routes`, and `waypoints` are left out because they are only caches or counters
+ * `rideVersion`, `routes`, `waypoints`, `queues` and `stallFields` are left out because they are only caches or counters
  * that restart on load.
  *
  * Two worlds that hash differently have diverged. Equal hashes mean equal covered state, up to

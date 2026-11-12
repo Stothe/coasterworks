@@ -224,6 +224,8 @@ describe("riding a ride", () => {
     expect(at(world.guests.cash, p)).toBe(PRICE - 1);
     expect(at(world.guests.thought, p)).toBe(THOUGHT.CANT_AFFORD_RIDE);
     expect(at(world.guests.ride, p)).toBe(0);
+    // It will not choose the same ride again straight away.
+    expect(at(world.guests.lastRide, p)).toBe(1);
     expect(rideOf(world).riders).toEqual([rich]);
     expect(rideOf(world).queue).toEqual([]);
     expect(world.finance.cash).toBe(cash + PRICE);

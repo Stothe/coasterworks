@@ -17,6 +17,7 @@ import {
   type RideRecord,
 } from "../rides/types.js";
 import { MAX_MAP, type World } from "../world/types.js";
+import { TICKS_PER_DAY, DAYS_PER_MONTH } from "../time.js";
 import { defineCommand } from "./define.js";
 import { checkCash, formatMoney } from "./execute.js";
 
@@ -98,12 +99,19 @@ export const stallBuild = buildCommand("stall");
 interface DemolishUndo {
   ride: RideRecord;
   refund: number;
+  /** The month it was demolished in, counted from the start of the game (see `monthOf`). */
+  month: number;
+}
+
+/** The month tick `tick` is in, counted from 0 at the start of the game (year * months + month). */
+function monthOf(tick: number): number {
+  return Math.floor(tick / (TICKS_PER_DAY * DAYS_PER_MONTH));
 }
 
 export const rideDemolish = defineCommand({
   name: "ride_demolish",
   description:
-    "Demolishes a ride or stall by id and frees its tiles. Guests queuing for it step out of the queue and wander; guests on it are let off at once at its exit (or, if the exit has no path, on the nearest path tile), without finishing the ride. Guests buying at a stall, or on their way to it, wander off unserved and are not charged. Refunds half of what the type cost to build, rounded down to the cent, straight into cash (the command's own cost is 0). Undoing it puts the ride back as it was, with the same id, name, price and stats, but empty and idle (the guests it let go stay where they are), and takes the refund back, so the undo is refused if the park no longer has that much cash.",
+    "Demolishes a ride or stall by id and frees its tiles. Guests queuing for it step out of the queue and wander; guests on it are let off at once at its exit (or, if the exit has no path, on the nearest path tile), without finishing the ride. Guests buying at a stall, or on their way to it, wander off unserved and are not charged. Refunds half of what the type cost to build, rounded down to the cent, straight into cash (the command's own cost is 0). Undoing it puts the ride back as it was, with the same id, name, price and stats (this month's takings and customers start from nothing if the month has changed since), but empty and idle (the guests it let go stay where they are), and takes the refund back, so the undo is refused if the park no longer has that much cash.",
   category: "ride",
   input: idSchema,
   undoable: true,
@@ -118,10 +126,16 @@ export const rideDemolish = defineCommand({
     const refund = type === undefined ? 0 : Math.floor(type.cost / 2);
     world.finance.cash += refund;
     world.rideVersion++;
-    return { ride: copyRide(ride), refund };
+    return { ride: copyRide(ride), refund, month: monthOf(world.tick) };
   },
+  // Undone in a later month, the ride's month figures belong to a month whose books have closed.
   revert: (world, _input, undo: DemolishUndo) => {
-    addRide(world, copyRide(undo.ride));
+    const ride = copyRide(undo.ride);
+    if (monthOf(world.tick) !== undo.month) {
+      ride.stats.monthIncome = 0;
+      ride.stats.monthCustomers = 0;
+    }
+    addRide(world, ride);
     world.finance.cash -= undo.refund;
     world.rideVersion++;
   },
