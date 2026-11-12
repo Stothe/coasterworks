@@ -43,11 +43,34 @@ export const LOST_GIVE_UP = 2400;
 /** A guest that has queued this many ticks (six game days) gives up on the ride and wanders. */
 export const QUEUE_PATIENCE = 2400;
 
+/*
+ * Need pacing (Plan D3 ruling; the measurements are in the D2 ledger). A guest comes in with hunger
+ * and thirst under 80 and a need for the toilet under 60, rising a point every 40 and 80 ticks. It
+ * goes looking for food or drink at `NEED_SEEK_LEVEL` (80), so about a quarter of guests want one
+ * within a day of coming in and more than two in five within two; and for the toilets at
+ * `BATHROOM_SEEK_LEVEL` (56), so the Restrooms see use in the first few days. Both sit well below
+ * where needs start to hurt a guest's mood (128), so a park with stalls keeps its guests from ever
+ * feeling it. It only complains that there is nothing for a need at `NEED_COMPLAIN_LEVEL` (160, the
+ * old seek level), and needs only ever send a guest to a stall, so a park without stalls plays
+ * exactly as before: same thoughts, same mood, same rating. (The other candidates measured, wider
+ * arrival needs and faster need rates, cost a park without stalls 8 to 10% of its month-end rating
+ * and still had stalls idle for most of a week.)
+ */
+
 /**
- * A hunger, thirst or need for the toilet at this level or more sends a wandering guest to the
+ * A hunger or thirst at this level or more sends a wandering guest, or one walking about, to the
  * nearest open stall that meets it.
  */
-export const NEED_SEEK_LEVEL = 160;
+export const NEED_SEEK_LEVEL = 80;
+
+/** The same for the need for the toilet. */
+export const BATHROOM_SEEK_LEVEL = 56;
+
+/**
+ * A guest whose most pressing need is at this level or more, and finds no stall for it, thinks so
+ * (see `nothingFor`).
+ */
+export const NEED_COMPLAIN_LEVEL = 160;
 
 /**
  * A guest that finds nothing to meet its need thinks so, and not again for this many ticks (a day)
@@ -288,7 +311,8 @@ function shouldLeave(g: GuestStore, slot: number): boolean {
  *    shut or it cannot pay. If the entrance has gone or moved, it turns back before paying.
  *  - WANDERING: on its turn (every 120 ticks, staggered by id), goes to a stall if it needs one,
  *    or maybe to a ride (see `seekStallOrRide`), or else picks one of a few waypoints.
- *  - HEADING: takes the next step along the route to `dest`, or arrives.
+ *  - HEADING: takes the next step along the route to `dest`, or arrives. One walking about turns
+ *    for a stall if it needs one (see `turnToStall`).
  *  - LEAVING: follows the route to the entrance, then walks out along the lane and is gone.
  *  - LOST: on its turn (every 200 ticks), looks again for a way out, or about.
  *  - QUEUING: counts its time in the queue (giving up at `QUEUE_PATIENCE`), and walks up the
@@ -445,6 +469,7 @@ function head(world: World, slot: number, routes: RouteCache): void {
   if (!atTarget(g, slot)) return;
 
   const here = ownIndex(world, slot);
+  if (ride === undefined && turnToStall(world, slot, here, routes)) return;
   if (ride !== undefined && ride.kind === "stall") {
     headForStall(world, slot, ride, here, routes);
     return;
@@ -462,6 +487,30 @@ function head(world: World, slot: number, routes: RouteCache): void {
   const next = routes.nextStep(here, dest);
   if (next < 0) goLost(world, slot, routes);
   else setTarget(world, slot, next);
+}
+
+/**
+ * A guest walking about (HEADING for a waypoint, not a ride or stall) that comes to the middle of a
+ * tile with a pressing need (see `pressingNeed`) turns for the nearest open stall that meets it, if
+ * there is one it can reach and afford and it has not lately found it could not afford something
+ * (see `shortOfMoney`), and takes its first step. Without this a guest would only notice its need
+ * once it got where it was going. It thinks nothing when there is no such stall, and draws nothing
+ * from the rng, so a park without stalls plays exactly as before. Returns true if it turned.
+ */
+function turnToStall(world: World, slot: number, here: number, routes: RouteCache): boolean {
+  if (world.rides.length === 0) return false;
+  const g = world.guests;
+  const need = pressingNeed(g, slot);
+  if (need === null || shortOfMoney(world, slot)) return false;
+  const stall = nearestStall(world, here, need, routes);
+  if (stall === undefined || stall.service === null || stall.price > (g.cash[slot] as number)) {
+    return false;
+  }
+  g.ride[slot] = stall.id;
+  g.dest[slot] = stall.service.y * world.terrain.width + stall.service.x;
+  g.sinceAction[slot] = 0;
+  head(world, slot, routes);
+  return true;
 }
 
 /** Turns a guest for the exit. False, and nothing changes, if the park has no entrance. */
@@ -751,7 +800,8 @@ function riding(world: World, slot: number): void {
 export type Need = "hunger" | "thirst" | "bathroom";
 
 /**
- * The guest's most pressing need at `NEED_SEEK_LEVEL` or more (hunger, then thirst, then the
+ * The guest's most pressing need: the highest of those at their seek level or more (hunger and
+ * thirst at `NEED_SEEK_LEVEL`, the toilet at `BATHROOM_SEEK_LEVEL`; hunger, then thirst, then the
  * toilet, on a tie), or null if none is that pressing.
  */
 function pressingNeed(g: GuestStore, slot: number): Need | null {
@@ -759,16 +809,16 @@ function pressingNeed(g: GuestStore, slot: number): Need | null {
   const thirst = g.thirst[slot] as number;
   const bathroom = g.bathroom[slot] as number;
   let need: Need | null = null;
-  let level = NEED_SEEK_LEVEL - 1;
-  if (hunger > level) {
+  let level = -1;
+  if (hunger >= NEED_SEEK_LEVEL) {
     need = "hunger";
     level = hunger;
   }
-  if (thirst > level) {
+  if (thirst >= NEED_SEEK_LEVEL && thirst > level) {
     need = "thirst";
     level = thirst;
   }
-  if (bathroom > level) need = "bathroom";
+  if (bathroom >= BATHROOM_SEEK_LEVEL && bathroom > level) need = "bathroom";
   return need;
 }
 
@@ -969,10 +1019,11 @@ function anyRideOpen(world: World): boolean {
 /**
  * A wandering guest's turn, in a park with rides or stalls, before it thinks of walking about:
  *
- *  1. If hunger, thirst or the need for the toilet is at `NEED_SEEK_LEVEL` or more, it heads for
- *     the nearest open stall that meets the most pressing of them (see `nearestStall`). If there is
- *     none, it thinks so (at most once a `NEED_SEEK_THOUGHT_INTERVAL`, unless it has thought of
- *     something else since) and carries on. If that stall costs more than it has, it thinks it
+ *  1. If hunger, thirst or the need for the toilet is at its seek level or more (see
+ *     `pressingNeed`), it heads for the nearest open stall that meets the most pressing of them (see
+ *     `nearestStall`). If there is none, it carries on, and if that need is at
+ *     `NEED_COMPLAIN_LEVEL` or more it thinks so (at most once a `NEED_SEEK_THOUGHT_INTERVAL`,
+ *     unless it has thought of something else since). If that stall costs more than it has, it thinks it
  *     cannot afford it and carries on; and a guest that has thought so (here, at a stall's counter
  *     or at a ride's entrance) in the last `NEED_SEEK_THOUGHT_INTERVAL` does not look for a stall
  *     at all (see `shortOfMoney`), so it does not keep walking to one it cannot pay.
@@ -1000,7 +1051,7 @@ function seekStallOrRide(world: World, slot: number, rng: Rng, routes: RouteCach
         head(world, slot, routes);
         return true;
       }
-    } else {
+    } else if ((g[need][slot] as number) >= NEED_COMPLAIN_LEVEL) {
       const thought = nothingFor(need);
       if (
         g.thought[slot] !== thought ||

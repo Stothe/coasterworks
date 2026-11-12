@@ -42,6 +42,10 @@ const scenario = () => parseScenario(JSON.parse(scenarioText));
  *    the ride choice (and its one-in-two draw), the queue, boarding and paying are guarded too.
  *    It is closed again 500 ticks before the park closes, so its last riders are off and home by
  *    the end.
+ *  - Plan D3 (need tuning): re-recorded (7ae8879097eb2db4 to b0bf2d8eea6f7d38). Guests look for
+ *    food and drink at 80 rather than 160 and for the toilets at 56, complain of no stall only at
+ *    160, and turn for a stall on their way when they need one, so the drinks stand gets its
+ *    customers days sooner. The scenario is unchanged and spawning draws what it did.
  */
 describe("golden scenario 1", () => {
   it("ends on the recorded hash", () => {

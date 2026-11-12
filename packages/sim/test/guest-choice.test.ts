@@ -2,6 +2,8 @@ import { typeById, type RideType, type StallType } from "@coasterworks/content";
 import { describe, expect, it } from "vitest";
 import { Sim, deserializeWorld, serializeWorld, type World } from "../src/index.js";
 import {
+  BATHROOM_SEEK_LEVEL,
+  NEED_COMPLAIN_LEVEL,
   NEED_SEEK_LEVEL,
   WANDER_INTERVAL,
   LEAVE_IDLE_TICKS,
@@ -56,10 +58,13 @@ function stallPark(open = true): Sim {
   return sim;
 }
 
-/** A hungry guest standing on the footpath at (8, 18). Returns its id. */
-function hungryGuest(world: World, patch: { cash?: number } = {}): number {
+/**
+ * A hungry guest standing on the footpath at (8, 18): hunger 200 unless `patch` says otherwise, so
+ * hungry enough to complain when there is nothing to eat. Returns its id.
+ */
+function hungryGuest(world: World, patch: { cash?: number; hunger?: number } = {}): number {
   const slot = placeGuest(world, { x: 8, y: 18 }, GuestState.WANDERING, {
-    hunger: 200,
+    hunger: patch.hunger ?? 200,
     sinceAction: 0,
     cash: patch.cash ?? 50_00,
   });
@@ -70,7 +75,9 @@ describe("stalls", () => {
   it("a hungry guest walks to the open snack stand, is served once, pays once and is less hungry", () => {
     const sim = stallPark();
     const { world } = sim;
-    const id = hungryGuest(world);
+    // Hungry enough to look for food, and a snack takes it far enough under `NEED_SEEK_LEVEL`
+    // that it is not hungry again within the 1,200 ticks this watches it for.
+    const id = hungryGuest(world, { hunger: 120 });
     const stall = rideOf(world, 1);
     const service = stall.service as { x: number; y: number };
     expect(service).toEqual({ x: 8, y: 12 });
@@ -149,6 +156,76 @@ describe("stalls", () => {
     // Its next turn, a guest walk later, is too soon to think it again.
     stepUntil(sim, () => world.tick >= first + WANDER_INTERVAL + 1, WANDER_INTERVAL + 2);
     expect(at(world.guests.thoughtTick, slotOf(world, id))).toBe(first);
+  });
+
+  it("looks for food from NEED_SEEK_LEVEL, but only complains of none from NEED_COMPLAIN_LEVEL", () => {
+    expect(NEED_SEEK_LEVEL).toBeLessThan(NEED_COMPLAIN_LEVEL - 40);
+    const sim = stallPark(false);
+    const { world } = sim;
+    const id = hungryGuest(world, { hunger: NEED_SEEK_LEVEL });
+    untilTurn(sim, id);
+    sim.step(1);
+    // A little hungry, and no stall open: it carries on without a word.
+    expect(at(world.guests.thought, slotOf(world, id))).not.toBe(THOUGHT.NOTHING_TO_EAT);
+    expect(at(world.guests.ride, slotOf(world, id))).toBe(0);
+    // With the stall open it goes for a snack: at its next turn, or a tile on if it is walking.
+    run(sim, "ride_open", { id: 1 });
+    stepUntil(sim, () => at(world.guests.ride, slotOf(world, id)) === 1, WANDER_INTERVAL);
+    expect(at(world.guests.state, slotOf(world, id))).toBe(GuestState.HEADING);
+  });
+
+  it("looks for the toilets from BATHROOM_SEEK_LEVEL, and not before", () => {
+    const sim = makePark();
+    const { world } = sim;
+    run(sim, "stall_build", { type: "restrooms", x: 9, y: 14, rot: 1 });
+    run(sim, "ride_open", { id: 1 });
+    const needs = { hunger: 0, thirst: 0, sinceAction: 0 };
+    const ready = placeGuest(world, { x: 8, y: 18 }, GuestState.WANDERING, {
+      ...needs,
+      bathroom: BATHROOM_SEEK_LEVEL,
+    });
+    const readyId = at(world.guests.id, ready);
+    untilTurn(sim, readyId);
+    sim.step(1);
+    expect(at(world.guests.ride, slotOf(world, readyId))).toBe(1);
+
+    const sim2 = makePark();
+    run(sim2, "stall_build", { type: "restrooms", x: 9, y: 14, rot: 1 });
+    run(sim2, "ride_open", { id: 1 });
+    const early = placeGuest(sim2.world, { x: 8, y: 18 }, GuestState.WANDERING, {
+      ...needs,
+      bathroom: BATHROOM_SEEK_LEVEL - 10,
+    });
+    const earlyId = at(sim2.world.guests.id, early);
+    untilTurn(sim2, earlyId);
+    sim2.step(1);
+    expect(at(sim2.world.guests.ride, slotOf(sim2.world, earlyId))).toBe(0);
+  });
+
+  it("a guest walking about turns for a stall as soon as it needs one, and says nothing if none", () => {
+    for (const open of [true, false]) {
+      const sim = stallPark(open);
+      const { world } = sim;
+      // Walking up the path to (8, 4), past the stall's service tile at (8, 12).
+      const slot = placeGuest(world, { x: 8, y: 20 }, GuestState.HEADING, {
+        dest: tileIndexOf(world, 8, 4),
+        hunger: 200,
+        sinceAction: 0,
+      });
+      const id = at(world.guests.id, slot);
+      sim.step(1);
+      const now = slotOf(world, id);
+      expect(at(world.guests.state, now)).toBe(GuestState.HEADING);
+      if (open) {
+        expect(at(world.guests.ride, now)).toBe(1);
+        stepUntil(sim, () => at(world.guests.state, slotOf(world, id)) === GuestState.BUYING, 400);
+      } else {
+        // On its way it neither turns nor complains: that waits for its next turn to choose.
+        expect(at(world.guests.ride, now)).toBe(0);
+        expect(at(world.guests.thought, now)).toBe(0);
+      }
+      expectSound(world);
+    }
   });
 
   it("goes for the most pressing need, to the nearest stall that meets it", () => {
@@ -236,7 +313,8 @@ describe("stalls", () => {
   it("a park saved while a guest is buying carries on exactly as one that was not", () => {
     const sim = stallPark();
     const { world } = sim;
-    const id = hungryGuest(world);
+    // As above: one snack, and not hungry again within the 2,000 ticks that follow.
+    const id = hungryGuest(world, { hunger: 120 });
     stepUntil(sim, () => at(world.guests.state, slotOf(world, id)) === GuestState.BUYING, 600);
     sim.step(7);
     const twin = new Sim(deserializeWorld(serializeWorld(world)));
@@ -662,7 +740,10 @@ describe("guests short of money", () => {
 
 describe("parks without rides", () => {
   // Hashes recorded before guests could choose rides and stalls: a park with none behaves exactly
-  // as it did.
+  // as it did. The D3 need tuning (seek levels 80 and 56, complaints at 160, turning for a stall on
+  // the way) left them as they were on purpose, since needs only ever act through a stall, so these
+  // also guard that the tuning is inert without rides: re-pinning them means a park without rides
+  // or stalls now plays differently, which has to be meant.
   it("carry on exactly as before", () => {
     const a = makePark({ rating: 900, seed: 5 });
     a.step(8000);
@@ -671,5 +752,21 @@ describe("parks without rides", () => {
     const b = new Sim(createSamplePark(42, { withRides: false }));
     b.step(8000);
     expect(b.hash()).toBe("d201eb6af3f0249e");
+  });
+});
+
+describe("parks with rides but no stalls", () => {
+  // Recorded with the build before the D3 need tuning (seek level 160 for every need, and a
+  // complaint whenever a need found no stall): a guest's lower seek levels and turning for a stall
+  // on its way change nothing in a park that has nowhere to buy, so its guests think, feel and rate
+  // the park exactly as before.
+  it("carry on exactly as before the need tuning", () => {
+    const sim = new Sim(createSamplePark(42));
+    for (const stall of sim.world.rides.filter((r) => r.kind === "stall")) {
+      expect(sim.execute("ride_demolish", { id: stall.id }, "system").ok).toBe(true);
+    }
+    expect(sim.world.rides.some((r) => r.kind === "ride" && r.open)).toBe(true);
+    sim.step(8000);
+    expect(sim.hash()).toBe("f58dd634dfc24f99");
   });
 });

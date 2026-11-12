@@ -299,16 +299,18 @@ describe("createSamplePark", () => {
   it("gets its rides ridden and its stalls used, with every figure adding up", () => {
     // How soon each is first used, in ticks. The Big Wheel, the more exciting of the two rides, is
     // most guests' first choice, and is ridden within two days. The Carousel is mostly a second
-    // ride, taken by guests coming off the wheel (a 780 tick cycle), so it takes longer. Stalls
-    // wait on needs: a guest comes in with hunger and thirst under 80 and goes looking for food
-    // or drink at 160, a point every 40 ticks, so not before eight days; and with a bathroom need
-    // under 60 that reaches 160 at a point every 80 ticks, so the restrooms not before twenty.
+    // ride, taken by guests coming off the wheel (a 780 tick cycle), and many of those go for a
+    // snack or a drink first, so it takes longest: day 8.3 here, and at most 9.3 over the first 60
+    // seeds (it was 7 days before the D3 need tuning sent guests to the stalls sooner). The stalls
+    // wait on needs: guests come in with hunger and thirst under 80 and look for food or drink at
+    // 80, and with a need for the toilet under 60 that sends them to the restrooms at 56, so every
+    // stall has had a customer by day 2.5 here (see the next test for other seeds).
     const within: Record<string, number> = {
       big_wheel: 2 * TICKS_PER_DAY,
-      carousel: 7 * TICKS_PER_DAY,
-      snack_stand: 14 * TICKS_PER_DAY,
-      drinks_stand: 14 * TICKS_PER_DAY,
-      restrooms: 31 * TICKS_PER_DAY,
+      carousel: 10 * TICKS_PER_DAY,
+      snack_stand: 3 * TICKS_PER_DAY,
+      drinks_stand: 3 * TICKS_PER_DAY,
+      restrooms: 3 * TICKS_PER_DAY,
     };
     const sim = new Sim(createSamplePark(7));
     const first = new Map<string, number>();
@@ -337,6 +339,33 @@ describe("createSamplePark", () => {
       10_000_00 + park.income.entry + park.income.rides + park.income.shops - park.expenses.running,
     );
     expect(validateWorldInvariants(sim.world)).toBeNull();
+  });
+
+  it("gets every stall used within days, whatever the seed", () => {
+    // Measured over the first 60 seeds: the snack and drinks stands' first customer comes by day
+    // 5.2 at worst (day 2 typically, and a seed whose first guests are slow to arrive is the worst),
+    // the restrooms' by day 4.0 at worst (day 2.3 typically).
+    const within: Record<string, number> = {
+      snack_stand: 6 * TICKS_PER_DAY,
+      drinks_stand: 6 * TICKS_PER_DAY,
+      restrooms: 5 * TICKS_PER_DAY,
+    };
+    for (const seed of [0, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11]) {
+      const sim = new Sim(createSamplePark(seed));
+      const first = new Map<string, number>();
+      for (let tick = 0; tick < 6 * TICKS_PER_DAY && first.size < 3; tick += 20) {
+        sim.step(20);
+        for (const ride of sim.world.rides) {
+          if (ride.kind === "stall" && ride.stats.customers > 0 && !first.has(ride.type)) {
+            first.set(ride.type, sim.world.tick);
+          }
+        }
+      }
+      for (const [type, limit] of Object.entries(within)) {
+        expect(first.get(type), `${type}, seed ${seed}`).toBeLessThanOrEqual(limit);
+      }
+      expect(validateWorldInvariants(sim.world), `seed ${seed}`).toBeNull();
+    }
   });
 
   it("can be built without its rides and stalls: the same paths, no rides, no ride commands", () => {
