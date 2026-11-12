@@ -341,6 +341,7 @@ export function App() {
         const { tool, placement } = uiStore.getState();
         return { tool, placement };
       },
+      findGuest: () => viewport.current?.findGuest() ?? null,
     };
     return () => {
       delete window.__coasterworks;

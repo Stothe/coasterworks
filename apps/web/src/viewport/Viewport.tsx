@@ -23,7 +23,15 @@ export interface ViewportHandle {
    * height follows the ground there.
    */
   focusTile(x: number, y: number, w: number, h: number): void;
+  /**
+   * A point in the window where a guest is drawn, found by trying points across the view a few
+   * pixels apart, or null if no guest is in view. For tests and the console: it is slow.
+   */
+  findGuest(): { clientX: number; clientY: number; id: number } | null;
 }
+
+/** How far apart `findGuest` tries points, in CSS pixels. */
+const FIND_STEP = 6;
 
 export interface ViewportProps {
   terrain: TerrainData | null;
@@ -206,6 +214,19 @@ export function Viewport(props: ViewportProps) {
         // rig, which settles it onto the ground under it on the next frame.
         const { terrain } = latest.current;
         if (terrain) rig.clampTarget(terrain.width, terrain.height);
+      },
+      findGuest() {
+        const scene = live.current?.scene;
+        const canvas = canvasRef.current;
+        if (!scene || !canvas) return null;
+        const box = canvas.getBoundingClientRect();
+        for (let y = box.top + FIND_STEP; y < box.bottom; y += FIND_STEP) {
+          for (let x = box.left + FIND_STEP; x < box.right; x += FIND_STEP) {
+            const guest = scene.pickGuestAt(x, y);
+            if (guest) return { clientX: x, clientY: y, id: guest.id };
+          }
+        }
+        return null;
       },
     }),
     [],

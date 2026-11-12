@@ -12,6 +12,8 @@ declare global {
       ready: boolean;
       client: SimClient;
       uiState(): { tool: Tool; placement: Placement | null };
+      /** A point in the window where a guest is drawn, or null if none is in view. */
+      findGuest(): { clientX: number; clientY: number; id: number } | null;
     };
   }
 

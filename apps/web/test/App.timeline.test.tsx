@@ -15,7 +15,7 @@ vi.mock("../src/state/useHost", () => ({ useHost: vi.fn() }));
 const viewport = vi.hoisted(() => ({ focusTile: vi.fn() }));
 vi.mock("../src/viewport/Viewport", () => ({
   Viewport: ({ ref }: { ref?: Ref<ViewportHandle> }) => {
-    useImperativeHandle(ref, () => ({ focusTile: viewport.focusTile }));
+    useImperativeHandle(ref, () => ({ focusTile: viewport.focusTile, findGuest: () => null }));
     return null;
   },
 }));
