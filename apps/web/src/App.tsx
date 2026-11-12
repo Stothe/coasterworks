@@ -50,15 +50,23 @@ interface Live {
  */
 function LiveStatusPills({
   source,
+  rides,
   ...rest
-}: Omit<StatusPillsProps, "cash" | "monthChange" | "date" | "guests" | "rating"> & {
+}: Omit<
+  StatusPillsProps,
+  "cash" | "monthChange" | "date" | "guests" | "rating" | "rides" | "stalls"
+> & {
   source: SnapshotSource;
+  /** The host's list of rides and stalls, null before the first. */
+  rides: readonly { kind: "ride" | "stall" }[] | null;
 }) {
   const cash = useSnapshot(source, (snapshot) => snapshot?.header.cash);
   const guests = useSnapshot(source, (snapshot) => snapshot?.header.park.guestsInPark);
   const rating = useSnapshot(source, (snapshot) => snapshot?.header.park.rating);
   const monthStartCash = useSnapshot(source, (snapshot) => snapshot?.header.monthStartCash);
   const date = useSnapshot(source, (snapshot) => snapshot?.header.date);
+  const rideCount = rides?.filter((r) => r.kind === "ride").length;
+  const stallCount = rides ? rides.length - (rideCount ?? 0) : undefined;
   if (cash === undefined || monthStartCash === undefined || date === undefined) return null;
   return (
     <StatusPills
@@ -67,6 +75,8 @@ function LiveStatusPills({
       date={date}
       {...(guests !== undefined && { guests })}
       {...(rating !== undefined && { rating })}
+      {...(rideCount !== undefined &&
+        stallCount !== undefined && { rides: rideCount, stalls: stallCount })}
       {...rest}
     />
   );
@@ -398,6 +408,7 @@ export function App() {
         <div className="pointer-events-auto absolute top-3.5 left-3.5">
           <LiveStatusPills
             source={host}
+            rides={host.rides}
             speed={speed}
             onSpeedChange={changeSpeed}
             speedDisabled={host.halted || disconnected}

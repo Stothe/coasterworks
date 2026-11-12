@@ -22,6 +22,14 @@ export interface StatusPillsProps {
   guests?: number;
   /** The park rating, 0 to 999; the rating pill is left out without it. */
   rating?: number;
+  /** Rides and stalls standing; the rides pill is left out unless both are given. */
+  rides?: number;
+  stalls?: number;
+}
+
+/** What the rides pill says to assistive technology: `2 rides and 3 stalls`. */
+export function ridesLabel(rides: number, stalls: number): string {
+  return `${rides} ${rides === 1 ? "ride" : "rides"} and ${stalls} ${stalls === 1 ? "stall" : "stalls"}`;
 }
 
 const DOT: Record<ReturnType<typeof ratingTone>, string> = {
@@ -45,6 +53,8 @@ export function StatusPills({
   onOpenOverview,
   guests,
   rating,
+  rides,
+  stalls,
 }: StatusPillsProps) {
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -91,6 +101,21 @@ export function StatusPills({
             <span aria-hidden="true">🧍</span>
             <span data-testid="guest-count" className="text-sm tabular-nums">
               {guests}
+            </span>
+          </button>
+        </div>
+      )}
+      {rides !== undefined && stalls !== undefined && (
+        <div role="group" aria-label="Rides and stalls" className="glass flex">
+          <button
+            type="button"
+            aria-label={ridesLabel(rides, stalls)}
+            onClick={onOpenOverview}
+            className="hud-button gap-2 rounded-[inherit] px-3"
+          >
+            <span aria-hidden="true">🎡</span>
+            <span data-testid="ride-count" className="text-sm tabular-nums">
+              {rides} · {stalls}
             </span>
           </button>
         </div>

@@ -237,6 +237,30 @@ describe("RideInspector: header and overview", () => {
     expect(await screen.findByText("This has been demolished.")).toBeTruthy();
   });
 
+  it("never demolishes a ride other than the one its confirm was opened for", async () => {
+    const s = sim();
+    const props = { query: s.query, execute: s.execute, notify: vi.fn() };
+    const { rerender } = render(<RideInspector id={1} {...props} />);
+    await screen.findByRole("heading", { name: /Carousel/ });
+    await click("Demolish");
+    const yes = screen.getByRole("button", { name: "Yes" });
+    // The selection moves to ride 2 and Yes is pressed in the same act.
+    await act(async () => {
+      rerender(<RideInspector id={2} {...props} />);
+      fireEvent.click(yes);
+    });
+    // A Yes that lands before the new selection is drawn is still ride 1's confirm: it may
+    // demolish 1, never 2.
+    expect(s.execute).not.toHaveBeenCalledWith("ride_demolish", { id: 2 });
+    expect(screen.queryByRole("group", { name: "Confirm demolish" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Yes" })).toBeNull();
+    // Coming back to ride 1 does not bring the old confirm back.
+    await act(async () => {
+      rerender(<RideInspector id={1} {...props} />);
+    });
+    expect(screen.queryByRole("group", { name: "Confirm demolish" })).toBeNull();
+  });
+
   it("tells a refusal", async () => {
     const s = sim();
     s.execute.mockResolvedValueOnce({ ok: false, error: "Not enough cash" });

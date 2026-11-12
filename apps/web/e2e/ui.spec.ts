@@ -260,6 +260,46 @@ test.describe("at the desktop minimum, 1100 by 700", () => {
   });
 });
 
+test.describe("the status pill row at 1100 by 700", () => {
+  test.use({ viewport: { width: 1100, height: 700 } });
+
+  test("stays on one line and clear of the top-right buttons, rides pill and widest text included", async ({
+    page,
+  }) => {
+    await openPark(page);
+    await expect(page.getByRole("button", { name: /^\d+ rides? and \d+ stalls?$/ })).toBeVisible();
+    await settled(page);
+    // The widest the pills get: the longest date, a cash figure with a month's change, and four
+    // digits of guests, rating and rides.
+    await page.evaluate(() => {
+      const set = (selector: string, text: string) => {
+        const el = document.querySelector(selector);
+        if (el) el.textContent = text;
+      };
+      set('[aria-label^="Open park overview"] span:last-child', "September 30, Year 99");
+      set('[aria-label="Cash"] b', "$9,999,999.99");
+      set('[data-testid="month-change"]', "+$999,999.99");
+      set('[data-testid="guest-count"]', "9999");
+      set('[data-testid="ride-count"]', "999 · 999");
+    });
+    const row = await page.getByRole("group", { name: "Cash" }).evaluate((el) => {
+      const parent = el.parentElement;
+      if (!parent) throw new Error("no row");
+      const box = parent.getBoundingClientRect();
+      // Centres, not tops: the pills differ in height and align by their middles.
+      const tops = [...parent.children].map((c) => {
+        const r = c.getBoundingClientRect();
+        return Math.round(r.top + r.height / 2);
+      });
+      return { x: box.x, y: box.y, width: box.width, height: box.height, tops };
+    });
+    const cluster = await page.getByRole("group", { name: "Quick actions" }).boundingBox();
+    if (!cluster) throw new Error("no cluster");
+    expect(new Set(row.tops).size, "one line").toBe(1);
+    expect(row.x + row.width, "row ends before the top-right group").toBeLessThan(cluster.x);
+  });
+});
+
 /**
  * What is wrong with the visible controls on the page: the ones with no accessible name, and the
  * ones smaller than 32 px either way, each by name and size. A check box is as big as the label

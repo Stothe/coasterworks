@@ -10,7 +10,10 @@ import {
   type Material,
   type Object3D,
 } from "three";
+import { ShaderLib, type IUniform } from "three";
 import { describe, expect, it } from "vitest";
+import { createAtmosphereUniforms } from "../src/atmosphere.glsl.js";
+import { createSharedUniforms } from "../src/context.js";
 import { CameraRig } from "../src/camera.js";
 import type { FrameInfo, Quality, RenderContext } from "../src/context.js";
 import { rayFromCamera } from "../src/picker.js";
@@ -528,5 +531,55 @@ describe("picking rides", () => {
     expect(rayBoxDistance(ray, 3, 4, -1, 1, -1, 1)).toBeCloseTo(3, 9);
     expect(rayBoxDistance(ray, -4, -3, -1, 1, -1, 1)).toBe(Infinity);
     expect(rayBoxDistance(ray, -1, 1, -1, 1, -1, 1)).toBe(0);
+  });
+});
+
+describe("ride cloud shadow", () => {
+  interface Shader {
+    uniforms: Record<string, IUniform>;
+    vertexShader: string;
+    fragmentShader: string;
+  }
+  const ctx = { uniforms: createSharedUniforms(), atmosphereUniforms: createAtmosphereUniforms() };
+  const compile = (material: { onBeforeCompile: unknown }): Shader => {
+    const shader: Shader = {
+      uniforms: {},
+      vertexShader: ShaderLib.standard.vertexShader,
+      fragmentShader: ShaderLib.standard.fragmentShader,
+    };
+    (material.onBeforeCompile as (s: Shader) => void)(shader);
+    return shader;
+  };
+
+  it("dims the direct light on the lit material, with the scene's uniforms bound by reference", () => {
+    const materials = createRideMaterials(ctx);
+    const { uniforms, vertexShader, fragmentShader } = compile(materials.lit);
+    const main = fragmentShader.indexOf("void main()");
+    expect(fragmentShader.indexOf("float cwCloudShadow(vec2 worldXZ)")).toBeLessThan(main);
+    const call = fragmentShader.indexOf("cwCloudShadow( vCwRideWorld.xz )");
+    expect(call).toBeGreaterThan(fragmentShader.indexOf("#include <lights_fragment_begin>"));
+    expect(call).toBeLessThan(fragmentShader.indexOf("#include <lights_fragment_maps>"));
+    expect(vertexShader).toContain("varying vec3 vCwRideWorld;");
+    expect(vertexShader).toContain("instanceMatrix * cwP");
+    expect(uniforms.uSunDir).toBe(ctx.uniforms.uSunDir);
+    for (const [name, uniform] of Object.entries(ctx.atmosphereUniforms)) {
+      expect(uniforms[name]).toBe(uniform);
+    }
+    materials.dispose();
+  });
+
+  it("leaves the ghosts and a context-free material plain, and drops it at software low", () => {
+    const plain = createRideMaterials();
+    expect(plain.lit.onBeforeCompile.toString()).not.toContain("cwCloudShadow");
+    plain.dispose();
+    const materials = createRideMaterials(ctx);
+    expect(compile(materials.ghostOk).fragmentShader).not.toContain("cwCloudShadow");
+    materials.setCloudShadow(false);
+    const off = compile(materials.lit);
+    expect(off.fragmentShader).not.toContain("cwCloudShadow");
+    expect(materials.lit.customProgramCacheKey()).toBe("cw-ride");
+    materials.setCloudShadow(true);
+    expect(materials.lit.customProgramCacheKey()).toBe("cw-ride-clouds");
+    materials.dispose();
   });
 });

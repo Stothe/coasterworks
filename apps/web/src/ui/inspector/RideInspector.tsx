@@ -202,7 +202,7 @@ export function RideInspector({
           {
             id: "overview",
             label: "Overview",
-            content: <Overview ride={ride} run={run} disabled={disabled} />,
+            content: <Overview key={id} id={id} ride={ride} run={run} disabled={disabled} />,
           },
           { id: "stats", label: "Stats", content: <Stats ride={ride} /> },
         ]}
@@ -212,12 +212,14 @@ export function RideInspector({
 }
 
 interface OverviewProps {
+  /** The id the panel is inspecting now; `ride` may still be the last one's for a moment. */
+  id: number;
   ride: RideView;
   run(name: string, input: unknown): Promise<boolean>;
   disabled: boolean;
 }
 
-function Overview({ ride, run, disabled }: OverviewProps) {
+function Overview({ id, ride, run, disabled }: OverviewProps) {
   const noun = ride.kind === "ride" ? "ride" : "stall";
   // The price last asked for, until the sim's answer shows it has changed: a step taken before
   // then goes on from what was asked, not from the price the last answer had.
@@ -232,7 +234,8 @@ function Overview({ ride, run, disabled }: OverviewProps) {
       if (!ok) requested.current = null;
     });
   };
-  const [confirming, setConfirming] = useState(false);
+  // The id the open confirm is for, or null: Yes demolishes that one and no other.
+  const [confirming, setConfirming] = useState<number | null>(null);
   const refund = ride.content ? Math.floor(ride.content.cost / 2) : 0;
 
   return (
@@ -280,7 +283,7 @@ function Overview({ ride, run, disabled }: OverviewProps) {
         disabled={disabled}
         onRename={(name) => void run("ride_rename", { id: ride.id, name })}
       />
-      {confirming ? (
+      {confirming === id ? (
         <div role="group" aria-label="Confirm demolish" className="flex items-center gap-2">
           <span className="text-sm">
             Demolish? <span className="text-muted">{`Refunds ${formatCents(refund)}`}</span>
@@ -289,14 +292,15 @@ function Overview({ ride, run, disabled }: OverviewProps) {
             type="button"
             disabled={disabled}
             onClick={() => {
-              setConfirming(false);
-              void run("ride_demolish", { id: ride.id });
+              const target = confirming;
+              setConfirming(null);
+              if (target === id && ride.id === id) void run("ride_demolish", { id: target });
             }}
             className="hud-button ml-auto rounded-lg bg-danger px-3 text-sm font-medium text-canvas"
           >
             Yes
           </button>
-          <button type="button" onClick={() => setConfirming(false)} className={button}>
+          <button type="button" onClick={() => setConfirming(null)} className={button}>
             No
           </button>
         </div>
@@ -304,7 +308,7 @@ function Overview({ ride, run, disabled }: OverviewProps) {
         <button
           type="button"
           disabled={disabled}
-          onClick={() => setConfirming(true)}
+          onClick={() => setConfirming(id)}
           className={`${button} self-start text-danger`}
         >
           Demolish

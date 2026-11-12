@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { StatusPills } from "../src/ui/StatusPills";
+import { StatusPills, ridesLabel } from "../src/ui/StatusPills";
 import { formatCents, formatChange } from "../src/ui/format";
 
 afterEach(cleanup);
@@ -286,5 +286,43 @@ describe("formatCents", () => {
   it("puts the sign of a debt before the dollar sign", () => {
     expect(formatCents(-350)).toBe("-$3.50");
     expect(formatCents(-1_234_567)).toBe("-$12,345.67");
+  });
+
+  it("labels the rides pill with the counts and opens the overview", () => {
+    const open = vi.fn();
+    render(
+      <StatusPills
+        cash={0}
+        monthChange={0}
+        date="March 1, Year 1"
+        speed={1}
+        onSpeedChange={noop}
+        onOpenFinances={noop}
+        onOpenOverview={open}
+        rides={2}
+        stalls={3}
+      />,
+    );
+    const pill = screen.getByRole("button", { name: "2 rides and 3 stalls" });
+    expect(screen.getByTestId("ride-count").textContent).toBe("2 · 3");
+    fireEvent.click(pill);
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(ridesLabel(1, 1)).toBe("1 ride and 1 stall");
+    expect(ridesLabel(0, 0)).toBe("0 rides and 0 stalls");
+  });
+
+  it("leaves the rides pill out without the counts", () => {
+    render(
+      <StatusPills
+        cash={0}
+        monthChange={0}
+        date="March 1, Year 1"
+        speed={1}
+        onSpeedChange={noop}
+        onOpenFinances={noop}
+        onOpenOverview={noop}
+      />,
+    );
+    expect(screen.queryByTestId("ride-count")).toBeNull();
   });
 });

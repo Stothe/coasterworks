@@ -152,7 +152,9 @@ export function rayBoxDistance(
 }
 
 export function createRides(ctx: RenderContext): RidesModule {
-  const materials = createRideMaterials();
+  const materials = createRideMaterials(ctx);
+  const cheap = () => (ctx.software ?? false) && ctx.quality === "low";
+  materials.setCloudShadow(!cheap());
   let detail: RideDetail = rideDetailFor(ctx.quality, ctx.software ?? false);
   /** One model per model id in use, at `detail`. */
   const models = new Map<string, RideModel>();
@@ -411,6 +413,7 @@ export function createRides(ctx: RenderContext): RidesModule {
         seat(ghost.instance, ghost.model, ghostSpec.type, ghostSpec.x, ghostSpec.y, ghostSpec.rot);
     },
     setQuality(q: Quality): void {
+      materials.setCloudShadow(!((ctx.software ?? false) && q === "low"));
       const next = rideDetailFor(q, ctx.software ?? false);
       if (next !== detail) {
         detail = next;
