@@ -390,7 +390,7 @@ describe("ride_demolish", () => {
     expect(refuse(sim, "ride_rename", { id: 7, name: "X" })).toBe("No ride with id 7");
   });
 
-  it("is undone exactly: the same record, id and tiles, and the refund taken back", () => {
+  it("is undone exactly but for the cycle: the same record, id and tiles, and the refund taken back", () => {
     const { world, sim } = setup();
     run(sim, "ride_build", { type: "carousel", x: 10, y: 10, rot: 3 });
     run(sim, "ride_set_price", { id: 1, cents: 350 });
@@ -415,7 +415,8 @@ describe("ride_demolish", () => {
     run(sim, "ride_demolish", { id: 1 });
     expect(world.finance.cash).toBe(cash + carousel.cost / 2);
     expect(sim.undo().ok).toBe(true);
-    expect(world.rides).toEqual([record]);
+    // Everything but the cycle: a demolish empties the ride and an undo brings it back idle.
+    expect(world.rides).toEqual([{ ...record, phase: 0, phaseTicks: 0 }]);
     expect(occupiedTiles(world)).toEqual(tiles);
     expect(world.finance.cash).toBe(cash);
     expect(world.nextRideId).toBe(2);

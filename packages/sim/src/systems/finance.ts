@@ -1,5 +1,6 @@
+import { typeById } from "@coasterworks/content";
 import { HISTORY_MONTHS, monthNet } from "../park/types.js";
-import { MONTHS_PER_YEAR, dateOf, isMonthStart } from "../time.js";
+import { DAYS_PER_MONTH, MONTHS_PER_YEAR, TICKS_PER_DAY, dateOf, isMonthStart } from "../time.js";
 import type { World } from "../world/types.js";
 import type { System } from "./types.js";
 
@@ -37,17 +38,53 @@ function closeMonth(world: World): void {
   monthly.shops = 0;
   monthly.running = 0;
   monthly.wages = 0;
+  for (const ride of world.rides) {
+    ride.stats.monthCustomers = 0;
+    ride.stats.monthIncome = 0;
+  }
 }
 
 /**
- * At the start of each month: moves the finished month's takings into the park's history and
- * clears them, charges a month of loan interest, then records the cash left as the new month's
- * starting balance. Cash may go negative. Runs before the guests do, so a fee paid on the first
- * tick of a month belongs to the new one.
+ * The share of a month's running cost `cost` that falls on day `day` (0 for the first day of the
+ * month): the days' shares are whole cents and add up to exactly `cost` over a month.
+ */
+export function dailyRunningCost(cost: number, day: number): number {
+  return (
+    Math.floor((cost * (day + 1)) / DAYS_PER_MONTH) - Math.floor((cost * day) / DAYS_PER_MONTH)
+  );
+}
+
+/**
+ * At the end of each day, charges every ride and stall (open or closed) its share of its type's
+ * monthly running cost, out of the cash and into `park.expenses.running`, `park.monthly.running`
+ * and the ride's stats. Called on the first tick of a day, so `world.tick - 1` is in the day being
+ * charged, and the last day of a month is charged to that month before it is closed.
+ */
+function chargeRunningCosts(world: World): void {
+  const day = dateOf(world.tick - 1).day - 1;
+  const { park, finance } = world;
+  for (const ride of world.rides) {
+    const type = typeById(ride.type);
+    if (type === undefined) continue;
+    const charge = dailyRunningCost(type.runningCost, day);
+    finance.cash -= charge;
+    park.expenses.running += charge;
+    park.monthly.running += charge;
+    ride.stats.runningCost += charge;
+  }
+}
+
+/**
+ * At the start of each day: charges the day that has just ended its running costs. At the start of
+ * each month, after that: moves the finished month's takings into the park's history and clears
+ * them (and each ride's month stats), charges a month of loan interest, then records the cash left
+ * as the new month's starting balance. Cash may go negative. Runs before the rides and guests do,
+ * so a fee paid on the first tick of a month belongs to the new one.
  */
 export const financeSystem: System = {
   name: "finance",
   tick(world) {
+    if (world.tick > 0 && world.tick % TICKS_PER_DAY === 0) chargeRunningCosts(world);
     if (!isMonthStart(world.tick)) return;
     closeMonth(world);
     const { finance } = world;

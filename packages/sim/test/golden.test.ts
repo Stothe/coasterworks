@@ -181,7 +181,7 @@ describe("runScenario", () => {
     const summary = out.result as {
       history: Array<{ year: number; month: number; entry: number; net: number }>;
       lastMonth: { year: number; month: number; entry: number } | null;
-      thisMonth: { entry: number; net: number };
+      thisMonth: { entry: number; running: number; net: number };
     };
     // March and April ended before the park opened; May ended in the middle of the 31 days.
     expect(summary.history.map((r) => [r.year, r.month])).toEqual([
@@ -194,7 +194,9 @@ describe("runScenario", () => {
     // Every fee taken is in a month's book or in the month under way, and nowhere twice.
     const booked = summary.history.reduce((total, r) => total + r.entry, 0);
     expect(booked + summary.thisMonth.entry).toBe(sim.world.park.income.entry);
-    expect(summary.thisMonth.net).toBe(summary.thisMonth.entry);
+    // The scenario's carousel and drinks stand cost a little to run each day; nothing else is spent.
+    expect(summary.thisMonth.running).toBeGreaterThan(0);
+    expect(summary.thisMonth.net).toBe(summary.thisMonth.entry - summary.thisMonth.running);
     expect(sim.world.park.income.entry).toBe(sim.world.park.totalAdmissions * 300);
   });
 

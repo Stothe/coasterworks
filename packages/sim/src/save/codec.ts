@@ -21,7 +21,7 @@ import { migrate, schemaVersionOf } from "./migrate.js";
  *     finance, park,
  *     guests: { count, nextGuestId, id, x, y, tx, ty, dest, state, happiness, energy, hunger,
  *               thirst, bathroom, nausea, cash, color, name, thought, thoughtTick, sinceAction,
- *               lostTicks },
+ *               lostTicks, ride, intensityPref, lastRide, queueTicks },
  *     rides: [RideRecord...], nextRideId,
  *     rng: [w0, w1, w2, w3], rngStreams: { guests: [w0, w1, w2, w3] },
  *     log, undoStack, redoStack, nextId, hash }
@@ -281,6 +281,10 @@ const guestsSchema = z.object({
   thoughtTick: int32s,
   sinceAction: int32s,
   lostTicks: int32s,
+  ride: int32s,
+  intensityPref: uint8s,
+  lastRide: int32s,
+  queueTicks: int32s,
 });
 
 const saveSchema = z.object({

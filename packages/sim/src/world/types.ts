@@ -1,11 +1,12 @@
 import type { GuestStore, Waypoints } from "../guests/types.js";
 import type { ParkState } from "../park/types.js";
 import type { RouteCache } from "../paths/routing.js";
+import type { QueueCache } from "../rides/queue.js";
 import type { RideRecord } from "../rides/types.js";
 import type { Rng } from "../rng.js";
 
 /** Version of the save-file schema. Bump when the serialized world shape changes. */
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 /** Highest corner height. Heights are integers in half-unit steps, 0..MAX_HEIGHT. */
 export const MAX_HEIGHT = 63;
@@ -99,6 +100,8 @@ export interface World {
   routes?: RouteCache | undefined;
   /** The path tiles guests choose walks from. Runtime only, like `routes`. */
   waypoints?: Waypoints | undefined;
+  /** Each ride's queue tiles, rebuilt when the paths or rides change. Runtime only, like `routes`. */
+  queues?: QueueCache | undefined;
   /** Root generator, seeded from `meta.seed`. Systems fork their own streams from it. */
   rng: Rng;
   /**

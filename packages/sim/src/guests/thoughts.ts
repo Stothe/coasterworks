@@ -21,6 +21,10 @@ export const THOUGHT = {
   NICE_VIEW: 9,
   GOING_HOME: 10,
   PARK_CLOSED: 11,
+  RIDE_FUN: 12,
+  RIDE_SICK: 13,
+  QUEUE_TOO_LONG: 14,
+  CANT_AFFORD_RIDE: 15,
 } as const;
 
 /** Every thought, indexed by id. */
@@ -37,6 +41,10 @@ export const THOUGHTS: readonly Thought[] = [
   { id: THOUGHT.NICE_VIEW, text: "What a lovely view", mood: 1 },
   { id: THOUGHT.GOING_HOME, text: "I'm going home", mood: -1 },
   { id: THOUGHT.PARK_CLOSED, text: "The park is closed", mood: -1 },
+  { id: THOUGHT.RIDE_FUN, text: "That was fun!", mood: 2 },
+  { id: THOUGHT.RIDE_SICK, text: "I feel sick", mood: -1 },
+  { id: THOUGHT.QUEUE_TOO_LONG, text: "This queue is too long", mood: -1 },
+  { id: THOUGHT.CANT_AFFORD_RIDE, text: "I can't afford this", mood: -1 },
 ];
 
 /** What a guest says for thought `id`: "" for none, and for an id nobody has thought of yet. */

@@ -102,6 +102,8 @@ export const guestSystem: System = {
         state === GuestState.WANDERING ||
         state === GuestState.HEADING ||
         state === GuestState.LOST ||
+        state === GuestState.QUEUING ||
+        state === GuestState.RIDING ||
         (state === GuestState.LEAVING && g.dest[slot] !== DEST_TURNED_AWAY)
       ) {
         inPark++;

@@ -1,5 +1,8 @@
 import { PATH_FOOT } from "../paths/paths.js";
 import { RouteCache, UNREACHABLE } from "../paths/routing.js";
+import { QUEUE_PER_TILE, queueCapacity, queueInfo } from "../rides/queue.js";
+import { findRide } from "../rides/rides.js";
+import type { RideRecord } from "../rides/types.js";
 import type { Rng } from "../rng.js";
 import { inBounds, tileBase } from "../terrain/terrain.js";
 import type { World } from "../world/types.js";
@@ -34,6 +37,9 @@ export const LOST_SEARCH_RADIUS = 8;
  * guest cut off from the gate could be lost for ever, and drag the rating down with it.
  */
 export const LOST_GIVE_UP = 2400;
+
+/** A guest that has queued this many ticks (six game days) gives up on the ride and wanders. */
+export const QUEUE_PATIENCE = 2400;
 
 /** Ticks between one point of hunger, and of thirst, and of a step of mood. */
 export const HUNGER_INTERVAL = 40;
@@ -127,7 +133,8 @@ export function guestRoutes(world: World): RouteCache {
   return routes;
 }
 
-function think(world: World, slot: number, thought: number): void {
+/** Puts `thought` in the guest's head, stamped with the current tick. */
+export function think(world: World, slot: number, thought: number): void {
   world.guests.thought[slot] = thought;
   world.guests.thoughtTick[slot] = world.tick;
 }
@@ -150,7 +157,7 @@ function ownIndex(world: World, slot: number): number {
 }
 
 /** Points the guest at the tile with flat index `index`. */
-function setTarget(world: World, slot: number, index: number): void {
+export function setTarget(world: World, slot: number, index: number): void {
   const g = world.guests;
   const width = world.terrain.width;
   const y = Math.floor(index / width);
@@ -260,7 +267,11 @@ function shouldLeave(g: GuestStore, slot: number): boolean {
  *  - HEADING: takes the next step along the route to `dest`, or arrives.
  *  - LEAVING: follows the route to the entrance, then walks out along the lane and is gone.
  *  - LOST: on its turn (every 200 ticks), looks again for a way out, or about.
+ *  - QUEUING: counts its time in the queue (giving up at `QUEUE_PATIENCE`), and walks up the
+ *    queue to the tile its place in the line belongs on.
+ *  - RIDING: nothing; the ride system takes it off again.
  *
+ * A guest whose ride has gone, or closed while it was on its way, goes back to wandering.
  * Guests inside who are unhappy, worn out, or have been idle too long start LEAVING.
  * `routes` must be the cache from `guestRoutes(world)` for this tick.
  */
@@ -280,6 +291,12 @@ export function decide(world: World, slot: number, rng: Rng, routes: RouteCache)
       break;
     case GuestState.LOST:
       lost(world, slot, routes);
+      break;
+    case GuestState.QUEUING:
+      queueing(world, slot);
+      break;
+    case GuestState.RIDING:
+      riding(world, slot);
       break;
   }
 }
@@ -379,10 +396,23 @@ function wander(world: World, slot: number, rng: Rng, routes: RouteCache): void 
 
 function head(world: World, slot: number, routes: RouteCache): void {
   const g = world.guests;
+  const rideId = g.ride[slot] as number;
+  let ride: RideRecord | undefined;
+  if (rideId !== 0) {
+    ride = findRide(world, rideId);
+    if (ride === undefined || !ride.open || ride.entrance === null) {
+      clearRide(world, slot);
+      return;
+    }
+  }
   if (shouldLeave(g, slot) && startLeaving(world, slot, routes)) return;
   if (!atTarget(g, slot)) return;
 
   const here = ownIndex(world, slot);
+  if (ride !== undefined && queueInfo(world, ride).dist.has(here)) {
+    joinQueue(world, slot, ride);
+    return;
+  }
   const dest = g.dest[slot] as number;
   if (here === dest) {
     g.state[slot] = GuestState.WANDERING;
@@ -401,6 +431,7 @@ function startLeaving(world: World, slot: number, routes: RouteCache): boolean {
   const g = world.guests;
   g.state[slot] = GuestState.LEAVING;
   g.dest[slot] = exit;
+  g.ride[slot] = 0;
   think(world, slot, THOUGHT.GOING_HOME);
   leave(world, slot, routes);
   return true;
@@ -440,10 +471,11 @@ function leave(world: World, slot: number, routes: RouteCache): void {
 
 /**
  * Sends every guest inside the park home, as when the park closes: each one wandering, heading
- * somewhere, or lost starts LEAVING for the entrance, thinking the park is closed. A guest keeps
- * walking to the tile it is already heading for, and then follows the route out. Guests already
- * leaving are left alone, and so are guests still outside the gate, who are turned away when they
- * reach it. Nobody is charged or refunded: ENTERING is the only state that pays. Does nothing if
+ * somewhere (a ride included), queuing (it steps out of the queue), or lost starts LEAVING for the
+ * entrance, thinking the park is closed. A guest keeps walking to the tile it is already heading
+ * for, and then follows the route out. Guests on a ride finish it and leave when it unloads.
+ * Guests already leaving are left alone, and so are guests still outside the gate, who are turned
+ * away when they reach it. Nobody is charged or refunded: ENTERING is the only state that pays. Does nothing if
  * the park has no entrance to send them to.
  */
 export function sendGuestsHome(world: World): void {
@@ -455,12 +487,16 @@ export function sendGuestsHome(world: World): void {
     if (
       state !== GuestState.WANDERING &&
       state !== GuestState.HEADING &&
-      state !== GuestState.LOST
+      state !== GuestState.LOST &&
+      state !== GuestState.QUEUING
     ) {
       return;
     }
+    if (state === GuestState.QUEUING) leaveQueue(world, slot);
     g.state[slot] = GuestState.LEAVING;
     g.dest[slot] = exit;
+    g.ride[slot] = 0;
+    g.queueTicks[slot] = 0;
     g.lostTicks[slot] = 0;
     think(world, slot, THOUGHT.PARK_CLOSED);
   });
@@ -475,6 +511,7 @@ function goLost(world: World, slot: number, routes: RouteCache): void {
   const g = world.guests;
   g.state[slot] = GuestState.LOST;
   g.dest[slot] = NO_DEST;
+  g.ride[slot] = 0;
   think(world, slot, THOUGHT.LOST);
   const near = routes.nearestPathTile(
     (g.x[slot] as number) >> 5,
@@ -528,4 +565,125 @@ function lost(world: World, slot: number, routes: RouteCache): void {
       return;
     }
   }
+}
+
+/**
+ * Sends a guest to a ride: a guest wandering or heading somewhere in the park sets `ride` and heads
+ * for the ride's entrance tile along the paths; when it steps onto one of the ride's queue tiles
+ * (or the entrance) it joins the queue. Returns false, and changes nothing, if the guest is doing
+ * anything else, if `rideId` is not an open ride (a stall has no queue), or if the entrance cannot
+ * be reached from where the guest stands.
+ */
+export function sendGuestToRide(world: World, slot: number, rideId: number): boolean {
+  const g = world.guests;
+  if (g.live[slot] !== 1) return false;
+  const state = g.state[slot];
+  if (state !== GuestState.WANDERING && state !== GuestState.HEADING) return false;
+  const ride = findRide(world, rideId);
+  if (ride === undefined || ride.kind !== "ride" || !ride.open || ride.entrance === null) {
+    return false;
+  }
+  const routes = guestRoutes(world);
+  const here = ownIndex(world, slot);
+  const target = ride.entrance.y * world.terrain.width + ride.entrance.x;
+  if (here < 0 || !routes.reachable(here, target)) return false;
+  g.ride[slot] = rideId;
+  g.dest[slot] = target;
+  g.state[slot] = GuestState.HEADING;
+  g.sinceAction[slot] = 0;
+  return true;
+}
+
+/**
+ * Lets go of the guest's ride: it is WANDERING with no ride and no destination, from where it
+ * stands (it finishes the step it is on). Does not touch the ride's queue or riders.
+ */
+export function clearRide(world: World, slot: number): void {
+  const g = world.guests;
+  g.ride[slot] = 0;
+  g.queueTicks[slot] = 0;
+  g.state[slot] = GuestState.WANDERING;
+  g.dest[slot] = NO_DEST;
+}
+
+/** Takes a guest out of the queue of the ride in its `ride`, if it is in it. */
+function leaveQueue(world: World, slot: number): void {
+  const ride = findRide(world, world.guests.ride[slot] as number);
+  if (ride === undefined) return;
+  const position = ride.queue.indexOf(world.guests.id[slot] as number);
+  if (position >= 0) ride.queue.splice(position, 1);
+}
+
+/** A guest that has stepped onto `ride`'s queue joins the back of it, or finds it full. */
+function joinQueue(world: World, slot: number, ride: RideRecord): void {
+  const g = world.guests;
+  if (ride.queue.length >= queueCapacity(world, ride)) {
+    think(world, slot, THOUGHT.QUEUE_TOO_LONG);
+    clearRide(world, slot);
+    return;
+  }
+  ride.queue.push(g.id[slot] as number);
+  g.state[slot] = GuestState.QUEUING;
+  g.queueTicks[slot] = 0;
+  g.sinceAction[slot] = 0;
+}
+
+/**
+ * A queuing guest counts its time in the queue, and gives up at `QUEUE_PATIENCE`. Its place in the
+ * line is its index in `ride.queue`; it belongs on `queueTiles[floor(place / QUEUE_PER_TILE)]`, and
+ * walks there through the queue tiles, one step nearer the entrance at a time. It never walks back
+ * down the line or off it: a guest nearer the front than its tile waits where it is.
+ */
+function queueing(world: World, slot: number): void {
+  const g = world.guests;
+  const ride = findRide(world, g.ride[slot] as number);
+  const position = ride === undefined ? -1 : ride.queue.indexOf(g.id[slot] as number);
+  if (ride === undefined || position < 0 || !ride.open) {
+    if (ride !== undefined && position >= 0) ride.queue.splice(position, 1);
+    clearRide(world, slot);
+    return;
+  }
+  const ticks = (g.queueTicks[slot] as number) + 1;
+  if (ticks >= QUEUE_PATIENCE) {
+    ride.queue.splice(position, 1);
+    think(world, slot, THOUGHT.QUEUE_TOO_LONG);
+    clearRide(world, slot);
+    return;
+  }
+  g.queueTicks[slot] = ticks;
+  if (!atTarget(g, slot)) return;
+
+  const info = queueInfo(world, ride);
+  if (info.tiles.length === 0) return;
+  const target = info.tiles[
+    Math.min(Math.floor(position / QUEUE_PER_TILE), info.tiles.length - 1)
+  ] as number;
+  const here = ownIndex(world, slot);
+  if (here === target) return;
+  const own = info.dist.get(here);
+  const want = info.dist.get(target) as number;
+  if (own === undefined || own <= want) return;
+  const { width, height } = world.terrain;
+  const y = Math.floor(here / width);
+  const x = here - y * width;
+  // North, east, south, west: the first queue tile a step nearer the entrance.
+  const neighbours = [
+    y > 0 ? here - width : -1,
+    x < width - 1 ? here + 1 : -1,
+    y < height - 1 ? here + width : -1,
+    x > 0 ? here - 1 : -1,
+  ];
+  for (const n of neighbours) {
+    if (n >= 0 && info.dist.get(n) === own - 1) {
+      setTarget(world, slot, n);
+      return;
+    }
+  }
+}
+
+/** A riding guest waits for the ride system to let it off; if its ride has gone, it wanders. */
+function riding(world: World, slot: number): void {
+  const g = world.guests;
+  const ride = findRide(world, g.ride[slot] as number);
+  if (ride === undefined || !ride.riders.includes(g.id[slot] as number)) clearRide(world, slot);
 }

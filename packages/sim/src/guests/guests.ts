@@ -19,6 +19,21 @@ const HALF_TILE = 16;
 /** Units a guest walks in one tick. */
 export const WALK_SPEED = 2;
 
+/** Lowest and highest `intensityPref` a guest is given: ride intensities 160 to 800. */
+export const MIN_INTENSITY_PREF = 40;
+export const MAX_INTENSITY_PREF = 200;
+
+/**
+ * A guest's intensity preference: a fixed scatter of its id over 40 to 200 (ride intensities 160
+ * to 800). It takes no draw from the guest stream, so adding it left every other draw, and so what
+ * guests already did, as it was; and a guest loaded from a save made before guests had one gets
+ * the very value it would have been given had it arrived under this build.
+ */
+export function intensityPrefForId(id: number): number {
+  const mixed = Math.imul(id ^ (id >>> 16), 0x9e3779b1) >>> 0;
+  return MIN_INTENSITY_PREF + (mixed % (MAX_INTENSITY_PREF - MIN_INTENSITY_PREF + 1));
+}
+
 /** An empty store: no guests, every slot free, the first guest to come will be number 1. */
 export function createGuestStore(): GuestStore {
   const free = new Int32Array(GUEST_CAP);
@@ -50,6 +65,10 @@ export function createGuestStore(): GuestStore {
     thoughtTick: new Int32Array(GUEST_CAP),
     sinceAction: new Int32Array(GUEST_CAP),
     lostTicks: new Int32Array(GUEST_CAP),
+    ride: new Int32Array(GUEST_CAP),
+    intensityPref: new Uint8Array(GUEST_CAP),
+    lastRide: new Int32Array(GUEST_CAP),
+    queueTicks: new Int32Array(GUEST_CAP),
   };
 }
 
@@ -67,8 +86,9 @@ export function laneTileY(entrance: Entrance): number {
  * Starts a guest at the entrance: in the middle of the lane tile just outside the map on the
  * entrance's side, ENTERING, heading for the entrance tile, with needs drawn from `rng` in bands
  * (a little hungry or thirsty, well rested, in a fair mood), $20 to $80 in cash, a clothes colour,
- * and a name. Always draws the same number of values from `rng`. Returns the guest's slot, or -1 if
- * the park has no entrance or is already full.
+ * a name, and (from its id, with no draw) a liking for ride intensity. Always draws the same
+ * number of values from `rng`. Returns the guest's slot, or -1 if the park has no entrance or is
+ * already full.
  */
 export function spawnGuest(world: World, rng: Rng): number {
   const g = world.guests;
@@ -98,6 +118,11 @@ export function spawnGuest(world: World, rng: Rng): number {
   g.thoughtTick[slot] = 0;
   g.sinceAction[slot] = 0;
   g.lostTicks[slot] = 0;
+  g.ride[slot] = 0;
+  g.lastRide[slot] = 0;
+  g.queueTicks[slot] = 0;
+  // From the id, not the stream: see `intensityPrefForId`.
+  g.intensityPref[slot] = intensityPrefForId(g.id[slot] as number);
   return slot;
 }
 
@@ -193,6 +218,30 @@ export function compactGuests(world: World): void {
   for (let i = 0; i < GUEST_CAP - to; i++) g.free[i] = GUEST_CAP - 1 - i;
   g.freeCount = GUEST_CAP - to;
   g.fragmented = false;
+}
+
+/**
+ * The slot of the live guest with `id`, or -1. Between ticks the store is packed and in arrival
+ * order, which is id order, so this first tries a binary search over slots `0..count-1`; if that
+ * misses (a store with gaps, or one a test has put together by hand), it falls back to a scan.
+ */
+export function slotOfGuest(world: World, id: number): number {
+  const g = world.guests;
+  if (!g.fragmented) {
+    let lo = 0;
+    let hi = g.count - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      const at = g.id[mid] as number;
+      if (at === id) {
+        if (g.live[mid] === 1) return mid;
+        break;
+      }
+      if (at < id) lo = mid + 1;
+      else hi = mid - 1;
+    }
+  }
+  return findGuest(world, id);
 }
 
 /** The slot of the live guest with `id`, or -1. A scan: for queries, not for the tick loop. */

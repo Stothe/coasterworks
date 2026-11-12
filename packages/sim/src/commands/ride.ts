@@ -8,6 +8,7 @@ import {
   newRide,
   removeRide,
 } from "../rides/rides.js";
+import { ejectGuests, releaseQueue } from "../rides/operation.js";
 import {
   MAX_RIDE_NAME,
   MAX_RIDE_PRICE,
@@ -78,7 +79,11 @@ function buildCommand(kind: "ride" | "stall") {
       world.rideVersion++;
       return { id };
     },
+    // Guests may have queued for or boarded the ride since it was built; they are let go first,
+    // as when it is demolished.
     revert: (world, _input, undo: BuildUndo) => {
+      const ride = findRide(world, undo.id);
+      if (ride !== undefined) ejectGuests(world, ride);
       removeRide(world, undo.id);
       world.nextRideId = undo.id;
       world.rideVersion++;
@@ -98,12 +103,16 @@ interface DemolishUndo {
 export const rideDemolish = defineCommand({
   name: "ride_demolish",
   description:
-    "Demolishes a ride or stall by id and frees its tiles. Refunds half of what the type cost to build, rounded down to the cent, straight into cash (the command's own cost is 0). Undoing it puts the ride back exactly as it was, with the same id, name, price and stats, and takes the refund back, so the undo is refused if the park no longer has that much cash.",
+    "Demolishes a ride or stall by id and frees its tiles. Guests queuing for it step out of the queue and wander; guests on it are let off at once at its exit (or, if the exit has no path, on the nearest path tile), without finishing the ride. Refunds half of what the type cost to build, rounded down to the cent, straight into cash (the command's own cost is 0). Undoing it puts the ride back as it was, with the same id, name, price and stats, but empty and idle (the guests it let go stay where they are), and takes the refund back, so the undo is refused if the park no longer has that much cash.",
   category: "ride",
   input: idSchema,
   undoable: true,
   validate: (world, { id }) => checkRideId(world, id),
+  // The undo data records nothing about guests: the ride is emptied (queue let go, riders put on the
+  // exit) and its cycle reset before it is copied, so an undo restores it empty and idle.
   apply: (world, { id }): DemolishUndo => {
+    const standing = findRide(world, id);
+    if (standing !== undefined) ejectGuests(world, standing);
     const ride = removeRide(world, id);
     const type = typeById(ride.type);
     const refund = type === undefined ? 0 : Math.floor(type.cost / 2);
@@ -125,7 +134,7 @@ function openCommand(open: boolean) {
     name: open ? "ride_open" : "ride_close",
     description: open
       ? "Opens a ride or stall by id to guests. Opening an open ride changes nothing. Free."
-      : "Closes a ride or stall by id to guests. Closing a closed ride changes nothing. Free.",
+      : "Closes a ride or stall by id to guests: guests queuing for it step out of the queue and wander, and guests on it finish the ride they are on. Closing a closed ride changes nothing. Free. Undoing it reopens the ride but does not bring the queue back.",
     category: "ride",
     input: idSchema,
     undoable: true,
@@ -134,11 +143,15 @@ function openCommand(open: boolean) {
       const ride = rideOf(world, id);
       const previous = ride.open;
       ride.open = open;
+      if (!open) releaseQueue(world, ride);
       world.rideVersion++;
       return { previous };
     },
     revert: (world, { id }, undo: { previous: boolean }) => {
-      rideOf(world, id).open = undo.previous;
+      const ride = rideOf(world, id);
+      ride.open = undo.previous;
+      // Undoing an opening closes the ride the way `ride_close` does.
+      if (!undo.previous) releaseQueue(world, ride);
       world.rideVersion++;
     },
   });

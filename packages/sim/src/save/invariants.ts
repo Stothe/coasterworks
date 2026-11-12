@@ -4,6 +4,7 @@ import {
   DEST_TURNED_AWAY,
   GUEST_CAP,
   GUEST_COLORS,
+  GuestState,
   MAX_GUEST_STATE,
   NAME_COUNT,
   NO_TILE,
@@ -37,8 +38,8 @@ const MAX_SURFACE = 4;
  *     negative; its history holds at most 12 months, each a year from 1, a month 0 to 7, and whole
  *     numbers of cents, with the income and costs not negative
  *   - every live guest has an id that is above 0, below `nextGuestId`, and used by no other guest;
- *     a state 0 to 5, a colour 0 to 8, a name and a thought that exist, cash, idle times, and lost
- *     times that are not negative; a position and a target tile on the map or one tile outside it
+ *     a state 0 to 7, a colour 0 to 8, a name and a thought that exist, cash, idle times, lost
+ *     times, ride ids and queue times that are not negative (and a ride if it is queuing or riding); a position and a target tile on the map or one tile outside it
  *     (the entrance lane); and a destination that is a tile on the map or one of the two "walking
  *     out" markers
  *   - at most 255 rides and stalls, sorted by id, each id above 0, below `nextRideId` and used once,
@@ -47,7 +48,9 @@ const MAX_SURFACE = 4;
  *     to 3, and its counters and guest ids not negative; its entrance, exit and service tiles are
  *     the ones its type, position and rotation give; and the occupant layer holds exactly each
  *     ride's id on its footprint tiles (which are on the map and overlap no other ride's) and 0
- *     everywhere else
+ *     everywhere else; every guest id in a ride's queue or riders is a live guest, queuing (or
+ *     riding) for that ride, listed in no other queue or ride; a ride has at most its type's
+ *     capacity of riders
  *   - log ids start above 0, strictly increase, and are all below `nextId`
  *   - every id on the undo and redo stacks names a log entry, and no id is on the stacks twice,
  *     which covers an id on both
@@ -206,8 +209,12 @@ function guestProblem(world: World): string | null {
     if ((g.thoughtTick[slot] as number) < 0) {
       return `${label} has thoughtTick ${g.thoughtTick[slot]}, which is below 0`;
     }
-    if ((g.lostTicks[slot] as number) < 0) {
-      return `${label} has lostTicks ${g.lostTicks[slot]}, which is below 0`;
+    for (const key of ["lostTicks", "ride", "lastRide", "queueTicks"] as const) {
+      const value = g[key][slot] as number;
+      if (value < 0) return `${label} has ${key} ${value}, which is below 0`;
+    }
+    if ((state === GuestState.QUEUING || state === GuestState.RIDING) && g.ride[slot] === 0) {
+      return `${label} is ${state === GuestState.QUEUING ? "queuing" : "riding"} with no ride`;
     }
 
     // A guest is on the map or one tile outside it, where the entrance lane is.
@@ -248,6 +255,12 @@ function rideProblem(world: World): string | null {
   if (rides.length > RIDE_CAP) return `${rides.length} rides, more than ${RIDE_CAP}`;
 
   const expected = new Uint16Array(terrain.width * terrain.height);
+  const g = world.guests;
+  const slotOf = new Map<number, number>();
+  for (let slot = 0; slot < GUEST_CAP; slot++) {
+    if (g.live[slot] === 1) slotOf.set(g.id[slot] as number, slot);
+  }
+  const listed = new Set<number>();
   let previous = 0;
   for (const ride of rides) {
     const { id } = ride;
@@ -281,8 +294,23 @@ function rideProblem(world: World): string | null {
     for (const [key, value] of counters) {
       if (!Number.isInteger(value) || value < 0) return `${label} has ${key} ${value}, below 0`;
     }
-    for (const guest of [...ride.riders, ...ride.queue]) {
-      if (!Number.isInteger(guest) || guest < 1) return `${label} lists guest id ${guest}`;
+    for (const [list, state, what] of [
+      [ride.queue, GuestState.QUEUING, "queuing"],
+      [ride.riders, GuestState.RIDING, "riding"],
+    ] as const) {
+      for (const guest of list) {
+        if (!Number.isInteger(guest) || guest < 1) return `${label} lists guest id ${guest}`;
+        if (listed.has(guest)) return `${label} lists guest ${guest}, who is listed more than once`;
+        listed.add(guest);
+        const slot = slotOf.get(guest);
+        if (slot === undefined) return `${label} lists guest ${guest}, who is not in the park`;
+        if (g.state[slot] !== state || g.ride[slot] !== id) {
+          return `${label} lists guest ${guest} as ${what}, but that guest is not ${what} for it`;
+        }
+      }
+    }
+    if (type.kind === "ride" && ride.riders.length > type.capacity) {
+      return `${label} has ${ride.riders.length} riders, more than its capacity of ${type.capacity}`;
     }
 
     const rot = ride.rot as Rot;

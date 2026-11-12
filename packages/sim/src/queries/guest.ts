@@ -6,7 +6,16 @@ import { guestName } from "../guests/names.js";
 import type { World } from "../world/types.js";
 
 /** What a guest is doing, in words, indexed by `GuestState` (entering is 0, gone is 5). */
-const STATE_NAMES = ["entering", "wandering", "heading", "leaving", "lost", "gone"] as const;
+const STATE_NAMES = [
+  "entering",
+  "wandering",
+  "heading",
+  "leaving",
+  "lost",
+  "gone",
+  "queuing",
+  "riding",
+] as const;
 
 /** The states a list can be filtered by: all of them but "gone", which no live guest is in. */
 const FILTER_STATES = ["entering", "wandering", "heading", "leaving", "lost"] as const;

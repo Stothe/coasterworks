@@ -21,7 +21,12 @@ import {
   type MonthRecord,
   type World,
 } from "../src/index.js";
-import { compactGuests, removeGuest, spawnGuest } from "../src/guests/guests.js";
+import {
+  compactGuests,
+  intensityPrefForId,
+  removeGuest,
+  spawnGuest,
+} from "../src/guests/guests.js";
 import { GUEST_ARRAYS } from "../src/guests/types.js";
 import { fromBase64, toBase64 } from "../src/save/base64.js";
 import { validateWorldInvariants } from "../src/save/invariants.js";
@@ -410,12 +415,12 @@ describe("deserializeWorld errors", () => {
     }
   });
 
-  it("throws the exact newer-version message for schema 6", () => {
+  it("throws the exact newer-version message for schema 7", () => {
     const doc = readDoc(serializeWorld(freshWorld()));
-    doc.schemaVersion = 6;
+    doc.schemaVersion = 7;
     expect(() => deserializeWorld(writeDoc(doc))).toThrow(SaveError);
     expect(() => deserializeWorld(writeDoc(doc))).toThrow(
-      "Save is from a newer version (schema 6, this build reads 5)",
+      "Save is from a newer version (schema 7, this build reads 6)",
     );
     let caught: unknown;
     try {
@@ -424,7 +429,7 @@ describe("deserializeWorld errors", () => {
       caught = error;
     }
     expect((caught as Error).message).toBe(
-      "Save is from a newer version (schema 6, this build reads 5)",
+      "Save is from a newer version (schema 7, this build reads 6)",
     );
     expect((caught as Error).name).toBe("SaveError");
   });
@@ -432,7 +437,7 @@ describe("deserializeWorld errors", () => {
   it("interpolates the versions into the newer-version message", () => {
     expectSaveError(
       () => deserializeWorld(writeDoc({ schemaVersion: 41 })),
-      /^Save is from a newer version \(schema 41, this build reads 5\)$/,
+      /^Save is from a newer version \(schema 41, this build reads 6\)$/,
     );
   });
 
@@ -989,8 +994,8 @@ describe("migrate", () => {
   });
 
   it("has a migration for each schema before the current one, and none after", () => {
-    expect(Object.keys(MIGRATIONS).map(Number)).toEqual([1, 2, 3, 4]);
-    expect(SCHEMA_VERSION).toBe(5);
+    expect(Object.keys(MIGRATIONS).map(Number)).toEqual([1, 2, 3, 4, 5]);
+    expect(SCHEMA_VERSION).toBe(6);
   });
 
   it("runs the migration for the document's version and stamps the new schema version", () => {
@@ -1003,6 +1008,7 @@ describe("migrate", () => {
       2: (doc: unknown) => doc,
       3: (doc: unknown) => doc,
       4: (doc: unknown) => doc,
+      5: (doc: unknown) => doc,
     };
     const input = { schemaVersion: 0, title: "Old Park" };
     const out = migrate(input, migrations);
@@ -1018,6 +1024,7 @@ describe("migrate", () => {
       2: (doc: unknown) => doc,
       3: (doc: unknown) => doc,
       4: (doc: unknown) => doc,
+      5: (doc: unknown) => doc,
       [SCHEMA_VERSION]: (doc: unknown) => ({ ...(doc as object), ranCurrent: true }),
     };
     const out = migrate({ schemaVersion: 0 }, migrations) as Record<string, unknown>;
@@ -1343,8 +1350,9 @@ describe("MIGRATIONS[2]", () => {
       other: unknown;
     };
     expect(out.other).toEqual({ kept: true });
-    // The arrays schema 3 had: `lostTicks` came with schema 4.
-    const schema3 = GUEST_ARRAYS.filter(([name]) => name !== "lostTicks");
+    // The arrays schema 3 had: `lostTicks` came with schema 4, the ride arrays with schema 6.
+    const later = ["lostTicks", "ride", "intensityPref", "lastRide", "queueTicks"];
+    const schema3 = GUEST_ARRAYS.filter(([name]) => !later.includes(name));
     expect(Object.keys(out.guests)).toEqual(["count", "nextGuestId", ...schema3.map(([n]) => n)]);
     expect(out.guests.count).toBe(0);
     expect(out.guests.nextGuestId).toBe(1);
@@ -1398,9 +1406,11 @@ const V3_FIXTURE = fromBase64(
 
 /**
  * The `hashWorld` of the schema 3 fixture, as the current build computes it once it is loaded.
- * (Re-pinned for schema 5: the hash covers the rides, the ride id counter and the occupant layer.)
+ * (Re-pinned for schema 5: the hash covers the rides, the ride id counter and the occupant layer;
+ * and for schema 6: it covers the guests' ride arrays, and each guest now has an intensity
+ * preference.)
  */
-const V3_FIXTURE_LOADED_HASH = "131b5b865b83e88a";
+const V3_FIXTURE_LOADED_HASH = "f7a620a83285a2bc";
 
 /**
  * Builds the world the schema 3 fixture was saved from, with the current build: the sample park's
@@ -1704,6 +1714,122 @@ describe("MIGRATIONS[4]", () => {
   });
 });
 
+const V5_FIXTURE = fromBase64(
+  readFileSync(new URL("./fixtures/sample-v5.park.b64", import.meta.url), "utf8").trim(),
+);
+
+/**
+ * The `hashWorld` of the schema 5 fixture, as the current build computes it once it is loaded. The
+ * sample park has no guests yet, so the ride arrays schema 6 added are empty and leave the hash
+ * where the schema 5 build had it.
+ */
+const V5_FIXTURE_LOADED_HASH = "00cb230f02bf9c5b";
+
+describe("schema 5 saves", () => {
+  it("has a fixture that really is a schema 5 document: guests with no ride arrays", () => {
+    const doc = readDoc(V5_FIXTURE);
+    expect(doc.schemaVersion).toBe(5);
+    expect(doc.rides).toEqual([]);
+    const guests = doc.guests as Record<string, unknown>;
+    expect(guests).toHaveProperty("lostTicks");
+    for (const name of ["ride", "intensityPref", "lastRide", "queueTicks"]) {
+      expect(guests).not.toHaveProperty(name);
+    }
+  });
+
+  it("loads as the current schema, with every guest array the length of the store", () => {
+    const world = deserializeWorld(V5_FIXTURE);
+    expect(world.meta.schemaVersion).toBe(SCHEMA_VERSION);
+    for (const name of ["ride", "intensityPref", "lastRide", "queueTicks"] as const) {
+      expect(world.guests[name]).toHaveLength(GUEST_CAP);
+    }
+    expect(world.park).toMatchObject({ name: "Leafy Lake", open: true, entryFee: 5_00 });
+    expect(world.log).toHaveLength(30);
+    expect(validateWorldInvariants(world)).toBeNull();
+  });
+
+  it("hashes to a pinned value, which is the sample park this build makes", () => {
+    expect(hashWorld(deserializeWorld(V5_FIXTURE))).toBe(V5_FIXTURE_LOADED_HASH);
+    expect(hashWorld(createSamplePark(7))).toBe(V5_FIXTURE_LOADED_HASH);
+  });
+
+  it("saves again as the current schema and reloads to the same world", () => {
+    const resaved = serializeWorld(deserializeWorld(V5_FIXTURE));
+    const doc = readDoc(resaved);
+    expect(doc.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(doc.hash).toBe(V5_FIXTURE_LOADED_HASH);
+    expect(hashWorld(deserializeWorld(resaved))).toBe(V5_FIXTURE_LOADED_HASH);
+  });
+
+  it("gives guests in a schema 5 save the ride arrays, through the migration", () => {
+    // A schema 5 document with guests in it: the current save of a busy park, wound back.
+    const doc = readDoc(serializeWorld(busyPark().world));
+    const guests = doc.guests as Record<string, unknown>;
+    for (const name of ["ride", "intensityPref", "lastRide", "queueTicks"]) delete guests[name];
+    doc.schemaVersion = 5;
+    const world = deserializeWorld(writeDoc(doc));
+    const g = world.guests;
+    expect(g.count).toBeGreaterThan(0);
+    for (let slot = 0; slot < g.count; slot++) {
+      expect(at(g.ride, slot)).toBe(0);
+      expect(at(g.lastRide, slot)).toBe(0);
+      expect(at(g.queueTicks, slot)).toBe(0);
+      expect(at(g.intensityPref, slot)).toBe(intensityPrefForId(at(g.id, slot)));
+    }
+    expect(validateWorldInvariants(world)).toBeNull();
+  });
+});
+
+describe("MIGRATIONS[5]", () => {
+  /** A schema 5 guest section with guests numbered `ids`. */
+  const v5Doc = (ids: number[] = [3, 7, 40]) => {
+    const bytes = new Uint8Array(ids.length * 4);
+    ids.forEach((id, i) => new DataView(bytes.buffer).setInt32(i * 4, id, true));
+    return {
+      schemaVersion: 5,
+      guests: { count: ids.length, id: { $t: "Int32Array", $b64: toBase64(bytes) } },
+      other: { kept: true },
+    };
+  };
+
+  it("gives every guest no ride, no last ride, no queue time, and a preference from its id", () => {
+    const out = (MIGRATIONS[5] as Migration)(v5Doc()) as {
+      guests: Record<string, { $t: string; $b64: string }>;
+      other: unknown;
+    };
+    expect(out.other).toEqual({ kept: true });
+    for (const name of ["ride", "lastRide", "queueTicks"]) {
+      expect(out.guests[name]).toEqual({ $t: "Int32Array", $b64: toBase64(new Uint8Array(12)) });
+    }
+    expect(out.guests.intensityPref?.$t).toBe("Uint8Array");
+    expect(Array.from(fromBase64(out.guests.intensityPref?.$b64 ?? ""))).toEqual(
+      [3, 7, 40].map(intensityPrefForId),
+    );
+  });
+
+  it("leaves the document it was given as it was", () => {
+    const doc = v5Doc();
+    (MIGRATIONS[5] as Migration)(doc);
+    expect(doc).toEqual(v5Doc());
+  });
+
+  it("refuses an id array that does not hold the guests the count says", () => {
+    const doc = v5Doc();
+    doc.guests.count = 4;
+    expect(() => (MIGRATIONS[5] as Migration)(doc)).toThrow(SaveError);
+    for (const bad of [null, 5, [], "x", { guests: 3 }]) {
+      expect(() => (MIGRATIONS[5] as Migration)(bad)).toThrow(SaveError);
+    }
+  });
+
+  it("leaves a guest section with no usable count for the schema check to refuse", () => {
+    const doc = v5Doc();
+    (doc.guests as Record<string, unknown>).count = -1;
+    const out = (MIGRATIONS[5] as Migration)(doc) as { guests: object };
+    expect(out.guests).not.toHaveProperty("ride");
+  });
+});
+
 /** Puts `n` guests in the world, with an entrance for them to come from. */
 function addGuests(world: World, n: number): void {
   world.park.entrance ??= { x: 5, y: 0, side: 0 };
@@ -1911,7 +2037,9 @@ const GUEST_VIOLATIONS: Array<[string, (world: World) => void, RegExp]> = [
   ["a guest id used twice", (w) => (w.guests.id[1] = at(w.guests.id, 0)), /guest id/],
   ["a guest id of zero", (w) => (w.guests.id[0] = 0), /guest id/],
   ["a guest id that is not below the counter", (w) => (w.guests.nextGuestId = 2), /nextGuestId/],
-  ["a guest state above 5", (w) => (w.guests.state[1] = 6), /state/],
+  ["a guest state above 7", (w) => (w.guests.state[1] = 8), /state/],
+  ["a guest queuing for no ride", (w) => (w.guests.state[1] = 6), /queuing with no ride/],
+  ["a guest riding no ride", (w) => (w.guests.state[0] = 7), /riding with no ride/],
   ["a guest colour above 8", (w) => (w.guests.color[1] = 9), /colo/],
   ["a guest name outside the table", (w) => (w.guests.name[0] = 64 * 32), /name/],
   ["a guest thought that does not exist", (w) => (w.guests.thought[1] = 200), /thought/],
@@ -1926,6 +2054,9 @@ const GUEST_VIOLATIONS: Array<[string, (world: World) => void, RegExp]> = [
   ["a negative idle time", (w) => (w.guests.sinceAction[0] = -1), /sinceAction/],
   ["a negative thought time", (w) => (w.guests.thoughtTick[1] = -1), /thoughtTick/],
   ["a negative lost time", (w) => (w.guests.lostTicks[0] = -1), /lostTicks/],
+  ["a negative ride id", (w) => (w.guests.ride[0] = -1), /ride -1/],
+  ["a negative last ride", (w) => (w.guests.lastRide[1] = -1), /lastRide/],
+  ["a negative queue time", (w) => (w.guests.queueTicks[0] = -1), /queueTicks/],
 ];
 
 describe("guest invariants", () => {
