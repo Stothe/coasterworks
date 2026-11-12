@@ -18,6 +18,7 @@
     "golden:update": "node --import tsx scripts/update-golden.ts"
   },
   "dependencies": {
+    "@coasterworks/content": "workspace:*",
     "fflate": "^0.8.3",
     "zod": "^4.6.7"
   }
