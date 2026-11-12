@@ -1,4 +1,10 @@
-import type { GuestSection, ParkPublic, SimClient } from "@coasterworks/protocol";
+import type {
+  GuestSection,
+  ParkPublic,
+  RidePublic,
+  RideStatusSection,
+  SimClient,
+} from "@coasterworks/protocol";
 import {
   attachControls,
   createScene,
@@ -63,6 +69,10 @@ export interface ViewportProps {
   getGuests?(): GuestSection | null;
   /** Reads the park entrance of the latest snapshot, on the same terms as `getGuests`. */
   getEntrance?(): ParkPublic["entrance"] | undefined;
+  /** The rides and stalls of the latest snapshot that carried them, or null for none. */
+  rides?: readonly RidePublic[] | null;
+  /** Reads what every ride is doing in the latest snapshot, on the same terms as `getGuests`. */
+  getRideStatus?(): RideStatusSection | null;
   /** Filled with the view's handle while the view is up. */
   ref?: Ref<ViewportHandle>;
 }
@@ -566,11 +576,24 @@ export function Viewport(props: ViewportProps) {
     // The guests the scene was last given. The guests module keeps the last two sections to move
     // guests between them, so a section goes in once, when it is new.
     let guests: GuestSection | null | undefined;
+    // The rides and their status the scene was last given: each goes in when it is new.
+    let rides: readonly RidePublic[] | null | undefined;
+    let rideStatus: RideStatusSection | null | undefined;
     let frame = requestAnimationFrame(function draw(now) {
       const nextGuests = latest.current.getGuests?.() ?? null;
       if (nextGuests !== guests) {
         guests = nextGuests;
         scene.setGuests(nextGuests, now);
+      }
+      const nextRides = latest.current.rides ?? null;
+      if (nextRides !== rides) {
+        rides = nextRides;
+        scene.setRides(nextRides);
+      }
+      const nextStatus = latest.current.getRideStatus?.() ?? null;
+      if (nextStatus !== rideStatus) {
+        rideStatus = nextStatus;
+        scene.setRideStatus(nextStatus);
       }
       // The entrance comes with the snapshots, which render nothing: this is where it is noticed.
       park();

@@ -36,6 +36,16 @@ export {
   stepGovernor,
 } from "./quality.js";
 export type { FrameMeter, GovernorState } from "./quality.js";
+export { RECIPES, buildRideModel, rideDetailFor } from "./rides/recipes.js";
+export type { RideBox, RideDetail, RideInstance, RideModel } from "./rides/recipes.js";
+export { createRides, stepMotion } from "./rides/rides.js";
+export type {
+  PlacementGhost,
+  RideLayer,
+  RideMotion,
+  RidePlace,
+  RidesModule,
+} from "./rides/rides.js";
 export { createScene } from "./scene.js";
 export type { SceneHandle, SceneOptions } from "./scene.js";
 export { NOISE_GLSL } from "./shaders/noise.glsl.js";

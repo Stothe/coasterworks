@@ -32,6 +32,7 @@ export type ModuleName =
   | "post"
   | "guests"
   | "entrance"
+  | "rides"
   | "surroundings";
 
 /**

@@ -1,5 +1,6 @@
 import type { GuestSection } from "@coasterworks/protocol";
 import { Scene, type InstancedMesh } from "three";
+import { GuestState } from "@coasterworks/sim";
 import { describe, expect, it } from "vitest";
 import { createAtmosphereUniforms } from "../src/atmosphere.glsl.js";
 import { createSharedUniforms, type FrameInfo, type RenderContext } from "../src/context.js";
@@ -267,5 +268,29 @@ describe("createGuests", () => {
     h.update(1075);
     expect(h.mesh.count).toBe(GUEST_CAPACITY);
     expect(h.place(GUEST_CAPACITY - 1)[0]).toBeCloseTo(((GUEST_CAPACITY - 1) % 60) + 0.0625, 4);
+  });
+  it("hides guests on a ride and keeps queuing and buying ones drawn and pickable", () => {
+    const h = harness();
+    const s = section([
+      [1, 3.5, 3.5],
+      [2, 6.5, 6.5],
+      [3, 9.5, 9.5],
+    ]);
+    // QUEUING, RIDING, BUYING: the sim's guest states.
+    s.state.set([GuestState.QUEUING, GuestState.RIDING, GuestState.BUYING]);
+    h.guests.setGuests(s, 1000);
+    h.update(1000);
+    const down = (x: number, z: number) => ({
+      origin: { x, y: 5, z },
+      direction: { x: 0, y: -1, z: 0 },
+    });
+    const matrix = (i: number) =>
+      Array.from(h.mesh.instanceMatrix.array.subarray(i * 16, i * 16 + 16));
+    expect(matrix(1).every((v) => v === 0)).toBe(true);
+    expect(matrix(0)[15]).toBe(1);
+    expect(matrix(2)[15]).toBe(1);
+    expect(h.guests.pickAt(down(6.5, 6.5))).toBeNull();
+    expect(h.guests.pickAt(down(3.5, 3.5))).toEqual({ id: 1 });
+    expect(h.guests.pickAt(down(9.5, 9.5))).toEqual({ id: 3 });
   });
 });

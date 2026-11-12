@@ -465,18 +465,18 @@ node apps/web/scripts/lookdev-shot.mjs --port 5273 --preset overview --out /tmp/
 node apps/web/scripts/lookdev-shot.mjs --port 5273 --preset hill --query "tod=0.8&modules=-post" --out /tmp/shots/hill-late.png
 ```
 
-| Option              | Meaning                                                                 | Default    |
-| ------------------- | ----------------------------------------------------------------------- | ---------- |
-| `--port <n>`        | port of the dev server                                                  | required   |
-| `--out <file.png>`  | where to write the PNG (its folder is created)                          | required   |
-| `--preset <name>`   | `overview`, `lake`, `hill`, `paths`, `edge`, `dusk`, `night`, `closeup` | `overview` |
-| `--query "a=b&c=d"` | page parameters laid over the preset's                                  | none       |
-| `--size <WxH>`      | viewport in CSS pixels                                                  | `1440x900` |
-| `--dpr <n>`         | device pixel ratio                                                      | 1          |
-| `--frames <n>`      | frames to let pass after `ready` before the shot                        | 30         |
-| `--software`        | paint with SwiftShader, as CI does, instead of the GPU                  | off        |
+| Option              | Meaning                                                                          | Default    |
+| ------------------- | -------------------------------------------------------------------------------- | ---------- |
+| `--port <n>`        | port of the dev server                                                           | required   |
+| `--out <file.png>`  | where to write the PNG (its folder is created)                                   | required   |
+| `--preset <name>`   | `overview`, `lake`, `hill`, `paths`, `edge`, `dusk`, `night`, `closeup`, `rides` | `overview` |
+| `--query "a=b&c=d"` | page parameters laid over the preset's                                           | none       |
+| `--size <WxH>`      | viewport in CSS pixels                                                           | `1440x900` |
+| `--dpr <n>`         | device pixel ratio                                                               | 1          |
+| `--frames <n>`      | frames to let pass after `ready` before the shot                                 | 30         |
+| `--software`        | paint with SwiftShader, as CI does, instead of the GPU                           | off        |
 
-Presets (all `tod=0.4` unless said): `overview` `cam=32,32,90,0.785,0.7`; `lake` `cam=37,29,22,0.6,0.6`; `hill` `cam=19,15,36,0.9,0.55`; `paths` `demo=1&cam=33,36,30,0.785,0.75`; `edge` `demo=1&cam=32,58,34,3.6,0.27` (low across the south edge to the horizon, gate in view); `dusk` `tod=0.93&demo=1&cam=32,32,70,2.4,0.5`; `night` `tod=0&demo=1&cam=32,34,60,0.785,0.65`; `closeup` `demo=1&cam=32,39,8,0.785,0.5`. On the sample park (seed 7) the hill's peak is at about tile (19, 15) and the pond's water is tiles 33..40 by 27..30.
+Presets (all `tod=0.4` unless said): `overview` `cam=32,32,90,0.785,0.7`; `lake` `cam=37,29,22,0.6,0.6`; `hill` `cam=19,15,36,0.9,0.55`; `paths` `demo=1&cam=33,36,30,0.785,0.75`; `edge` `demo=1&cam=32,58,34,3.6,0.27` (low across the south edge to the horizon, gate in view); `dusk` `tod=0.93&demo=1&cam=32,32,70,2.4,0.5`; `night` `tod=0&demo=1&cam=32,34,60,0.785,0.65`; `closeup` `demo=1&cam=32,39,8,0.785,0.5`; `rides` `rides=1&cam=34,45,24,0.785,0.6` (one of every ride and stall type, built by the sim). On the sample park (seed 7) the hill's peak is at about tile (19, 15) and the pond's water is tiles 33..40 by 27..30.
 
 It prints one line of JSON, `{"out","url","gl","frameMs","quality","errors"}`: `gl` is the WebGL renderer string (on a Mac it must name Metal and the GPU, e.g. `ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Max, ...)`; SwiftShader there means the launch flags stopped working), `frameMs` the smoothed time between frames, `errors` the page's console errors and uncaught exceptions (a shader that fails to compile lands here). With any error the exit code is 1 and the PNG is still written. It launches `chromium` with `channel: "chromium"` (the full browser in new headless mode) and `--use-angle=metal --enable-gpu --ignore-gpu-blocklist` on macOS. Agents look at the PNG (Read tool) to judge their work.
 

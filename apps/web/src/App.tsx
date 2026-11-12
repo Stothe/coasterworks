@@ -365,6 +365,8 @@ export function App() {
           paths={host.paths}
           getGuests={getGuests}
           getEntrance={getEntrance}
+          rides={host.rides}
+          getRideStatus={host.getRideStatus}
           client={client}
           onResult={onResult}
           onSecondaryClick={openTileMenu}

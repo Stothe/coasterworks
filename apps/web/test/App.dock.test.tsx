@@ -338,10 +338,12 @@ describe("the terrain tray's charge", () => {
       "client",
       "getEntrance",
       "getGuests",
+      "getRideStatus",
       "onResult",
       "onSecondaryClick",
       "paths",
       "ref",
+      "rides",
       "terrain",
       "tick",
     ]);

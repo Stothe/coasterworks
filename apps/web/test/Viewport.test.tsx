@@ -1,4 +1,10 @@
-import type { GuestSection, QueryResult, SimClient } from "@coasterworks/protocol";
+import type {
+  GuestSection,
+  QueryResult,
+  RidePublic,
+  RideStatusSection,
+  SimClient,
+} from "@coasterworks/protocol";
 import type { ControlHandlers, TerrainData } from "@coasterworks/render";
 import type { ExecResult } from "@coasterworks/sim";
 import { act, cleanup, render } from "@testing-library/react";
@@ -48,6 +54,8 @@ vi.mock("@coasterworks/render", () => ({
       setTimeOfDay: () => {},
       setPaths: record("setPaths"),
       setGuests: record("setGuests"),
+      setRides: record("setRides"),
+      setRideStatus: record("setRideStatus"),
       setEntrance: record("setEntrance"),
       setGridVisible: record("setGridVisible"),
       setQuality: record("setQuality"),
@@ -509,6 +517,64 @@ describe("Viewport: the guests and the entrance", () => {
     entrance = undefined;
     frames(100);
     expect(callsTo("setEntrance").at(-1)).toEqual([null]);
+  });
+});
+
+describe("Viewport: the rides", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+  });
+  const frames = (ms: number) =>
+    act(() => {
+      vi.advanceTimersByTime(ms);
+    });
+  const status = (count: number) => ({ count }) as unknown as RideStatusSection;
+  const carousel: RidePublic = {
+    id: 1,
+    type: "carousel",
+    kind: "ride",
+    x: 2,
+    y: 2,
+    rot: 0,
+    name: "Carousel 1",
+    open: true,
+    price: 100,
+    entrance: { x: 3, y: 5 },
+    exit: { x: 5, y: 3 },
+    service: null,
+  };
+
+  it("gives the scene the host's rides once per new list, and the status once per snapshot", () => {
+    let current: RideStatusSection | null = status(1);
+    const first = [carousel];
+    const props: ViewportProps = {
+      terrain,
+      tick: 0,
+      client,
+      onResult: vi.fn(),
+      rides: first,
+      getRideStatus: () => current,
+    };
+    const view = render(<Viewport {...props} />);
+    frames(100);
+    expect(callsTo("setRides")).toEqual([[first]]);
+    expect(callsTo("setRideStatus")).toEqual([[current]]);
+    const next = status(2);
+    current = next;
+    frames(100);
+    expect(callsTo("setRideStatus")).toHaveLength(2);
+    expect(callsTo("setRideStatus")[1]?.[0]).toBe(next);
+    const second = [carousel, { ...carousel, id: 2, x: 6 }];
+    view.rerender(<Viewport {...props} rides={second} />);
+    frames(100);
+    expect(callsTo("setRides")).toEqual([[first], [second]]);
+  });
+
+  it("gives null rides and no status when the host has none", () => {
+    mount();
+    frames(50);
+    expect(callsTo("setRides")).toEqual([[null]]);
+    expect(callsTo("setRideStatus")).toEqual([[null]]);
   });
 });
 

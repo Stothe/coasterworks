@@ -154,6 +154,9 @@ importers:
 
   packages/render:
     dependencies:
+      '@coasterworks/content':
+        specifier: workspace:*
+        version: link:../content
       '@coasterworks/protocol':
         specifier: workspace:*
         version: link:../protocol

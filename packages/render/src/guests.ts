@@ -1,4 +1,5 @@
 import type { GuestSection } from "@coasterworks/protocol";
+import { GuestState } from "@coasterworks/sim";
 import {
   BufferAttribute,
   BufferGeometry,
@@ -42,6 +43,9 @@ export type GuestsModule = SceneModule & {
    */
   pickAt(ray: Ray, reach?: number): { id: number } | null;
 };
+
+/** The sim's `GuestState.RIDING`: on a ride, and drawn as part of it. */
+const RIDING = GuestState.RIDING;
 
 /** The most guests drawn at once. */
 export const GUEST_CAPACITY = 2000;
@@ -586,6 +590,8 @@ export function pickGuest(
   let hit = -1;
   for (let i = 0; i < count; i++) {
     const size = sizes[i] as number;
+    // A guest not drawn (one on a ride) cannot be picked.
+    if (!(size > 0)) continue;
     const radius = PICK_RADIUS * size;
     // The rod's axis runs from `radius` above the soles to `radius` below the top of the head.
     const rod = Math.max(0, FIGURE.height * size - radius * 2);
@@ -1245,7 +1251,15 @@ export function createGuests(ctx: RenderContext): GuestsModule {
     const grown = 1 + FAR_GROW * smoothstep((distance - GROW_NEAR) / (GROW_FAR - GROW_NEAR));
     const matrices = mesh.instanceMatrix.array;
     const anims = anim.array;
+    const states = latestSection?.state;
     for (let i = 0; i < count; i++) {
+      // A guest on a ride is part of the ride: it is not drawn (nor its shade) at the ride's
+      // middle, where the sim keeps it, and cannot be picked. Queuing and buying guests are.
+      if (states && states[i] === RIDING) {
+        matrices.fill(0, i * 16, i * 16 + 16);
+        pickSizes[i] = 0;
+        continue;
+      }
       const facing =
         (heading[i] as number) + angleDelta(heading[i] as number, headingTo[i] as number) * turn;
       heading[i] = facing;

@@ -7,6 +7,7 @@ import {
 } from "@coasterworks/render";
 import { createSamplePark } from "@coasterworks/sim";
 import { createDemo } from "./demo";
+import { placeEveryRide } from "./rides";
 
 /**
  * The look-dev page: the render scene alone, with no interface around it, on the sample park
@@ -28,6 +29,9 @@ import { createDemo } from "./demo";
  * - `grid=1`: the build grid.
  * - `hl=x,y,w,h`: a highlighted tile rectangle.
  * - `seed=7`: the sample park's seed. Default 7, the park the app opens.
+ * - `rides=1`: one of every ride and stall type, built on the sample park by the sim, the rides
+ *   running.
+ * - `ghost=type,x,y,rot,ok`: a placement ghost of that type (`ok` 1 green, 0 red).
  *
  * `window.__lookdev` reports `ready` (true once a few frames of the finished scene are drawn),
  * the WebGL renderer string, the smoothed frame time and the quality in force.
@@ -60,6 +64,7 @@ const MODULES: readonly ModuleName[] = [
   "post",
   "guests",
   "entrance",
+  "rides",
   "surroundings",
 ];
 /** Frames drawn before the page calls itself ready: shaders are compiled and shadows are in. */
@@ -112,6 +117,8 @@ if (still !== null) options.frozenTime = still;
 const scene = createScene(canvas, options);
 
 const world = createSamplePark(number("seed") ?? 7);
+// Built before the terrain goes to the scene: the sim may only refuse a spot, never change land.
+const rides = params.get("rides") === "1" ? placeEveryRide(world) : null;
 // The sim's terrain has the arrays the renderer wants, under the same names.
 const terrain: TerrainData = world.terrain;
 scene.setTerrain(terrain);
@@ -126,6 +133,22 @@ if (demo) {
   // A crowd that has been walking for a while is spread out the way a real one is.
   demo.advance(20 + (still ?? 0));
   scene.setGuests(demo.guests);
+}
+
+if (rides) {
+  scene.setRides(rides.rides);
+  scene.setRideStatus(rides.status);
+}
+const ghost = params.get("ghost")?.split(",");
+if (ghost && ghost.length >= 4) {
+  const [type = "", gx, gy, rot] = ghost;
+  scene.setPlacementGhost({
+    type,
+    x: Number(gx),
+    y: Number(gy),
+    rot: (Number(rot) & 3) as 0 | 1 | 2 | 3,
+    ok: ghost[4] !== "0",
+  });
 }
 
 scene.setGridVisible(params.get("grid") === "1");

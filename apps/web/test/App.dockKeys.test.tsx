@@ -38,6 +38,10 @@ vi.mock("@coasterworks/render", async (importOriginal) => {
         setGridVisible() {},
         setQuality() {},
         pickGuestAt: () => null,
+        setRides() {},
+        setRideStatus() {},
+        setPlacementGhost() {},
+        pickRideAt: () => null,
         info: { quality: "low", gl: "", frameMs: 0 },
         dispose() {},
       };
