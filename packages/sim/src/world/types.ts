@@ -5,9 +5,11 @@ import type { RouteCache } from "../paths/routing.js";
 import type { QueueCache } from "../rides/queue.js";
 import type { RideRecord } from "../rides/types.js";
 import type { Rng } from "../rng.js";
+import type { TrackIndex } from "../track/occupancy.js";
+import type { TrackRecord } from "../track/record.js";
 
 /** Version of the save-file schema. Bump when the serialized world shape changes. */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 8;
 
 /** Highest corner height. Heights are integers in half-unit steps, 0..MAX_HEIGHT. */
 export const MAX_HEIGHT = 63;
@@ -81,6 +83,16 @@ export interface World {
   guests: GuestStore;
   /** Every ride and stall in the park, sorted by id. */
   rides: RideRecord[];
+  /**
+   * The shape of every coaster, one per ride of kind `coaster`, sorted by ride id. Saved and
+   * hashed. Coasters do not mark the occupant layer: their tiles are in `trackIndex`.
+   */
+  tracks: TrackRecord[];
+  /**
+   * Which track bands lie on each tile, rebuilt from `tracks` when missing (see `trackIndex` in
+   * `track/occupancy.ts`) and kept in step by the coaster commands. Runtime only, like `routes`.
+   */
+  trackIndex?: TrackIndex | undefined;
   /** The id the next ride or stall built gets. Ids start at 1, only go up, and are never reused. */
   nextRideId: number;
   /**

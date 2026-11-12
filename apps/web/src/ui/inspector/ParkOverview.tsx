@@ -33,7 +33,7 @@ export function ParkOverview({
           <Row label="Park rating">{`${park.rating} · ${ratingWord(park.rating)}`}</Row>
           {rides && (
             <>
-              <Row label="Rides">{rides.filter((ride) => ride.kind === "ride").length}</Row>
+              <Row label="Rides">{rides.filter((ride) => ride.kind !== "stall").length}</Row>
               <Row label="Shops and stalls">
                 {rides.filter((ride) => ride.kind === "stall").length}
               </Row>

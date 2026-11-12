@@ -25,7 +25,7 @@ export function fnv1a64(bytes: Uint8Array, seed: bigint = FNV_OFFSET_BASIS): big
  * Encodes a string as UTF-8, matching what `TextEncoder` produces (lone surrogates become
  * U+FFFD). Written by hand because `src` is compiled without Node or DOM globals.
  */
-function utf8Bytes(text: string): Uint8Array {
+export function utf8Bytes(text: string): Uint8Array {
   const out: number[] = [];
   for (let i = 0; i < text.length; i++) {
     let codePoint = text.charCodeAt(i);

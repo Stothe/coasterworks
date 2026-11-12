@@ -3,6 +3,7 @@ import { createDefaultRegistry, type CatalogEntry, type ExecResult } from "@coas
 import type { SimClient } from "@coasterworks/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  BUILDER_ENTRIES,
   TILE_LIST_ENTRIES,
   buildActions,
   humanizeName,
@@ -94,7 +95,10 @@ describe("buildActions: commands", () => {
   it("makes one action per command and none for a query", () => {
     const { actions } = setup();
     const commands = catalog
-      .filter((e) => e.kind === "command" && !TILE_LIST_ENTRIES.has(e.name))
+      .filter(
+        (e) =>
+          e.kind === "command" && !TILE_LIST_ENTRIES.has(e.name) && !BUILDER_ENTRIES.has(e.name),
+      )
       .map((e) => e.name);
     const fromCatalog = actions.filter((a) => a.kind === "command").map((a) => a.id);
     expect(fromCatalog).toEqual(commands);
@@ -185,6 +189,26 @@ describe("buildActions: commands", () => {
     expect(ids).not.toContain("path_build_tiles");
     expect(ids).not.toContain("path_remove_tiles");
     expect(ids).toContain("path_build");
+  });
+
+  it("leaves out the coaster piece commands, which belong to the coaster builder", () => {
+    const { actions } = setup();
+    const ids = actions.map((a) => a.id);
+    for (const name of [
+      "coaster_begin",
+      "coaster_add_piece",
+      "coaster_remove_piece",
+      "coaster_complete",
+      "coaster_build_from_points",
+      "coaster_extend_to",
+    ]) {
+      expect(
+        catalog.some((e) => e.name === name),
+        name,
+      ).toBe(true);
+      expect(ids, name).not.toContain(name);
+    }
+    expect(ids).toContain("ride_demolish");
   });
 
   it("marks every command with a rectangle as rect placement, and no other", () => {

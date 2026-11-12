@@ -68,13 +68,15 @@ const TileSchema = z.object({ x: z.number().int(), y: z.number().int() });
  * A ride or stall as every client sees it: what it is and where, not what it is doing (that is in
  * the ride status, every snapshot). `x`, `y` is the top-left tile of its footprint as turned by
  * `rot` (quarter turns clockwise). A ride has an `entrance` and an `exit` tile and no `service`; a
- * stall has a `service` tile and neither of the others.
+ * stall has a `service` tile and neither of the others. A coaster (`type` its family id) is at the
+ * tile of its first station piece, facing `rot`, with an entrance and an exit beside it; its track
+ * is not sent yet (Plan E, Task 6).
  */
 export const RidePublicSchema = z.object({
   id: z.number().int().positive(),
-  /** The content type's id, such as `carousel`. */
+  /** The content type's id, such as `carousel`, or a coaster's family id. */
   type: z.string(),
-  kind: z.enum(["ride", "stall"]),
+  kind: z.enum(["ride", "stall", "coaster"]),
   x: z.number().int(),
   y: z.number().int(),
   rot: z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]),

@@ -56,6 +56,57 @@ export { MIGRATIONS, migrate } from "./save/migrate.js";
 export type { Migration } from "./save/migrate.js";
 export { SAMPLE_SIZE, createSamplePark } from "./sample-park.js";
 export { Sim } from "./sim.js";
+export {
+  SEG_BRAKE,
+  SEG_LIFT,
+  SEG_STATION,
+  applyPiece,
+  circuitCloses,
+  endPose,
+  localToWorld,
+  pieceRefusal,
+  pieceTiles,
+  poseAtTile,
+  posesEqual,
+  samplePiece,
+  sampleTrack,
+} from "./track/pose.js";
+export type { Dir, PieceTile, Pose, Segment } from "./track/pose.js";
+export {
+  MAX_STATION_PIECES,
+  MIN_STATION_PIECES,
+  PATH_CLEARANCE,
+  TRACK_CLEARANCE,
+  buildTrackIndex,
+  trackIndex,
+} from "./track/occupancy.js";
+export type { TrackBand, TrackIndex } from "./track/occupancy.js";
+export { MAX_TRACK_PIECES } from "./track/record.js";
+export {
+  ALREADY_REACHED,
+  FIX_EARLIER,
+  MAX_EXPANSIONS,
+  MAX_FIT_EXPANSIONS,
+  NO_FIT,
+  TOO_LONG,
+  TOO_STEEP,
+  TOO_TIGHT,
+  fitPoints,
+  pieceWeight,
+} from "./track/fit.js";
+export type { FitLimits, FitPoint, FitResult, FitStart, FitWork, PointFit } from "./track/fit.js";
+export type { TestProgress, TrackRecord, TrackStats, TrainState } from "./track/record.js";
+export {
+  FINE,
+  TrainMode,
+  buildLine,
+  frontOf,
+  pointAt,
+  trainForces,
+  trainSpec,
+} from "./track/physics.js";
+export type { Forces, Line, LinePoint, TrainSpec } from "./track/physics.js";
+export { RUN_TOO_LONG, TRAIN_STALLED, coasterSystem } from "./systems/coasters.js";
 export { LOAN_MAX, financeSystem } from "./systems/finance.js";
 export { guestSystem } from "./systems/guests.js";
 export { rideSystem } from "./systems/rides.js";

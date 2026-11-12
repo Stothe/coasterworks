@@ -353,6 +353,20 @@ export const TILE_LIST_ENTRIES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * The coaster commands, which the coaster builder sends (Plan E, Task 8), and the fit preview it
+ * asks: a form in the command bar could not lay track sensibly, so they are not actions either.
+ */
+export const BUILDER_ENTRIES: ReadonlySet<string> = new Set([
+  "coaster_begin",
+  "coaster_add_piece",
+  "coaster_remove_piece",
+  "coaster_complete",
+  "coaster_build_from_points",
+  "coaster_extend_to",
+  "coaster_fit_preview",
+]);
+
+/**
  * Every action the player can take, from the sim's catalog and the interface. A command becomes
  * the kind of action its input calls for: a rectangle of tiles is placed on the map, any other
  * input opens a form, and no input at all runs at once. Queries are not actions; nothing about
@@ -362,7 +376,12 @@ export const TILE_LIST_ENTRIES: ReadonlySet<string> = new Set([
 export function buildActions(catalog: readonly CatalogEntry[], deps: UiActionDeps): Action[] {
   return [
     ...catalog
-      .filter((entry) => entry.kind === "command" && !TILE_LIST_ENTRIES.has(entry.name))
+      .filter(
+        (entry) =>
+          entry.kind === "command" &&
+          !TILE_LIST_ENTRIES.has(entry.name) &&
+          !BUILDER_ENTRIES.has(entry.name),
+      )
       .map((entry) => commandAction(entry, deps)),
     ...uiActions(deps),
   ];

@@ -64,6 +64,7 @@ export function createWorld(opts: CreateWorldOptions): World {
     park: createParkState(opts.name),
     guests: createGuestStore(),
     rides: [],
+    tracks: [],
     nextRideId: 1,
     pathVersion: 0,
     rideVersion: 0,

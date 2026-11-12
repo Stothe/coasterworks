@@ -8,6 +8,7 @@ import {
 } from "@coasterworks/content";
 import { MAX_PATH_SLOPE } from "../paths/paths.js";
 import { getCorner, tileCorners } from "../terrain/terrain.js";
+import { tileHasTrack } from "../track/occupancy.js";
 import type { Rect, Terrain, World } from "../world/types.js";
 import { MAX_RIDE_ID, RIDE_CAP, RidePhase, type RideRecord, type Tile } from "./types.js";
 
@@ -62,8 +63,12 @@ export function rideAccessTiles(ride: Pick<RideRecord, "entrance" | "exit" | "se
   return out;
 }
 
-/** The footprint of a ride in the park, from its content type. Throws for an unknown type. */
+/**
+ * The footprint of a ride in the park, from its content type. Throws for an unknown type. A
+ * coaster's is the tile of its first station piece (its track is in `World.tracks`).
+ */
 export function rideFootprint(ride: RideRecord): Rect {
+  if (ride.kind === "coaster") return { x: ride.x, y: ride.y, w: 1, h: 1 };
   const type = typeById(ride.type);
   if (type === undefined) throw new RangeError(`Ride ${ride.id} has unknown type ${ride.type}`);
   return footprintRect(type, ride.x, ride.y, ride.rot);
@@ -104,7 +109,9 @@ export function accessIndexes(world: World): Set<number> {
  *      exit or service tile ("Something is already here");
  *   5. the entrance, exit or service tile has no ride on it, no water, and is not the park entrance
  *      ("Something is already here"); it may have a path, which is how guests reach it;
- *   6. fewer than `RIDE_CAP` rides and stalls stand ("Too many rides"), and an id is left
+ *   6. no coaster track lies over a footprint tile or the entrance, exit or service tile
+ *      ("Something is already here");
+ *   7. fewer than `RIDE_CAP` rides and stalls stand ("Too many rides"), and an id is left
  *      ("Too many rides built").
  */
 export function canPlaceRide(
@@ -163,6 +170,16 @@ export function canPlaceRide(
       return SOMETHING_HERE;
     }
   }
+  if (world.tracks.length > 0) {
+    for (let ty = rect.y; ty < rect.y + rect.h; ty++) {
+      for (let tx = rect.x; tx < rect.x + rect.w; tx++) {
+        if (tileHasTrack(world, ty * t.width + tx)) return SOMETHING_HERE;
+      }
+    }
+    for (const tile of access) {
+      if (tileHasTrack(world, tile.y * t.width + tile.x)) return SOMETHING_HERE;
+    }
+  }
   // Guests reach a ride by a path on its access tiles, so each must be able to take one.
   for (const tile of access) {
     const corners = tileCorners(t, tile.x, tile.y);
@@ -208,7 +225,7 @@ export function checkRideId(world: World, id: number): string | null {
  * The default name for a new ride of `type`: its type name and the smallest positive number no ride
  * in the park is already named with, such as "Carousel 2".
  */
-export function defaultRideName(world: World, type: ContentType): string {
+export function defaultRideName(world: World, type: Pick<ContentType, "name">): string {
   const taken = new Set(world.rides.map((ride) => ride.name));
   for (let n = 1; ; n++) {
     const name = `${type.name} ${n}`;
@@ -244,12 +261,15 @@ export function newRide(
   };
 }
 
-/** Puts a ride into the park: into `world.rides`, in id order, and onto its footprint tiles. */
+/**
+ * Puts a ride into the park: into `world.rides`, in id order, and onto its footprint tiles. A
+ * coaster marks no tiles; its track goes into `World.tracks` and the track index.
+ */
 export function addRide(world: World, ride: RideRecord): void {
   let at = world.rides.length;
   while (at > 0 && (world.rides[at - 1] as RideRecord).id > ride.id) at--;
   world.rides.splice(at, 0, ride);
-  fillOccupancy(world.terrain, rideFootprint(ride), ride.id);
+  if (ride.kind !== "coaster") fillOccupancy(world.terrain, rideFootprint(ride), ride.id);
 }
 
 /** Takes a ride out of the park and frees its tiles. Returns the record, or throws if absent. */
@@ -257,6 +277,6 @@ export function removeRide(world: World, id: number): RideRecord {
   const at = world.rides.findIndex((ride) => ride.id === id);
   if (at === -1) throw new RangeError(`No ride with id ${id}`);
   const [ride] = world.rides.splice(at, 1) as [RideRecord];
-  fillOccupancy(world.terrain, rideFootprint(ride), 0);
+  if (ride.kind !== "coaster") fillOccupancy(world.terrain, rideFootprint(ride), 0);
   return ride;
 }

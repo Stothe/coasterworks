@@ -48,7 +48,7 @@ export const PRICE_STEP = 10;
 const NO_SUCH_RIDE = /^No ride with id \d+$/;
 
 /** What a ride is doing, by the phase the sim gives. */
-const PHASES = ["Idle", "Loading", "Running", "Unloading"] as const;
+const PHASES = ["Idle", "Loading", "Running", "Unloading", "Testing"] as const;
 
 function isRideView(value: unknown): value is RideView {
   if (typeof value !== "object" || value === null) return false;

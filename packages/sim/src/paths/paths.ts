@@ -1,5 +1,6 @@
 import { inBounds, tileCorners, tileIndex } from "../terrain/terrain.js";
 import type { EdgeSide } from "../park/types.js";
+import { trackTooLowForPath } from "../track/occupancy.js";
 import type { Terrain, World } from "../world/types.js";
 
 /** No path on the tile. */
@@ -21,7 +22,8 @@ export function pathAt(t: Terrain, x: number, y: number): number {
 /**
  * The reason a path cannot be laid on tile (x, y), or null if it can. Checked in this order: off
  * the map, water, a slope steeper than `MAX_PATH_SLOPE`, the park entrance, and a tile a ride or
- * stall stands on. A ride's entrance, exit, or service tile is not occupied and takes a path.
+ * stall stands on, or coaster track less than `PATH_CLEARANCE` steps above the ground. A ride's
+ * entrance, exit, or service tile is not occupied and takes a path.
  */
 export function canBuildPath(world: World, x: number, y: number): string | null {
   const t = world.terrain;
@@ -32,6 +34,7 @@ export function canBuildPath(world: World, x: number, y: number): string | null 
   const { entrance } = world.park;
   if (entrance !== null && entrance.x === x && entrance.y === y) return "Tile is the park entrance";
   if ((t.occupant[tileIndex(t, x, y)] as number) !== 0) return "Something is already here";
+  if (trackTooLowForPath(world, x, y)) return "Something is already here";
   return null;
 }
 

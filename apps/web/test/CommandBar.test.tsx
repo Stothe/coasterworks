@@ -160,6 +160,7 @@ describe("CommandBar: the list", () => {
       "ride_close",
       "ride_set_price",
       "ride_rename",
+      "ride_test",
     ]);
     expect(inGroup("Shops")).toEqual(["stall_build"]);
     expect(inGroup("History")).toEqual(["ui.undo", "ui.redo"]);

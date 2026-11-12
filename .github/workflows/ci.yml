@@ -37,10 +37,11 @@ jobs:
       - name: Headless demo
         if: matrix.os == 'ubuntu-latest'
         run: ./scripts/demo-headless.sh
-      # 2,000 guests for 1,000 ticks in under 2 seconds. Timed, so on one known kind of runner.
-      - name: Guest performance
+      # 2,000 guests for 1,000 ticks in under 2 seconds, and a 64-point coaster fitted in a few
+      # frames. Timed, so on one known kind of runner.
+      - name: Guest and coaster-fit performance
         if: matrix.os == 'macos-latest'
-        run: pnpm exec vitest run packages/sim/test/perf.test.ts
+        run: pnpm exec vitest run packages/sim/test/perf.test.ts packages/sim/test/coaster-fit.test.ts
         env:
           PERF: "1"
       # The browser smoke test drives the `apps/web/dist` that `pnpm build` just made, in headless

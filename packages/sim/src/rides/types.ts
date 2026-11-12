@@ -12,11 +12,14 @@ export const MAX_RIDE_PRICE = 20_00;
 /** Longest ride name, in characters. */
 export const MAX_RIDE_NAME = 40;
 
-/** What a ride is doing: idle, loading, running, or unloading. */
-export const RidePhase = { IDLE: 0, LOADING: 1, RUNNING: 2, UNLOADING: 3 } as const;
+/**
+ * What a ride is doing: idle, loading, running, or unloading; or, for a coaster only, running a
+ * test (`ride_test`: its train goes round empty).
+ */
+export const RidePhase = { IDLE: 0, LOADING: 1, RUNNING: 2, UNLOADING: 3, TESTING: 4 } as const;
 
 /** Highest `RidePhase` value. */
-export const MAX_RIDE_PHASE = 3;
+export const MAX_RIDE_PHASE = 4;
 
 /** A tile on the map. */
 export interface Tile {
@@ -39,13 +42,16 @@ export interface RideStats {
  * `x`, `y` is the top-left tile of the footprint as rotated by `rot`. The tiles guests use are
  * worked out from the content type when it is built and stored here, so later code needs no content
  * lookup to find them: a ride has an `entrance` and an `exit` (and no `service`), a stall a
- * `service` tile (and no `entrance` or `exit`).
+ * `service` tile (and no `entrance` or `exit`). A coaster's `x`, `y` is the tile of its first
+ * station piece and `rot` the direction that piece faces; its entrance is beside that tile on the
+ * left and its exit on the right.
  */
 export interface RideRecord {
   id: number;
   /** The content type's id, such as `carousel`. */
   type: string;
-  kind: "ride" | "stall";
+  /** `coaster` for a coaster, whose `type` is its family id and whose shape is in `World.tracks`. */
+  kind: "ride" | "stall" | "coaster";
   x: number;
   y: number;
   rot: Rot;

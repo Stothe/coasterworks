@@ -1,4 +1,12 @@
-import { typeById, type Rot } from "@coasterworks/content";
+import {
+  STEP,
+  familyById,
+  pieceById,
+  typeById,
+  type CoasterFamily,
+  type Rot,
+  type TrackPiece,
+} from "@coasterworks/content";
 import { QUEUE_PATIENCE } from "../guests/behavior.js";
 import { THOUGHTS } from "../guests/thoughts.js";
 import {
@@ -20,9 +28,22 @@ import {
   MAX_RIDE_PRICE,
   RIDE_CAP,
   RidePhase,
+  type RideRecord,
   type Tile,
 } from "../rides/types.js";
-import { inBounds } from "../terrain/terrain.js";
+import { MAX_PATH_SLOPE } from "../paths/paths.js";
+import { inBounds, tileCorners } from "../terrain/terrain.js";
+import {
+  NOT_CLOSED,
+  circuitRefusal,
+  isJoinPose,
+  placementRefusal,
+  reservedTiles,
+  stationAccess,
+} from "../track/occupancy.js";
+import { applyPiece, pieceRefusal, poseAtTile, posesEqual, type Dir } from "../track/pose.js";
+import { FINE, TrainMode, buildLine } from "../track/physics.js";
+import { MAX_TRACK_PIECES, type TrackRecord } from "../track/record.js";
 import { MONTHS_PER_YEAR } from "../time.js";
 import { MAX_HEIGHT, type World } from "../world/types.js";
 
@@ -48,13 +69,18 @@ const MAX_SURFACE = 4;
  *   - at most 255 rides and stalls, sorted by id, each id above 0, below `nextRideId` and used once,
  *     with `nextRideId` at most 65,536; each ride's type exists in the content and has the ride's
  *     kind, its rotation is 0 to 3, its price 0 to $20.00, its name 1 to 40 characters, its phase 0
- *     to 3, and its counters and guest ids not negative; its entrance, exit and service tiles are
- *     the ones its type, position and rotation give; and the occupant layer holds exactly each
+ *     to 4 (4, testing, only for a coaster), and its counters and guest ids not negative; its
+ *     entrance, exit and service tiles are the ones its type, position and rotation give; and the occupant layer holds exactly each
  *     ride's id on its footprint tiles (which are on the map and overlap no other ride's) and 0
  *     everywhere else; every guest id in a ride's queue or riders is a live guest, queuing (or
  *     riding) for that ride, listed in no other queue or ride, and every queuing (or riding) guest
  *     is in its ride's queue (or riders); a ride has at most its type's capacity of riders, and
  *     none while idle
+ *   - a coaster (kind `coaster`) names a coaster family, has its entrance and exit beside its
+ *     first station tile, marks no tiles, has no riders yet and is idle or testing; `tracks` holds
+ *     one track per coaster, in id order, each of which replays piece by piece under the
+ *     placement rules, with a test-run state that agrees with itself and its coaster (see
+ *     `checkTracks` and `testRunRefusal`)
  *   - log ids start above 0, strictly increase, and are all below `nextId`
  *   - every id on the undo and redo stacks names a log entry, and no id is on the stacks twice,
  *     which covers an id on both
@@ -289,7 +315,8 @@ function rideProblem(world: World): string | null {
     previous = id;
 
     const label = `ride ${id}`;
-    const type = typeById(ride.type);
+    const coaster = ride.kind === "coaster";
+    const type = coaster ? familyById(ride.type) : typeById(ride.type);
     if (type === undefined) return `${label} has unknown type ${ride.type}`;
     if (ride.kind !== type.kind) {
       return `${label} has kind ${ride.kind} but its type ${type.id} is a ${type.kind}`;
@@ -327,11 +354,32 @@ function rideProblem(world: World): string | null {
         }
       }
     }
+    if (ride.phase === RidePhase.TESTING && ride.kind !== "coaster") {
+      return `${label} has phase ${ride.phase} (testing), which only a coaster has`;
+    }
     if (ride.phase === RidePhase.IDLE && ride.riders.length > 0) {
       return `${label} is idle with ${ride.riders.length} riders`;
     }
     if (type.kind === "ride" && ride.riders.length > type.capacity) {
       return `${label} has ${ride.riders.length} riders, more than its capacity of ${type.capacity}`;
+    }
+
+    if (type.kind === "coaster") {
+      // A coaster marks no tiles; its track is checked below, with the others.
+      const access = stationAccess(ride.x, ride.y, ride.rot as Dir);
+      const tiles = { entrance: access.entrance, exit: access.exit, service: null };
+      for (const key of ["entrance", "exit", "service"] as const) {
+        if (!sameTile(ride[key], tiles[key])) {
+          return `${label} has ${key} ${showTile(ride[key])}, expected ${showTile(tiles[key])}`;
+        }
+      }
+      if (ride.riders.length > 0) {
+        return `${label} is a coaster with riders, whose trains carry none yet`;
+      }
+      if (ride.phase !== RidePhase.IDLE && ride.phase !== RidePhase.TESTING) {
+        return `${label} is a coaster in phase ${ride.phase}, not idle or testing`;
+      }
+      continue;
     }
 
     const rot = ride.rot as Rot;
@@ -379,6 +427,182 @@ function rideProblem(world: World): string | null {
     if (actual !== expected[i]) {
       return `tile ${i} has occupant ${actual}, but the rides put ${expected[i]} there`;
     }
+  }
+  return checkTracks(world);
+}
+
+/**
+ * Why coaster `ride`'s entrance or exit tile could not be one, as `coaster_begin` checks it (on
+ * the map off its outer ring, no water, no ride or stall, not the park entrance, no steeper than
+ * a path may be), or null. Other track over it is refused by the track replay.
+ */
+function accessRefusal(world: World, ride: RideRecord): string | null {
+  const t = world.terrain;
+  const entrance = world.park.entrance;
+  for (const key of ["entrance", "exit"] as const) {
+    const tile = ride[key];
+    if (tile === null) return `${key} is missing`;
+    const at = showTile(tile);
+    if (tile.x < 1 || tile.y < 1 || tile.x > t.width - 2 || tile.y > t.height - 2) {
+      return `${key} ${at} is off the map or on its outer ring`;
+    }
+    const index = tile.y * t.width + tile.x;
+    if ((t.water[index] as number) > 0) return `${key} ${at} is under water`;
+    if ((t.occupant[index] as number) !== 0) return `${key} ${at} is on a ride or stall`;
+    if (entrance !== null && entrance.x === tile.x && entrance.y === tile.y) {
+      return `${key} ${at} is the park entrance`;
+    }
+    const corners = tileCorners(t, tile.x, tile.y);
+    if (Math.max(...corners) - Math.min(...corners) > MAX_PATH_SLOPE) {
+      return `${key} ${at} is too steep for a path`;
+    }
+  }
+  return null;
+}
+
+/**
+ * The coaster tracks: sorted by id, one for each coaster ride and none for anything else, of the
+ * ride's family, starting where pieces join on the tile and facing the way the ride says, every
+ * piece a known one, and each track, replayed piece by piece from its start, taken by the same
+ * placement rules the commands use against the world without it (`placementRefusal`, with a track
+ * index rebuilt from the tracks rather than trusted). Its first station tile is level ground with
+ * the track at its height, and its entrance and exit tiles are on the map off its outer ring, dry,
+ * clear of rides and stalls and the park entrance, and no steeper than a path may be, as
+ * `coaster_begin` requires. A complete track is a circuit `coaster_complete` takes (it closes on
+ * its start, has one station run of the right length, and a lift or no climb above its station).
+ */
+function checkTracks(world: World): string | null {
+  const coasters = world.rides.filter((ride) => ride.kind === "coaster");
+  if (coasters.length !== world.tracks.length) {
+    return `${world.tracks.length} tracks for ${coasters.length} coasters`;
+  }
+  // Each track's shape on its own first, so that the index can be built from them all.
+  for (const [i, track] of world.tracks.entries()) {
+    const ride = coasters[i] as RideRecord;
+    const label = `track ${track.id}`;
+    if (track.id !== ride.id) return `${label} does not match coaster ${ride.id}`;
+    if (track.family !== ride.type) {
+      return `${label} is of family ${track.family} but its coaster is a ${ride.type}`;
+    }
+    if (familyById(track.family) === undefined) {
+      return `${label} has unknown family ${track.family}`;
+    }
+    if (track.pieces.length < 1 || track.pieces.length > MAX_TRACK_PIECES) {
+      return `${label} has ${track.pieces.length} pieces, outside 1 to ${MAX_TRACK_PIECES}`;
+    }
+    const { start } = track;
+    if (!isJoinPose(start) || start.pitch !== 0 || start.bank !== 0) {
+      return `${label} does not start flat on the middle of a tile edge at a whole step`;
+    }
+    const expected = poseAtTile(ride.x, ride.y, ride.rot as Dir, start.z / STEP);
+    if (!posesEqual(start, expected)) {
+      return `${label} does not start on its coaster's tile (${ride.x}, ${ride.y}) facing ${ride.rot}`;
+    }
+    if (track.pieces[0] !== "station") return `${label} does not begin with a station piece`;
+    if (!inBounds(world.terrain, ride.x, ride.y)) {
+      return `${label} starts on tile (${ride.x}, ${ride.y}), off the map`;
+    }
+    const corners = tileCorners(world.terrain, ride.x, ride.y);
+    const ground = Math.max(...corners);
+    if (Math.min(...corners) !== ground) {
+      return `${label} starts on tile (${ride.x}, ${ride.y}), which is not flat`;
+    }
+    if (start.z !== ground * STEP) {
+      return `${label} starts at height ${start.z / STEP}, not on the ground at ${ground}`;
+    }
+    const access = accessRefusal(world, ride);
+    if (access !== null) return `coaster ${ride.id}'s ${access}`;
+    let pose = start;
+    for (const [n, id] of track.pieces.entries()) {
+      const piece = pieceById(id);
+      if (piece === undefined) return `${label} piece ${n} is unknown: ${id}`;
+      const mismatch = pieceRefusal(pose, piece);
+      if (mismatch !== null) return `${label} piece ${n} (${id}) does not follow: ${mismatch}`;
+      pose = applyPiece(pose, piece);
+      if (pose.z < 0) return `${label} piece ${n} (${id}) goes below height 0`;
+    }
+  }
+  // Rebuilt here and not taken from the world, which may hold an index made before a change.
+  world.trackIndex = undefined;
+  const reserved = reservedTiles(world);
+  for (const [i, track] of world.tracks.entries()) {
+    const ride = coasters[i] as RideRecord;
+    const label = `track ${track.id}`;
+    const family = familyById(track.family) as CoasterFamily;
+    const { start } = track;
+    let pose = start;
+    // The pieces laid so far, grown one at a time (not sliced per piece) so a replay is linear.
+    const laid: string[] = [];
+    for (const [n, id] of track.pieces.entries()) {
+      const piece = pieceById(id) as TrackPiece;
+      const ctx = { rideId: track.id, family, start, pieces: laid, pose, reserved };
+      const refused = placementRefusal(world, ctx, piece);
+      if (refused !== null) return `${label} piece ${n} (${id}) does not fit: ${refused}`;
+      laid.push(id);
+      pose = applyPiece(pose, piece);
+    }
+    if (track.complete) {
+      const circuit = circuitRefusal(start, track.pieces);
+      if (circuit === NOT_CLOSED) return `${label} is complete but does not close`;
+      if (circuit !== null) return `${label} is complete but not a circuit: ${circuit}`;
+    }
+    if (track.tested && !track.complete) return `${label} is tested but not complete`;
+    if (ride.open && !track.tested) return `coaster ${ride.id} is open but has not been tested`;
+    const run = testRunRefusal(track, ride);
+    if (run !== null) return `${label} ${run}`;
+  }
+  return null;
+}
+
+/**
+ * The test-run state of a track: it has stats exactly when it is tested, and a failure only when
+ * it is not; a train out of the station only on a complete circuit, in a known mode, at most a
+ * circuit from the platform either way; a test under way exactly while its coaster is TESTING,
+ * with the train moving (not STOPPED) and the coaster closed; and a train that is moving only
+ * on a test (trains carry no riders yet).
+ */
+function testRunRefusal(track: TrackRecord, ride: RideRecord): string | null {
+  if (track.tested !== (track.stats !== null)) {
+    return track.tested ? "is tested but has no stats" : "has stats but is not tested";
+  }
+  if (track.failure !== null && (track.tested || track.failure.length === 0)) {
+    return "has a failed test but is tested";
+  }
+  if (track.stats !== null) {
+    for (const [key, value] of Object.entries(track.stats)) {
+      if (key === "minVerticalG" || key === "maxVerticalG") continue;
+      if (value < 0) return `has stats.${key} ${value}, below 0`;
+    }
+  }
+  const { train, test } = track;
+  if (train !== null) {
+    if (!track.complete) return "has a train out but is not complete";
+    if (
+      !Number.isInteger(train.mode) ||
+      train.mode < TrainMode.DEPART ||
+      train.mode > TrainMode.STOPPED
+    ) {
+      return `has a train in mode ${train.mode}`;
+    }
+    if (train.ticks < 0 || train.modeTicks < 0) return "has a train with negative ticks";
+    const length = buildLine(track.start, track.pieces).length * FINE;
+    if (Math.abs(train.travelled) > length) return "has a train more than a circuit away";
+    if (train.mode === TrainMode.STOPPED) {
+      if (train.speed !== 0) return "has a stopped train that is moving";
+      if (test !== null) return "has a test under way with its train stopped";
+    } else if (test === null) {
+      return "has a train moving with no test under way";
+    }
+  }
+  if ((test !== null) !== (ride.phase === RidePhase.TESTING)) {
+    return test !== null
+      ? "has a test under way but its coaster is not testing"
+      : "is testing with no test under way";
+  }
+  if (test !== null) {
+    if (train === null) return "has a test under way with no train";
+    if (ride.open) return "has a test under way but its coaster is open";
+    if (track.tested || track.failure !== null) return "has a test under way and a result";
   }
   return null;
 }

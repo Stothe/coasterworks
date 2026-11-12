@@ -22,7 +22,7 @@ function setup(opts: { width?: number; height?: number } = {}) {
 }
 
 describe("default registry", () => {
-  it("registers the fifteen queries, after the commands, with their categories", () => {
+  it("registers the nineteen queries, after the commands, with their categories", () => {
     const queries = createDefaultRegistry()
       .catalog()
       .filter((e) => e.kind === "query");
@@ -41,6 +41,10 @@ describe("default registry", () => {
       ["ride_get", "ride", false],
       ["content_list", "ride", false],
       ["ride_check", "ride", false],
+      ["coaster_get", "ride", false],
+      ["coaster_piece_options", "ride", false],
+      ["coaster_fit_preview", "ride", false],
+      ["track_pieces_list", "ride", false],
       ["catalog_list", "sim", false],
     ]);
   });
