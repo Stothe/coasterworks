@@ -161,6 +161,9 @@ describe("new", () => {
       expect(Number.isNaN(Date.parse(world.meta.created))).toBe(false);
       expect(world.terrain.corners).toEqual(expected.terrain.corners);
       expect(world.terrain.water).toEqual(expected.terrain.water);
+      expect(world.terrain.path).toEqual(expected.terrain.path);
+      expect(world.park.open).toBe(true);
+      expect(world.park.entrance).toEqual(expected.park.entrance);
       expect(world.log.length).toBeGreaterThan(0);
       expect(Math.max(...world.terrain.corners)).toBeGreaterThan(8 + 10);
     });

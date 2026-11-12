@@ -233,6 +233,10 @@ export function App() {
   );
   const ctx = connected ? keyCtx : null;
 
+  // The view reads these once per frame; they look at the latest snapshot without a render.
+  const getGuests = useCallback(() => live.current.host.guests, []);
+  const getEntrance = useCallback(() => live.current.host.park?.entrance, []);
+
   useEffect(() => {
     live.current = {
       speed,
@@ -344,6 +348,9 @@ export function App() {
           ref={viewport}
           source={host}
           terrain={host.terrain}
+          paths={host.paths}
+          getGuests={getGuests}
+          getEntrance={getEntrance}
           client={client}
           onResult={onResult}
           onSecondaryClick={openTileMenu}

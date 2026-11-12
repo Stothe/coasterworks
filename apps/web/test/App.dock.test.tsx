@@ -327,12 +327,15 @@ describe("the terrain tray's charge", () => {
     expect(charge()).toBe("Refunded $50.00");
   });
 
-  it("does not hand the viewport a tool or brush of its own, only a ref for the camera", async () => {
+  it("does not hand the viewport a tool or brush of its own, only a ref for the camera and the park's layers", async () => {
     await ready();
     expect(Object.keys(viewport.props as object).sort()).toEqual([
       "client",
+      "getEntrance",
+      "getGuests",
       "onResult",
       "onSecondaryClick",
+      "paths",
       "ref",
       "terrain",
       "tick",

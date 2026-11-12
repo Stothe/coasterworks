@@ -1,6 +1,6 @@
 import * as Popover from "@radix-ui/react-popover";
 import { useRef, useState, type ReactNode } from "react";
-import { PIXEL_RATIO_CAPS, useSettings } from "../state/settings";
+import { GRAPHICS_QUALITIES, PIXEL_RATIO_CAPS, useSettings } from "../state/settings";
 import { IconButton, Segmented } from "./kit";
 
 export interface TopRightProps {
@@ -83,11 +83,18 @@ function BellIcon({ unread }: { unread: number }) {
 
 const CAP_OPTIONS = PIXEL_RATIO_CAPS.map((cap) => ({ id: String(cap), label: String(cap) }));
 
-/** What the settings popover holds: the pixel ratio cap and Show FPS. */
+const QUALITY_OPTIONS = GRAPHICS_QUALITIES.map((quality) => ({
+  id: quality,
+  label: quality.charAt(0).toUpperCase() + quality.slice(1),
+}));
+
+/** What the settings popover holds: the pixel ratio cap, the graphics quality and Show FPS. */
 function SettingsPanel() {
   const cap = useSettings((state) => state.pixelRatioCap);
   const showFps = useSettings((state) => state.showFps);
+  const quality = useSettings((state) => state.graphicsQuality);
   const setCap = useSettings((state) => state.setPixelRatioCap);
+  const setQuality = useSettings((state) => state.setGraphicsQuality);
   const setShowFps = useSettings((state) => state.setShowFps);
   return (
     <div className="flex flex-col gap-3">
@@ -103,6 +110,16 @@ function SettingsPanel() {
           }}
         />
         <span className="text-xs text-muted">Applies the next time the park loads.</span>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <span className="text-xs font-medium text-muted">Graphics quality</span>
+        <Segmented
+          label="Graphics quality"
+          options={QUALITY_OPTIONS}
+          value={quality}
+          onChange={setQuality}
+        />
+        <span className="text-xs text-muted">Auto keeps the view smooth.</span>
       </div>
       <label className="hud-button justify-start gap-2 rounded-lg text-sm">
         <input
@@ -145,7 +162,8 @@ function Settings() {
             e.preventDefault();
             anchor.current?.querySelector("button")?.focus();
           }}
-          className="glass z-50 w-60 animate-enter p-3 text-ink"
+          // Wide enough for the four qualities in a row, with room for a wider system font.
+          className="glass z-50 w-64 animate-enter p-3 text-ink"
         >
           <SettingsPanel />
         </Popover.Content>

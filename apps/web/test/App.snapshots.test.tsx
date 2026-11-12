@@ -7,6 +7,7 @@ import { buildActions } from "../src/actions/registry";
 import type { Action, ActionContext } from "../src/actions/types";
 import { uiStore } from "../src/state/uiStore";
 import { useHost, type HostState } from "../src/state/useHost";
+import type { ViewportProps } from "../src/viewport/Viewport";
 import { makeSource, type TestSource } from "./snapshotSource";
 
 vi.mock("../src/state/useHost", () => ({ useHost: vi.fn() }));
@@ -21,6 +22,7 @@ const seen = vi.hoisted(() => ({
   tray: 0,
   inspector: 0,
   viewport: [] as number[],
+  viewportProps: null as unknown,
 }));
 vi.mock("../src/ui/CommandBar", () => ({
   CommandBar: (props: { ctx: unknown; actions: unknown }) => {
@@ -37,6 +39,7 @@ vi.mock("../src/ui/Tray", () => ({
 vi.mock("../src/viewport/Viewport", () => ({
   Viewport: (props: { tick: number }) => {
     seen.viewport.push(props.tick);
+    seen.viewportProps = props;
     return null;
   },
 }));
@@ -45,8 +48,13 @@ const catalog = createDefaultRegistry().catalog();
 
 type LiveHost = TestSource & Omit<HostState, "snapshot" | "subscribeSnapshot">;
 
-function liveHost(): LiveHost {
-  return Object.assign(makeSource({ cash: 1_000_000, monthStartCash: 1_000_000 }), {
+/**
+ * A host whose guests and park are read from its latest snapshot when asked for, as the hook's
+ * are. With `snapshot` false it has had none yet.
+ */
+function liveHost(snapshot = true): LiveHost {
+  const feed = makeSource(snapshot ? { cash: 1_000_000, monthStartCash: 1_000_000 } : null);
+  const host: LiveHost = Object.assign(feed, {
     status: "ready" as const,
     name: "Queryland",
     terrain: null,
@@ -61,6 +69,11 @@ function liveHost(): LiveHost {
     } as unknown as SimClient,
     halted: false,
   });
+  // Defined over the two above, not assigned: an assigned getter is read once and its value kept.
+  return Object.defineProperties(host, {
+    guests: { get: () => feed.snapshot?.guests ?? null },
+    park: { get: () => feed.snapshot?.header.park ?? null },
+  });
 }
 
 let source: LiveHost;
@@ -72,6 +85,7 @@ beforeEach(() => {
   seen.bar = [];
   seen.tray = 0;
   seen.viewport = [];
+  seen.viewportProps = null;
 });
 afterEach(() => {
   cleanup();
@@ -131,6 +145,41 @@ describe("the app and the host's snapshots, 50 ms apart", () => {
     act(() => source.push({ cash: 900_000 }));
     expect(ctx.snapshot?.header.cash).toBe(900_000);
     expect(seen.bar.at(-1)?.ctx).toBe(ctx);
+  });
+
+  it("lets the view read the latest guests and entrance when it asks, with no render for a snapshot", async () => {
+    await ready();
+    const { getGuests, getEntrance } = seen.viewportProps as ViewportProps;
+    expect(getGuests?.()).toBe(source.snapshot?.guests);
+    expect(getEntrance?.()).toBeNull();
+
+    const renders = seen.viewport.length;
+    const park = source.snapshot?.header.park;
+    if (!park) throw new Error("The test's host has no snapshot");
+    act(() => source.push({ park: { ...park, entrance: { x: 3, y: 15, side: 2 } } }));
+    // Every snapshot brings a section of its own, and the view is handed the new one.
+    const section = getGuests?.();
+    expect(section).toBe(source.snapshot?.guests);
+    act(() => source.push({}));
+    expect(getGuests?.()).not.toBe(section);
+    expect(getGuests?.()).toBe(source.snapshot?.guests);
+    expect(getEntrance?.()).toEqual({ x: 3, y: 15, side: 2 });
+    expect(seen.viewport.length).toBe(renders);
+
+    // A render of the app hands the view the same two readers, not new ones.
+    act(() => uiStore.getState().setTool("ride"));
+    const after = seen.viewportProps as ViewportProps;
+    expect(after.getGuests).toBe(getGuests);
+    expect(after.getEntrance).toBe(getEntrance);
+  });
+
+  it("has no guests and no entrance for the view before the first snapshot", async () => {
+    source = liveHost(false);
+    vi.mocked(useHost).mockReturnValue(source);
+    await ready();
+    const { getGuests, getEntrance } = seen.viewportProps as ViewportProps;
+    expect(getGuests?.()).toBeNull();
+    expect(getEntrance?.()).toBeUndefined();
   });
 
   it("makes the context again when what the actions read of the interface changes, and for a halt", async () => {

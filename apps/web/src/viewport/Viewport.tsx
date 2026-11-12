@@ -1,14 +1,14 @@
-import type { SimClient } from "@coasterworks/protocol";
+import type { GuestSection, ParkPublic, SimClient } from "@coasterworks/protocol";
 import {
   attachControls,
   createScene,
   type SceneHandle,
   type TerrainData,
 } from "@coasterworks/render";
-import type { ExecResult } from "@coasterworks/sim";
+import { PATH_FOOT, type ExecResult } from "@coasterworks/sim";
 import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
 import { CLASSIC_VIEW_EVENT, onShellEvent } from "../host/shell";
-import { settingsStore, useSettings } from "../state/settings";
+import { settingsStore, useSettings, type GraphicsQuality } from "../state/settings";
 import { uiStore, useUiStore } from "../state/uiStore";
 import { brushRect, planPlacement, timeOfDay } from "./brush";
 import { classicCycle, onClassicViewRequest } from "./classicView";
@@ -39,6 +39,15 @@ export interface ViewportProps {
     tile: { x: number; y: number },
     point: { clientX: number; clientY: number },
   ): void;
+  /** The path layer, one byte per tile (0 none, 1 footpath, 2 queue), or null for none. */
+  paths?: Uint8Array | null;
+  /**
+   * Reads the guests of the latest snapshot. A getter, not a prop: guests move in every snapshot,
+   * and the view reads them once per animation frame so that React does not render for each one.
+   */
+  getGuests?(): GuestSection | null;
+  /** Reads the park entrance of the latest snapshot, on the same terms as `getGuests`. */
+  getEntrance?(): ParkPublic["entrance"] | undefined;
   /** Filled with the view's handle while the view is up. */
   ref?: Ref<ViewportHandle>;
 }
@@ -49,10 +58,18 @@ const FPS_SAMPLE_MS = 500;
 /** Pointer travel in pixels past which a right press is an orbit and no longer a click. */
 const CLICK_SLOP = 4;
 
-/** A scene and whether it has been given terrain yet. */
+/** A scene, whether it has been given terrain yet, and what else it was last given. */
 interface Live {
   scene: SceneHandle;
   hasTerrain: boolean;
+  /** The sim's path layer the scene's was made from, null for none; `undefined` before the first. */
+  paths: Uint8Array | null | undefined;
+  /** The entrance the scene has, null for none; `undefined` until it has been told either. */
+  entrance: ParkPublic["entrance"] | undefined;
+  /** The width of the map the scene's path layer was laid out for; 0 while there was no terrain. */
+  pathsWidth: number;
+  /** The quality the scene was made with, or was last asked for. */
+  quality: GraphicsQuality;
 }
 
 function show(live: Live, terrain: TerrainData | null): void {
@@ -68,6 +85,71 @@ function show(live: Live, terrain: TerrainData | null): void {
   rig.distance = framingDistance(terrain, rig.distance, rig.limits.distance);
 }
 
+/**
+ * Asks the scene for a quality, unless it was the last one asked for: asking for "auto" again
+ * starts the scene's measuring of itself over.
+ */
+function askQuality(live: Live, quality: GraphicsQuality): void {
+  if (quality === live.quality) return;
+  live.quality = quality;
+  live.scene.setQuality(quality);
+}
+
+/** Whether two entrances are the same place; `undefined` is "not given yet", and differs from none. */
+function sameEntrance(a: ParkPublic["entrance"], b: ParkPublic["entrance"] | undefined): boolean {
+  if (b === undefined) return false;
+  if (a === null || b === null) return a === b;
+  return a.x === b.x && a.y === b.y && a.side === b.side;
+}
+
+/**
+ * The path layer as the scene is to draw it: the sim's, with the entrance tile paved. The sim keeps
+ * the entrance out of its path layer, since nothing is built on that tile, yet guests walk in
+ * across it, and the scene lays the lane only from the map's edge outward: what is paved inside
+ * the map is for the layer to say. Given the sim's layer as it is, the paving would stop a tile
+ * short of the gate.
+ */
+function pavedPaths(
+  paths: Uint8Array | null,
+  entrance: ParkPublic["entrance"],
+  terrain: TerrainData | null,
+): Uint8Array | null {
+  if (!paths || !entrance || !terrain) return paths;
+  const { width, height } = terrain;
+  const { x, y } = entrance;
+  // A layer for some other map, or an entrance that is not on this one: nothing to pave.
+  if (paths.length !== width * height || x < 0 || y < 0 || x >= width || y >= height) return paths;
+  const at = y * width + x;
+  if (paths[at] !== 0) return paths;
+  // A copy: the layer is the host's, and is compared with the next one to tell a change.
+  const paved = paths.slice();
+  paved[at] = PATH_FOOT;
+  return paved;
+}
+
+/**
+ * Gives the scene the entrance and the path layer, each only if it has changed: the scene bakes
+ * every layer it is given. A moved entrance lays the paths again, since its tile is part of them,
+ * and so does a map of another width, since that is what says which tile it is.
+ */
+function showPark(
+  live: Live,
+  paths: Uint8Array | null,
+  entrance: ParkPublic["entrance"],
+  terrain: TerrainData | null,
+): void {
+  const moved = !sameEntrance(entrance, live.entrance);
+  if (moved) {
+    live.entrance = entrance;
+    live.scene.setEntrance(entrance);
+  }
+  const width = terrain?.width ?? 0;
+  if (!moved && paths === live.paths && width === live.pathsWidth) return;
+  live.paths = paths;
+  live.pathsWidth = width;
+  live.scene.setPaths(pavedPaths(paths, entrance, terrain));
+}
+
 function failure(error: unknown): ExecResult {
   return { ok: false, error: error instanceof Error ? error.message : String(error) };
 }
@@ -81,11 +163,13 @@ function failure(error: unknown): ExecResult {
 export function Viewport(props: ViewportProps) {
   const placement = useUiStore((state) => state.placement);
   const showFps = useSettings((state) => state.showFps);
+  const graphicsQuality = useSettings((state) => state.graphicsQuality);
   const [fps, setFps] = useState<number | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const live = useRef<Live | null>(null);
   const hover = useRef<{ x: number; y: number } | null>(null);
   const outlineRef = useRef<(() => void) | null>(null);
+  const parkRef = useRef<(() => void) | null>(null);
   // The scene outlives renders, so its handlers read the current props through this.
   const latest = useRef({ ...props, placement, showFps });
   useEffect(() => {
@@ -113,11 +197,28 @@ export function Viewport(props: ViewportProps) {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    // Read when the scene is made: a change to the cap applies the next time the park loads.
-    const scene = createScene(canvas, { pixelRatioCap: settingsStore.getState().pixelRatioCap });
-    const mine: Live = { scene, hasTerrain: false };
+    // Read when the scene is made. The cap is not read again, so a change to it applies the next
+    // time the park loads; a change of quality goes to the scene already up, further down.
+    const { pixelRatioCap, graphicsQuality: quality } = settingsStore.getState();
+    const scene = createScene(canvas, { pixelRatioCap, quality });
+    const mine: Live = {
+      scene,
+      hasTerrain: false,
+      paths: undefined,
+      entrance: undefined,
+      pathsWidth: 0,
+      quality,
+    };
     live.current = mine;
     show(mine, latest.current.terrain);
+    // The paths and the entrance as they are now; `park` looks again in every frame.
+    const park = () => {
+      const { paths, getEntrance, terrain } = latest.current;
+      showPark(mine, paths ?? null, getEntrance?.() ?? null, terrain);
+    };
+    parkRef.current = park;
+    park();
+    scene.setGridVisible(latest.current.placement !== null);
     scene.setTimeOfDay(timeOfDay(latest.current.tick));
 
     const outline = () => {
@@ -194,8 +295,18 @@ export function Viewport(props: ViewportProps) {
     // The frame rate is counted over half a second, and only while it is shown.
     let counted = 0;
     let since: number | undefined;
+    // The guests the scene was last given. The guests module keeps the last two sections to move
+    // guests between them, so a section goes in once, when it is new.
+    let guests: GuestSection | null | undefined;
     let frame = requestAnimationFrame(function draw(now) {
-      scene.render();
+      const nextGuests = latest.current.getGuests?.() ?? null;
+      if (nextGuests !== guests) {
+        guests = nextGuests;
+        scene.setGuests(nextGuests, now);
+      }
+      // The entrance comes with the snapshots, which render nothing: this is where it is noticed.
+      park();
+      scene.render(now);
       if (latest.current.showFps) {
         since ??= now;
         counted++;
@@ -224,6 +335,7 @@ export function Viewport(props: ViewportProps) {
       scene.dispose();
       live.current = null;
       outlineRef.current = null;
+      parkRef.current = null;
     };
   }, []);
 
@@ -234,6 +346,20 @@ export function Viewport(props: ViewportProps) {
   useEffect(() => {
     live.current?.scene.setTimeOfDay(timeOfDay(props.tick));
   }, [props.tick]);
+
+  useEffect(() => {
+    parkRef.current?.();
+  }, [props.paths]);
+
+  // The build grid shows while there is something to place, and only then.
+  useEffect(() => {
+    live.current?.scene.setGridVisible(placement !== null);
+  }, [placement]);
+
+  // The scene is made at the quality chosen so far; a later choice goes to the scene already up.
+  useEffect(() => {
+    if (live.current) askQuality(live.current, graphicsQuality);
+  }, [graphicsQuality]);
 
   // The outline is the brush, so it changes with the placement even if the pointer does not move:
   // a bigger brush grows it, and putting the placement down (Esc) takes it away.

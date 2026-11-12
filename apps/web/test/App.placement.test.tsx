@@ -35,6 +35,13 @@ vi.mock("@coasterworks/render", async (importOriginal) => {
         resize() {},
         pickAt: () => stage.under,
         highlightTile: highlight,
+        setPaths() {},
+        setGuests() {},
+        setEntrance() {},
+        setGridVisible() {},
+        setQuality() {},
+        pickGuestAt: () => null,
+        info: { quality: "low", gl: "", frameMs: 0 },
         dispose() {},
       };
       stage.scene = scene;

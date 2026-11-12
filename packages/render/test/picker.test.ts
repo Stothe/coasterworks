@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { CameraRig } from "../src/camera.js";
+import { groundHeightAt } from "../src/heightfield.js";
 import { pickTile, rayFromCamera } from "../src/picker.js";
-import { tileTriangles, type TerrainData } from "../src/terrain-geometry.js";
+import { tileTriangles, type TerrainData } from "../src/terrain/geometry.js";
 
 function flatTerrain(width: number, height: number, level: number): TerrainData {
   return {
@@ -126,7 +127,7 @@ describe("pickTile", () => {
       t,
     );
     expect(hit && [hit.x, hit.y]).toEqual([4, 2]);
-    expect(hit?.point.y).toBeCloseTo(5 - 3 * (hit!.point.x - 4), 6);
+    expect(hit?.point.y).toBeCloseTo(groundHeightAt(t, hit!.point.x, hit!.point.z), 6);
     // The ray was heading for tile (3, 2) but cannot reach it past the ramp.
   });
 
@@ -216,52 +217,41 @@ function mulberry32(seed: number): () => number {
 }
 
 /** The nearest hit found by testing every triangle of the map, by plane intersection and edge tests. */
-function bruteForce(
+/** How far along the ray it comes in over the map's outline (0 if it starts over the map). */
+function entryAt(o: { x: number; z: number }, d: { x: number; z: number }, t: TerrainData): number {
+  let near = 0;
+  for (const [origin, dir, size] of [
+    [o.x, d.x, t.width],
+    [o.z, d.z, t.height],
+  ] as const) {
+    if (dir === 0) continue;
+    near = Math.max(near, Math.min((0 - origin) / dir, (size - origin) / dir));
+  }
+  return near;
+}
+
+/**
+ * Where a ray first meets the smooth ground, by marching it in small steps over the map: slow,
+ * but plainly right. Null when it never does over the map, or comes in over the edge already
+ * under the ground.
+ */
+function marchSmooth(
   o: { x: number; y: number; z: number },
   d: { x: number; y: number; z: number },
   t: TerrainData,
 ): { x: number; y: number; at: number } | null {
-  const tri = new Float64Array(18);
-  let best: { x: number; y: number; at: number } | null = null;
-  for (let ty = 0; ty < t.height; ty++) {
-    for (let tx = 0; tx < t.width; tx++) {
-      tileTriangles(t, tx, ty, tri);
-      for (const off of [0, 9]) {
-        const v = (i: number) =>
-          [tri[off + i * 3], tri[off + i * 3 + 1], tri[off + i * 3 + 2]] as [
-            number,
-            number,
-            number,
-          ];
-        const [a, b, c] = [v(0), v(1), v(2)];
-        const sub = (p: number[], q: number[]) =>
-          [p[0]! - q[0]!, p[1]! - q[1]!, p[2]! - q[2]!] as [number, number, number];
-        const crs = (p: number[], q: number[]) =>
-          [
-            p[1]! * q[2]! - p[2]! * q[1]!,
-            p[2]! * q[0]! - p[0]! * q[2]!,
-            p[0]! * q[1]! - p[1]! * q[0]!,
-          ] as [number, number, number];
-        const dot = (p: number[], q: number[]) => p[0]! * q[0]! + p[1]! * q[1]! + p[2]! * q[2]!;
-        const n = crs(sub(b, a), sub(c, a));
-        const denom = dot(n, [d.x, d.y, d.z]);
-        if (Math.abs(denom) < 1e-12) continue;
-        const at = dot(n, sub(a, [o.x, o.y, o.z])) / denom;
-        if (at < 0) continue;
-        const p: [number, number, number] = [o.x + d.x * at, o.y + d.y * at, o.z + d.z * at];
-        const inside = [
-          [a, b],
-          [b, c],
-          [c, a],
-        ].every(([s, e]) => dot(crs(sub(e!, s!), sub(p, s!)), n) >= -1e-9);
-        if (inside && (!best || at < best.at)) best = { x: tx, y: ty, at };
-      }
-    }
+  const step = 0.0005;
+  for (let s = 0; s < 120; s += step) {
+    const x = o.x + d.x * s;
+    const z = o.z + d.z * s;
+    if (x < 0 || z < 0 || x >= t.width || z >= t.height) continue;
+    if (o.y + d.y * s <= groundHeightAt(t, x, z))
+      return { x: Math.floor(x), y: Math.floor(z), at: s };
   }
-  return best;
+  return null;
 }
 
-describe("pickTile against a brute-force search", () => {
+describe("pickTile against a march over the smooth ground", () => {
   it("agrees on the nearest hit for random rays over random terrain", () => {
     const rand = mulberry32(12345);
     const t = flatTerrain(23, 19, 0);
@@ -273,8 +263,11 @@ describe("pickTile against a brute-force search", () => {
       const direction = { x: rand() * 2 - 1, y: -(0.3 + rand()), z: rand() * 2 - 1 };
       const len = Math.hypot(direction.x, direction.y, direction.z);
       const dir = { x: direction.x / len, y: direction.y / len, z: direction.z / len };
-      const expected = bruteForce(origin, dir, t);
+      const expected = marchSmooth(origin, dir, t);
       const actual = pickTile({ origin, direction: dir }, t);
+      // A ray that meets the ground right where it comes in over the map's edge may be counted as
+      // passing under it or as hitting it: a hair either way.
+      if (expected && Math.abs(expected.at - entryAt(origin, dir, t)) < 0.01) continue;
       if (!expected) {
         expect(actual).toBeNull();
         continue;
@@ -287,13 +280,39 @@ describe("pickTile against a brute-force search", () => {
         actual.point.y - origin.y,
         actual.point.z - origin.z,
       );
-      expect(along).toBeCloseTo(expected.at, 6);
+      expect(Math.abs(along - expected.at)).toBeLessThan(0.002);
       // On a tile boundary two tiles share the hit point, so only check the tile off the boundary.
-      const edge = (v: number) => Math.abs(v - Math.round(v)) < 1e-6;
+      const edge = (v: number) => Math.abs(v - Math.round(v)) < 0.01;
       if (!edge(actual.point.x) && !edge(actual.point.z)) {
         expect([actual.x, actual.y]).toEqual([expected.x, expected.y]);
       }
     }
     expect(hits).toBeGreaterThan(100);
+  });
+});
+
+describe("pickTile on a steep ramp", () => {
+  // A cliff of 16 steps across one tile: the smooth ground rounds its top edge well above the
+  // tile's flat face. A ray that grazes that shoulder hits the ramp, not the low ground behind it.
+  it("picks the tile whose rounded shoulder the ray hits", () => {
+    const t = flatTerrain(12, 12, 0);
+    for (let cy = 0; cy <= 12; cy++) for (let cx = 6; cx <= 12; cx++) setCorner(t, cx, cy, 16);
+    let checked = 0;
+    for (let i = 0; i < 400; i++) {
+      const origin = { x: 5.5 + Math.cos(1) * 20, y: 1 + Math.sin(1) * 20, z: 6 };
+      const aimX = 3 + i * 0.015;
+      const dx = aimX - origin.x;
+      const dy = groundHeightAt(t, aimX, 6) - origin.y;
+      const len = Math.hypot(dx, dy);
+      const dir = { x: dx / len, y: dy / len, z: 0 };
+      const expected = marchSmooth(origin, dir, t);
+      const hit = pickTile({ origin, direction: dir }, t);
+      if (!expected || !hit) continue;
+      const frac = hit.point.x - Math.floor(hit.point.x);
+      if (frac < 0.01 || frac > 0.99) continue;
+      expect(hit.x).toBe(expected.x);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(200);
   });
 });

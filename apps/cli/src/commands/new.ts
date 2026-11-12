@@ -25,8 +25,8 @@ async function exists(path: string): Promise<boolean> {
 
 /**
  * `new --out <file> [--width 64] [--height 64] [--seed <n>] [--name <s>] [--sample] [--force]`:
- * creates a park. `--sample` makes the demo park, "Leafy Lake" (a hill and a pond, 64 by 64 tiles),
- * instead of a flat one; `--name` still renames it, and `--width` and `--height` do not apply to it.
+ * creates a park. `--sample` makes the demo park, "Leafy Lake" (a hill, a pond, paths and an open
+ * gate, 64 by 64 tiles), instead of a flat one; `--name` still renames it, and `--width` and `--height` do not apply to it.
  * It will not replace a file that is already at `--out` unless `--force` says to.
  */
 export async function newCommand(args: string[], io: CliIO): Promise<number> {

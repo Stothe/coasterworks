@@ -660,7 +660,9 @@ describe("save integrity", () => {
     expect(loadedAnyway).toBeGreaterThan(0);
     // Flips in the compressed data that change what it unzips to are refused.
     expect(refusedInBody).toBeGreaterThan(0);
-  });
+    // Three loads for every byte of the save: about 0.3 s on Linux and 2 to 3 s on a macOS CI
+    // runner, and over the default 5 s there when the rest of the suite is busy.
+  }, 30_000);
 
   it("refuses every change to the gzip trailer, though the content is intact", () => {
     const bytes = serializeWorld(playedSim().world);
@@ -1388,11 +1390,12 @@ const V3_FIXTURE = fromBase64(
 const V3_FIXTURE_LOADED_HASH = "41129abd7995cfb6";
 
 /**
- * Builds the world the schema 3 fixture was saved from, with the current build: the sample park,
- * its entrance, a footpath, a $4.00 fee, and 3,000 ticks open.
+ * Builds the world the schema 3 fixture was saved from, with the current build: the sample park's
+ * terrain as it was before the park was laid out on it (`withPark: false`), its entrance, a
+ * footpath, a $4.00 fee, and 3,000 ticks open.
  */
 function rebuildV3Fixture(): Sim {
-  const sim = new Sim(createSamplePark(7));
+  const sim = new Sim(createSamplePark(7, { withPark: false }));
   for (const [name, input] of [
     ["park_set_entrance", { x: 40, y: 63 }],
     ["path_build", { x: 40, y: 50, w: 1, h: 13, kind: "foot" }],
