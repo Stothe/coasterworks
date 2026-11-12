@@ -25,6 +25,11 @@ const scenario = () => parseScenario(JSON.parse(scenarioText));
  *    that has just ended goes into the history. The scenario gains a 31-day `sim_advance` with the
  *    park open (a month turns in the middle of it), so the final 400 ticks, with the park closed,
  *    empty the park.
+ *  - Plan D2 Task 2 (rides and stalls): re-recorded. `hashWorld` now covers the rides, the ride id
+ *    counter and the occupant layer, and the scenario builds a snack stand and a carousel on flat
+ *    ground away from the paths before the park opens, prices, renames, opens and closes them,
+ *    demolishes the stall (with an undo and a redo, which hands the refund back and takes it again)
+ *    and builds a drinks stand where it stood. Guests only walk on paths, so they behave as before.
  */
 describe("golden scenario 1", () => {
   it("ends on the recorded hash", () => {
@@ -71,6 +76,13 @@ describe("golden scenario 1", () => {
       "park_open",
       "park_close",
       "park_rename",
+      "ride_build",
+      "stall_build",
+      "ride_demolish",
+      "ride_open",
+      "ride_close",
+      "ride_set_price",
+      "ride_rename",
       "sim_advance",
       "tick",
       "undo",
@@ -108,6 +120,22 @@ describe("runScenario", () => {
       entrance: { x: 16, y: 31, side: 2 },
     });
     expect(world.pathVersion).toBeGreaterThan(0);
+  });
+
+  it("builds, prices, names, opens, closes and demolishes rides, so the hash guards them too", () => {
+    const { world } = runScenario(scenario());
+    // The snack stand (1) was demolished, the demolish undone and redone; its id is not reused.
+    expect(world.rides.map((r) => [r.id, r.type, r.rot, r.name, r.open, r.price])).toEqual([
+      [2, "carousel", 1, "Carousel 1", false, 150],
+      [3, "drinks_stand", 2, "Drinks Stand 1", false, 120],
+    ]);
+    expect(world.nextRideId).toBe(4);
+    // The carousel turned once stands on (4..6, 22..24); the drinks stand on (9, 24).
+    const occupant = (x: number, y: number) => world.terrain.occupant[y * 32 + x];
+    expect([occupant(4, 22), occupant(6, 24), occupant(9, 24), occupant(7, 22)]).toEqual([
+      2, 2, 3, 0,
+    ]);
+    expect(world.rideVersion).toBeGreaterThan(0);
   });
 
   it("lets guests in, so the hash is guarding the guest system too", () => {

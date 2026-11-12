@@ -24,7 +24,7 @@ The simulation must replay identically from the same seed and the same command l
 - All state-affecting math is integer.
 - Every mutation is a logged command.
 
-The golden scenario runs on V8 (Node, on Linux and macOS in the `test` job) and on JavaScriptCore: the `golden-jsc` job runs `bun packages/sim/scripts/update-golden.ts` on macOS and fails if that rewrites `scenario-1.hash`, so the hash must come out the same on both engines. You can run the same check locally with Bun installed.
+The golden scenario runs on V8 (Node, on Linux and macOS in the `test` job) and on JavaScriptCore: the `golden-jsc` job runs `bun packages/sim/scripts/update-golden.ts` on macOS and fails if that rewrites `scenario-1.hash`, so the hash must come out the same on both engines. You can run the same check locally with Bun installed. The sim imports `@coasterworks/content` through its built `dist`, so run `pnpm build` (or `pnpm --filter @coasterworks/content build`) before `golden:update` or the Bun check; the tests themselves read every package's `src`.
 
 ## Defining commands
 

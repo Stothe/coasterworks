@@ -3,6 +3,7 @@ import { z } from "zod";
 import { createGuestStore } from "../guests/guests.js";
 import { GUEST_ARRAYS, GUEST_CAP, type GuestArray, type GuestStore } from "../guests/types.js";
 import { copyParkState } from "../park/types.js";
+import { copyRide, type RideRecord } from "../rides/types.js";
 import { Rng } from "../rng.js";
 import { hashWorld } from "../world/hash.js";
 import { MAX_MAP, SCHEMA_VERSION, type LogEntry, type World } from "../world/types.js";
@@ -16,17 +17,19 @@ import { migrate, schemaVersionOf } from "./migrate.js";
  * Save format: gzip of one JSON document.
  *
  *   { schemaVersion, meta: { name, seed, created }, tick,
- *     terrain: { width, height, corners, surface, water, path },
+ *     terrain: { width, height, corners, surface, water, path, occupant },
  *     finance, park,
  *     guests: { count, nextGuestId, id, x, y, tx, ty, dest, state, happiness, energy, hunger,
  *               thirst, bathroom, nausea, cash, color, name, thought, thoughtTick, sinceAction,
  *               lostTicks },
+ *     rides: [RideRecord...], nextRideId,
  *     rng: [w0, w1, w2, w3], rngStreams: { guests: [w0, w1, w2, w3] },
  *     log, undoStack, redoStack, nextId, hash }
  *
  * Each array is `{ "$t": "Int16Array" | "Int32Array" | "Uint16Array" | "Uint8Array", "$b64":
  * "<base64>" }`, holding the array's values as little-endian bytes. `park` is plain JSON
- * (`ParkState`, no typed arrays; its `history` is an array of month records). The guest arrays
+ * (`ParkState`, no typed arrays; its `history` is an array of month records), and so is each
+ * entry of `rides` (`RideRecord`, in id order). The guest arrays
  * hold only the `count` live guests, in slot order, with the gaps squeezed out; loading puts them
  * in slots `0..count-1`. The sim packs the store the same way every tick, so a loaded park carries
  * on exactly as the saved one would have.
@@ -194,6 +197,35 @@ const edgeSide = z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)
 
 const rngWords = z.tuple([uint32, uint32, uint32, uint32]);
 
+// Ranges, the order of the ids, and agreement with the content types and the occupant layer are
+// the invariants' business.
+const tileSchema = z.object({ x: int, y: int }).nullable();
+const rideSchema = z.object({
+  id: int,
+  type: z.string(),
+  kind: z.enum(["ride", "stall"]),
+  x: int,
+  y: int,
+  rot: edgeSide,
+  name: z.string(),
+  open: z.boolean(),
+  price: int,
+  entrance: tileSchema,
+  exit: tileSchema,
+  service: tileSchema,
+  phase: int,
+  phaseTicks: int,
+  riders: z.array(int),
+  queue: z.array(int),
+  stats: z.object({
+    customers: int,
+    income: int,
+    runningCost: int,
+    monthCustomers: int,
+    monthIncome: int,
+  }),
+});
+
 // Ranges (a fee of at most $100, a rating of at most 999, counters that are not negative, at most
 // 12 months of history) are the invariants' business, so a bad value gets the same message from
 // any source.
@@ -262,10 +294,13 @@ const saveSchema = z.object({
     surface: encodedArray("Uint8Array"),
     water: encodedArray("Uint8Array"),
     path: encodedArray("Uint8Array"),
+    occupant: encodedArray("Uint16Array"),
   }),
   finance: z.object({ cash: int, loan: int, monthStart: z.object({ cash: int }) }),
   park: parkSchema,
   guests: guestsSchema,
+  rides: z.array(rideSchema),
+  nextRideId: int,
   rng: rngWords,
   rngStreams: z.object({ guests: rngWords }),
   log: z.array(logEntrySchema),
@@ -314,6 +349,7 @@ export function serializeWorld(world: World): Uint8Array {
       surface: encodeUint8(terrain.surface),
       water: encodeUint8(terrain.water),
       path: encodeUint8(terrain.path),
+      occupant: encodeUint16(terrain.occupant),
     },
     finance: {
       cash: finance.cash,
@@ -322,6 +358,8 @@ export function serializeWorld(world: World): Uint8Array {
     },
     park: copyParkState(world.park),
     guests: encodeGuests(world.guests),
+    rides: world.rides.map(copyRide),
+    nextRideId: world.nextRideId,
     rng: [...world.rng.state],
     rngStreams: { guests: [...world.rngStreams.guests.state] },
     log: world.log.map(encodeLogEntry),
@@ -408,6 +446,7 @@ export function deserializeWorld(bytes: Uint8Array): World {
   const surface = decodeUint8(doc.terrain.surface, width * height);
   const water = decodeUint8(doc.terrain.water, width * height);
   const path = decodeUint8(doc.terrain.path, width * height);
+  const occupant = decodeUint16(doc.terrain.occupant, width * height);
 
   let rng: Rng;
   let guestRng: Rng;
@@ -441,7 +480,7 @@ export function deserializeWorld(bytes: Uint8Array): World {
       created: doc.meta.created,
     },
     tick: doc.tick,
-    terrain: { width, height, corners, surface, water, path },
+    terrain: { width, height, corners, surface, water, path, occupant },
     finance: {
       cash: doc.finance.cash,
       loan: doc.finance.loan,
@@ -449,7 +488,10 @@ export function deserializeWorld(bytes: Uint8Array): World {
     },
     park: copyParkState(doc.park),
     guests,
+    rides: doc.rides.map((ride): RideRecord => copyRide(ride)),
+    nextRideId: doc.nextRideId,
     pathVersion: 0,
+    rideVersion: 0,
     rng,
     rngStreams: { guests: guestRng },
     log,

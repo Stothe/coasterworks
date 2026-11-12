@@ -39,10 +39,7 @@ export function CatalogTray({ tool, actions, ctx, onError, disabled = false }: C
   const cards = actions.filter((action) => action.category === tool);
   if (cards.length === 0) {
     return (
-      <EmptyState
-        title="Coming with the next update"
-        hint="Rides, scenery, shops and staff are coming soon."
-      />
+      <EmptyState title="Coming with the next update" hint="Scenery and staff are coming soon." />
     );
   }
 

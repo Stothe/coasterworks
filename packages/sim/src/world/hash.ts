@@ -1,6 +1,7 @@
 import { fnv1a64, hashString, hexHash } from "../hash.js";
 import { GUEST_ARRAYS, GUEST_CAP, type GuestArray, type GuestStore } from "../guests/types.js";
 import { copyParkState } from "../park/types.js";
+import { copyRide } from "../rides/types.js";
 import type { World } from "./types.js";
 
 function bytesOf(array: GuestArray | Int16Array): Uint8Array {
@@ -24,12 +25,13 @@ function liveValues(g: GuestStore, array: GuestArray): GuestArray {
 
 /**
  * Fingerprint of everything that determines the simulation's future: tick, terrain (heights,
- * surface, water, and paths), finance, the park's state, every live guest (the arrays in slot
- * order, so which slots they sit in does not matter) and the guest id counter, the root rng state
- * and the guests' stream, the log length, the id counter, the undo/redo stacks, and the world's
- * name and seed. `meta.created` is left out so the same park hashes the same whenever it was
- * created, and `pathVersion`, `routes`, and `waypoints` are left out because they are only caches
- * that restart empty on load.
+ * surface, water, paths, and ride occupancy), finance, the park's state, every live guest (the
+ * arrays in slot order, so which slots they sit in does not matter) and the guest id counter, the
+ * root rng state and the guests' stream, every ride record and the ride id counter, the log
+ * length, the id counter, the undo/redo stacks, and the world's name and seed. `meta.created` is
+ * left out so the same park hashes the same whenever it was created, and `pathVersion`,
+ * `rideVersion`, `routes`, and `waypoints` are left out because they are only caches or counters
+ * that restart on load.
  *
  * Two worlds that hash differently have diverged. Equal hashes mean equal covered state, up to
  * the usual 64-bit collision odds.
@@ -51,6 +53,8 @@ export function hashWorld(world: World): string {
     nextGuestId: guests.nextGuestId,
     rng: world.rng.state,
     guestRng: world.rngStreams.guests.state,
+    rides: world.rides.map(copyRide),
+    nextRideId: world.nextRideId,
     logLength: world.log.length,
     nextId: world.nextId,
     undoStack: world.undoStack,
@@ -61,6 +65,7 @@ export function hashWorld(world: World): string {
   hash = fnv1a64(bytesOf(terrain.surface), hash);
   hash = fnv1a64(bytesOf(terrain.water), hash);
   hash = fnv1a64(bytesOf(terrain.path), hash);
+  hash = fnv1a64(bytesOf(terrain.occupant), hash);
   for (const [name] of GUEST_ARRAYS) {
     hash = fnv1a64(bytesOf(liveValues(guests, guests[name])), hash);
   }

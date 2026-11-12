@@ -20,8 +20,8 @@ export function pathAt(t: Terrain, x: number, y: number): number {
 
 /**
  * The reason a path cannot be laid on tile (x, y), or null if it can. Checked in this order: off
- * the map, water, a slope steeper than `MAX_PATH_SLOPE`, the park entrance, and (reserved for
- * rides, which do not exist yet) a tile something else already occupies.
+ * the map, water, a slope steeper than `MAX_PATH_SLOPE`, the park entrance, and a tile a ride or
+ * stall stands on. A ride's entrance, exit, or service tile is not occupied and takes a path.
  */
 export function canBuildPath(world: World, x: number, y: number): string | null {
   const t = world.terrain;
@@ -31,7 +31,7 @@ export function canBuildPath(world: World, x: number, y: number): string | null 
   if (Math.max(...corners) - Math.min(...corners) > MAX_PATH_SLOPE) return "Tile is too steep";
   const { entrance } = world.park;
   if (entrance !== null && entrance.x === x && entrance.y === y) return "Tile is the park entrance";
-  // Reserved: "Something is already here" once rides can stand on tiles.
+  if ((t.occupant[tileIndex(t, x, y)] as number) !== 0) return "Something is already here";
   return null;
 }
 

@@ -311,6 +311,8 @@ describe("save format", () => {
       "finance",
       "park",
       "guests",
+      "rides",
+      "nextRideId",
       "rng",
       "rngStreams",
       "log",
@@ -332,11 +334,15 @@ describe("save format", () => {
       "surface",
       "water",
       "path",
+      "occupant",
     ]);
     expect(terrain.corners).toEqual({ $t: "Int16Array", $b64: expect.any(String) });
     expect(terrain.surface).toEqual({ $t: "Uint8Array", $b64: expect.any(String) });
     expect(terrain.water).toEqual({ $t: "Uint8Array", $b64: expect.any(String) });
     expect(terrain.path).toEqual({ $t: "Uint8Array", $b64: expect.any(String) });
+    expect(terrain.occupant).toEqual({ $t: "Uint16Array", $b64: expect.any(String) });
+    expect(doc.rides).toEqual([]);
+    expect(doc.nextRideId).toBe(1);
     // The park is plain JSON, in a fixed key order.
     expect(doc.park).toEqual(JSON.parse(JSON.stringify(world.park)));
     expect(Object.keys(doc.park as object)).toEqual([
@@ -404,12 +410,12 @@ describe("deserializeWorld errors", () => {
     }
   });
 
-  it("throws the exact newer-version message for schema 5", () => {
+  it("throws the exact newer-version message for schema 6", () => {
     const doc = readDoc(serializeWorld(freshWorld()));
-    doc.schemaVersion = 5;
+    doc.schemaVersion = 6;
     expect(() => deserializeWorld(writeDoc(doc))).toThrow(SaveError);
     expect(() => deserializeWorld(writeDoc(doc))).toThrow(
-      "Save is from a newer version (schema 5, this build reads 4)",
+      "Save is from a newer version (schema 6, this build reads 5)",
     );
     let caught: unknown;
     try {
@@ -418,7 +424,7 @@ describe("deserializeWorld errors", () => {
       caught = error;
     }
     expect((caught as Error).message).toBe(
-      "Save is from a newer version (schema 5, this build reads 4)",
+      "Save is from a newer version (schema 6, this build reads 5)",
     );
     expect((caught as Error).name).toBe("SaveError");
   });
@@ -426,7 +432,7 @@ describe("deserializeWorld errors", () => {
   it("interpolates the versions into the newer-version message", () => {
     expectSaveError(
       () => deserializeWorld(writeDoc({ schemaVersion: 41 })),
-      /^Save is from a newer version \(schema 41, this build reads 4\)$/,
+      /^Save is from a newer version \(schema 41, this build reads 5\)$/,
     );
   });
 
@@ -983,8 +989,8 @@ describe("migrate", () => {
   });
 
   it("has a migration for each schema before the current one, and none after", () => {
-    expect(Object.keys(MIGRATIONS).map(Number)).toEqual([1, 2, 3]);
-    expect(SCHEMA_VERSION).toBe(4);
+    expect(Object.keys(MIGRATIONS).map(Number)).toEqual([1, 2, 3, 4]);
+    expect(SCHEMA_VERSION).toBe(5);
   });
 
   it("runs the migration for the document's version and stamps the new schema version", () => {
@@ -996,6 +1002,7 @@ describe("migrate", () => {
       1: (doc: unknown) => doc,
       2: (doc: unknown) => doc,
       3: (doc: unknown) => doc,
+      4: (doc: unknown) => doc,
     };
     const input = { schemaVersion: 0, title: "Old Park" };
     const out = migrate(input, migrations);
@@ -1010,6 +1017,7 @@ describe("migrate", () => {
       1: (doc: unknown) => doc,
       2: (doc: unknown) => doc,
       3: (doc: unknown) => doc,
+      4: (doc: unknown) => doc,
       [SCHEMA_VERSION]: (doc: unknown) => ({ ...(doc as object), ranCurrent: true }),
     };
     const out = migrate({ schemaVersion: 0 }, migrations) as Record<string, unknown>;
@@ -1096,9 +1104,10 @@ const V1_FIXTURE = fromBase64(
 
 /**
  * The `hashWorld` of the schema 1 fixture, as the current build computes it once it is loaded.
- * (Re-pinned for schema 4: the park state the hash covers gained `history`.)
+ * (Re-pinned for schema 4: the park state the hash covers gained `history`. Re-pinned for schema 5:
+ * the hash covers the rides, the ride id counter and the occupant layer.)
  */
-const V1_FIXTURE_LOADED_HASH = "e39894caa776ed75";
+const V1_FIXTURE_LOADED_HASH = "a4a9375a52b67ab9";
 
 describe("schema 1 saves", () => {
   it("has a fixture that really is a schema 1 document, without paths or a park", () => {
@@ -1252,9 +1261,10 @@ const V2_FIXTURE = fromBase64(
 
 /**
  * The `hashWorld` of the schema 2 fixture, as the current build computes it once it is loaded.
- * (Re-pinned for schema 4: the park state the hash covers gained `history`.)
+ * (Re-pinned for schema 4: the park state the hash covers gained `history`. Re-pinned for schema 5:
+ * the hash covers the rides, the ride id counter and the occupant layer.)
  */
-const V2_FIXTURE_LOADED_HASH = "2696e5afec5cba88";
+const V2_FIXTURE_LOADED_HASH = "030300fca05bd320";
 
 describe("schema 2 saves", () => {
   it("has a fixture that really is a schema 2 document, with a park but no guests", () => {
@@ -1386,8 +1396,11 @@ const V3_FIXTURE = fromBase64(
   readFileSync(new URL("./fixtures/sample-v3.park.b64", import.meta.url), "utf8").trim(),
 );
 
-/** The `hashWorld` of the schema 3 fixture, as the current build computes it once it is loaded. */
-const V3_FIXTURE_LOADED_HASH = "41129abd7995cfb6";
+/**
+ * The `hashWorld` of the schema 3 fixture, as the current build computes it once it is loaded.
+ * (Re-pinned for schema 5: the hash covers the rides, the ride id counter and the occupant layer.)
+ */
+const V3_FIXTURE_LOADED_HASH = "131b5b865b83e88a";
 
 /**
  * Builds the world the schema 3 fixture was saved from, with the current build: the sample park's
@@ -1538,9 +1551,10 @@ describe("MIGRATIONS[3]", () => {
     expect(doc).toEqual(v3Doc());
   });
 
-  it("is run by migrate, which stamps schema 4", () => {
+  it("is run by migrate, which carries on through the later steps to the current schema", () => {
     const out = migrate(v3Doc()) as Record<string, unknown>;
-    expect(out.schemaVersion).toBe(4);
+    expect(out.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(out.rides).toEqual([]);
     expect((out.park as { history: unknown }).history).toEqual([]);
     expect(out.guests).toHaveProperty("lostTicks");
   });
@@ -1567,6 +1581,126 @@ describe("MIGRATIONS[3]", () => {
       expectSaveError(() => migrate(doc), "Save file is corrupt");
     }
     expect(() => step(null)).toThrow(SaveError);
+  });
+});
+
+const V4_FIXTURE = fromBase64(
+  readFileSync(new URL("./fixtures/sample-v4.park.b64", import.meta.url), "utf8").trim(),
+);
+
+/** The `hashWorld` of the schema 4 fixture, as the current build computes it once it is loaded. */
+const V4_FIXTURE_LOADED_HASH = "00cb230f02bf9c5b";
+
+describe("schema 4 saves", () => {
+  it("has a fixture that really is a schema 4 document: no rides, no occupant layer", () => {
+    const doc = readDoc(V4_FIXTURE);
+    expect(doc.schemaVersion).toBe(4);
+    expect(doc).not.toHaveProperty("rides");
+    expect(doc).not.toHaveProperty("nextRideId");
+    expect(Object.keys(doc.terrain as object)).toEqual([
+      "width",
+      "height",
+      "corners",
+      "surface",
+      "water",
+      "path",
+    ]);
+    // The hash it carries is the one the schema 4 build computed, which is not ours.
+    expect(doc.hash).toBe("ad8e87c297571a93");
+  });
+
+  it("loads as the current schema with no rides, an empty occupant layer and ids from 1", () => {
+    const world = deserializeWorld(V4_FIXTURE);
+    expect(world.meta.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(world.rides).toEqual([]);
+    expect(world.nextRideId).toBe(1);
+    expect(world.rideVersion).toBe(0);
+    expect(world.terrain.occupant).toHaveLength(world.terrain.width * world.terrain.height);
+    expect(world.terrain.occupant.every((v) => v === 0)).toBe(true);
+    // The rest came across: the sample park, open, with its paths and its log.
+    expect(world.park).toMatchObject({ name: "Leafy Lake", open: true, entryFee: 5_00 });
+    expect(world.terrain.path.some((v) => v !== 0)).toBe(true);
+    expect(world.log).toHaveLength(30);
+  });
+
+  it("loads without comparing the schema 4 hash, and hashes to a pinned value", () => {
+    const world = deserializeWorld(V4_FIXTURE);
+    expect(hashWorld(world)).not.toBe("ad8e87c297571a93");
+    expect(hashWorld(world)).toBe(V4_FIXTURE_LOADED_HASH);
+  });
+
+  it("is the very world the current build makes as the sample park", () => {
+    expect(hashWorld(createSamplePark(7))).toBe(V4_FIXTURE_LOADED_HASH);
+  });
+
+  it("saves again as the current schema and reloads to the same world", () => {
+    const resaved = serializeWorld(deserializeWorld(V4_FIXTURE));
+    const doc = readDoc(resaved);
+    expect(doc.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(doc.hash).toBe(V4_FIXTURE_LOADED_HASH);
+    expect(doc.rides).toEqual([]);
+    expect(hashWorld(deserializeWorld(resaved))).toBe(V4_FIXTURE_LOADED_HASH);
+  });
+
+  it("can have rides built in it once loaded", () => {
+    const sim = new Sim(deserializeWorld(V4_FIXTURE));
+    // A free, flat, inland spot in the sample park, away from its paths.
+    let built = false;
+    for (let y = 2; y < 60 && !built; y++) {
+      for (let x = 2; x < 60 && !built; x++) {
+        built = sim.execute("stall_build", { type: "snack_stand", x, y, rot: 0 }).ok;
+      }
+    }
+    expect(built).toBe(true);
+    expect(sim.world.rides.map((r) => r.id)).toEqual([1]);
+    expect(validateWorldInvariants(sim.world)).toBeNull();
+  });
+});
+
+describe("MIGRATIONS[4]", () => {
+  const v4Doc = (width: unknown = 3, height: unknown = 2) => ({
+    schemaVersion: 4,
+    terrain: { width, height, path: { $t: "Uint8Array", $b64: "" } },
+    other: { kept: true },
+  });
+
+  it("adds an empty occupant layer: one 16-bit zero per tile", () => {
+    const out = (MIGRATIONS[4] as Migration)(v4Doc()) as {
+      terrain: Record<string, unknown>;
+      other: unknown;
+    };
+    expect(out.terrain.occupant).toEqual({
+      $t: "Uint16Array",
+      $b64: toBase64(new Uint8Array(3 * 2 * 2)),
+    });
+    expect(out.terrain.path).toEqual({ $t: "Uint8Array", $b64: "" });
+    expect(out.other).toEqual({ kept: true });
+  });
+
+  it("gives the park no rides, and the first ride id 1", () => {
+    const out = (MIGRATIONS[4] as Migration)(v4Doc()) as Record<string, unknown>;
+    expect(out.rides).toEqual([]);
+    expect(out.nextRideId).toBe(1);
+  });
+
+  it("leaves the document it was given as it was", () => {
+    const doc = v4Doc();
+    (MIGRATIONS[4] as Migration)(doc);
+    expect(doc).toEqual(v4Doc());
+  });
+
+  it("gives a map with unusable dimensions no occupant layer, so the schema check says why", () => {
+    const out = (MIGRATIONS[4] as Migration)(v4Doc(0, 2)) as { terrain: object };
+    expect(out.terrain).not.toHaveProperty("occupant");
+    const doc = readDoc(V4_FIXTURE);
+    (doc.terrain as Record<string, unknown>).width = 0;
+    expectSaveError(() => deserializeWorld(writeDoc(doc)), /^Save file is invalid: /);
+  });
+
+  it("refuses a document that is not an object as corrupt", () => {
+    for (const doc of [null, 5, [], "x"]) {
+      expect(() => (MIGRATIONS[4] as Migration)(doc)).toThrow(SaveError);
+    }
   });
 });
 

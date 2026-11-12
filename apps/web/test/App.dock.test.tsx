@@ -139,13 +139,16 @@ describe("the dock in the app", () => {
     expect(screen.getAllByRole("group", { name: "Brush size" })).toHaveLength(1);
   });
 
-  it("3 shows the Rides tray, which is empty until the next update", async () => {
+  it("3 shows the Rides tray, with a card for each of the sim's ride commands", async () => {
     await ready();
     press("3");
     expect(store().tool).toBe("ride");
     expect(pressedTools()).toEqual(["Rides"]);
     const rides = screen.getByRole("region", { name: "Rides tray" });
-    expect(within(rides).getByText("Coming with the next update")).toBeTruthy();
+    expect(within(rides).getByRole("button", { name: /^Ride build/ })).toBeTruthy();
+    expect(within(rides).getByRole("button", { name: /^Ride demolish/ })).toBeTruthy();
+    expect(within(rides).queryByRole("button", { name: /^Stall build/ })).toBeNull();
+    expect(within(rides).queryByText("Coming with the next update")).toBeNull();
     expect(screen.queryByRole("region", { name: "Terrain tray" })).toBeNull();
     expect(store().placement).toBeNull();
   });

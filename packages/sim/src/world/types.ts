@@ -1,10 +1,11 @@
 import type { GuestStore, Waypoints } from "../guests/types.js";
 import type { ParkState } from "../park/types.js";
 import type { RouteCache } from "../paths/routing.js";
+import type { RideRecord } from "../rides/types.js";
 import type { Rng } from "../rng.js";
 
 /** Version of the save-file schema. Bump when the serialized world shape changes. */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /** Highest corner height. Heights are integers in half-unit steps, 0..MAX_HEIGHT. */
 export const MAX_HEIGHT = 63;
@@ -31,6 +32,11 @@ export interface Terrain {
   water: Uint8Array;
   /** Path per tile, row-major over width by height: 0 none, 1 footpath, 2 queue. */
   path: Uint8Array;
+  /**
+   * Which ride or stall stands on each tile, row-major over width by height: 0 none, else the
+   * ride's id. Only footprint tiles are marked, not a ride's entrance, exit or service tile.
+   */
+  occupant: Uint16Array;
 }
 
 export interface Finance {
@@ -71,6 +77,15 @@ export interface World {
   park: ParkState;
   /** Everyone in the park, as parallel arrays. See `GuestStore`. */
   guests: GuestStore;
+  /** Every ride and stall in the park, sorted by id. */
+  rides: RideRecord[];
+  /** The id the next ride or stall built gets. Ids start at 1, only go up, and are never reused. */
+  nextRideId: number;
+  /**
+   * Counts changes to the rides (every ride command's apply and revert), so a cache or a client
+   * knows when its copy is stale. Runtime only, like `pathVersion`.
+   */
+  rideVersion: number;
   /**
    * Counts changes to the path layer and the entrance, so a cache built from them knows when it is
    * stale. Runtime only: it is not saved or hashed, and starts at 0 when a world is created or

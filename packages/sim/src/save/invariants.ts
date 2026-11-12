@@ -1,3 +1,4 @@
+import { typeById, type Rot } from "@coasterworks/content";
 import { THOUGHTS } from "../guests/thoughts.js";
 import {
   DEST_TURNED_AWAY,
@@ -9,6 +10,15 @@ import {
 } from "../guests/types.js";
 import { HISTORY_MONTHS, MAX_ENTRY_FEE, MAX_RATING, type ParkState } from "../park/types.js";
 import { PATH_QUEUE, edgeSide } from "../paths/paths.js";
+import { accessTiles, footprintRect } from "../rides/rides.js";
+import {
+  MAX_RIDE_ID,
+  MAX_RIDE_NAME,
+  MAX_RIDE_PHASE,
+  MAX_RIDE_PRICE,
+  RIDE_CAP,
+  type Tile,
+} from "../rides/types.js";
 import { inBounds } from "../terrain/terrain.js";
 import { MONTHS_PER_YEAR } from "../time.js";
 import { MAX_HEIGHT, type World } from "../world/types.js";
@@ -31,6 +41,13 @@ const MAX_SURFACE = 4;
  *     times that are not negative; a position and a target tile on the map or one tile outside it
  *     (the entrance lane); and a destination that is a tile on the map or one of the two "walking
  *     out" markers
+ *   - at most 255 rides and stalls, sorted by id, each id above 0, below `nextRideId` and used once,
+ *     with `nextRideId` at most 65,536; each ride's type exists in the content and has the ride's
+ *     kind, its rotation is 0 to 3, its price 0 to $20.00, its name 1 to 40 characters, its phase 0
+ *     to 3, and its counters and guest ids not negative; its entrance, exit and service tiles are
+ *     the ones its type, position and rotation give; and the occupant layer holds exactly each
+ *     ride's id on its footprint tiles (which are on the map and overlap no other ride's) and 0
+ *     everywhere else
  *   - log ids start above 0, strictly increase, and are all below `nextId`
  *   - every id on the undo and redo stacks names a log entry, and no id is on the stacks twice,
  *     which covers an id on both
@@ -67,6 +84,9 @@ export function validateWorldInvariants(world: World): string | null {
 
   const guestIssue = guestProblem(world);
   if (guestIssue !== null) return guestIssue;
+
+  const rideIssue = rideProblem(world);
+  if (rideIssue !== null) return rideIssue;
 
   const ids = new Set<number>();
   let previous = 0;
@@ -207,5 +227,91 @@ function guestProblem(world: World): string | null {
     }
   }
   if (live !== g.count) return `guest count ${g.count} does not match the ${live} live guests`;
+  return null;
+}
+
+function sameTile(a: Tile | null, b: Tile | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.x === b.x && a.y === b.y;
+}
+
+function showTile(tile: Tile | null): string {
+  return tile === null ? "none" : `(${tile.x}, ${tile.y})`;
+}
+
+/** The first thing wrong with the rides or the occupant layer, as a sentence, or null. */
+function rideProblem(world: World): string | null {
+  const { rides, nextRideId, terrain } = world;
+  if (!Number.isInteger(nextRideId) || nextRideId < 1 || nextRideId > MAX_RIDE_ID + 1) {
+    return `nextRideId ${nextRideId} is outside 1 to ${MAX_RIDE_ID + 1}`;
+  }
+  if (rides.length > RIDE_CAP) return `${rides.length} rides, more than ${RIDE_CAP}`;
+
+  const expected = new Uint16Array(terrain.width * terrain.height);
+  let previous = 0;
+  for (const ride of rides) {
+    const { id } = ride;
+    if (!Number.isInteger(id) || id <= previous) {
+      return `ride id ${id} does not come after ${previous}; ids start at 1 and increase`;
+    }
+    if (id >= nextRideId) return `ride id ${id} is not below nextRideId ${nextRideId}`;
+    previous = id;
+
+    const label = `ride ${id}`;
+    const type = typeById(ride.type);
+    if (type === undefined) return `${label} has unknown type ${ride.type}`;
+    if (ride.kind !== type.kind) {
+      return `${label} has kind ${ride.kind} but its type ${type.id} is a ${type.kind}`;
+    }
+    if (![0, 1, 2, 3].includes(ride.rot))
+      return `${label} has rotation ${ride.rot}, outside 0 to 3`;
+    if (!Number.isInteger(ride.price) || ride.price < 0 || ride.price > MAX_RIDE_PRICE) {
+      return `${label} has price ${ride.price}, outside 0 to ${MAX_RIDE_PRICE}`;
+    }
+    if (ride.name.length < 1 || ride.name.length > MAX_RIDE_NAME) {
+      return `${label} has a name of ${ride.name.length} characters, outside 1 to ${MAX_RIDE_NAME}`;
+    }
+    if (!Number.isInteger(ride.phase) || ride.phase < 0 || ride.phase > MAX_RIDE_PHASE) {
+      return `${label} has phase ${ride.phase}, outside 0 to ${MAX_RIDE_PHASE}`;
+    }
+    const counters: Array<[string, number]> = [
+      ["phaseTicks", ride.phaseTicks],
+      ...Object.entries(ride.stats).map(([k, v]): [string, number] => [`stats.${k}`, v]),
+    ];
+    for (const [key, value] of counters) {
+      if (!Number.isInteger(value) || value < 0) return `${label} has ${key} ${value}, below 0`;
+    }
+    for (const guest of [...ride.riders, ...ride.queue]) {
+      if (!Number.isInteger(guest) || guest < 1) return `${label} lists guest id ${guest}`;
+    }
+
+    const rot = ride.rot as Rot;
+    const tiles = accessTiles(type, ride.x, ride.y, rot);
+    for (const key of ["entrance", "exit", "service"] as const) {
+      if (!sameTile(ride[key], tiles[key])) {
+        return `${label} has ${key} ${showTile(ride[key])}, expected ${showTile(tiles[key])}`;
+      }
+    }
+
+    const rect = footprintRect(type, ride.x, ride.y, rot);
+    if (!inBounds(terrain, rect.x, rect.y, rect.w, rect.h)) {
+      return `${label} at (${ride.x}, ${ride.y}) is not on the ${terrain.width}x${terrain.height} map`;
+    }
+    for (let y = rect.y; y < rect.y + rect.h; y++) {
+      for (let x = rect.x; x < rect.x + rect.w; x++) {
+        const index = y * terrain.width + x;
+        const other = expected[index] as number;
+        if (other !== 0) return `${label} overlaps ride ${other} at (${x}, ${y})`;
+        expected[index] = id;
+      }
+    }
+  }
+
+  for (let i = 0; i < expected.length; i++) {
+    const actual = terrain.occupant[i] as number;
+    if (actual !== expected[i]) {
+      return `tile ${i} has occupant ${actual}, but the rides put ${expected[i]} there`;
+    }
+  }
   return null;
 }

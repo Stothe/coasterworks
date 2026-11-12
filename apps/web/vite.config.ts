@@ -21,6 +21,7 @@ export default defineConfig({
   resolve: {
     // Dev and build use the packages' sources, so there is no stale `dist` to rebuild first.
     alias: {
+      "@coasterworks/content": source("../../packages/content/src/index.ts"),
       "@coasterworks/sim": source("../../packages/sim/src/index.ts"),
       "@coasterworks/protocol": source("../../packages/protocol/src/index.ts"),
       "@coasterworks/render": source("../../packages/render/src/index.ts"),

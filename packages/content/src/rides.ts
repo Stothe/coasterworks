@@ -1,3 +1,4 @@
+import { deepFreeze } from "./freeze.js";
 import { RideTypeSchema, type RideType } from "./schema.js";
 
 // Money is in cents, time in sim ticks (400 ticks = one game day). Entrance and exit are
@@ -67,5 +68,5 @@ const rides: RideType[] = [
 ];
 
 export const RIDE_TYPES: readonly RideType[] = Object.freeze(
-  rides.map((r) => Object.freeze(RideTypeSchema.parse(r))),
+  rides.map((r) => deepFreeze(RideTypeSchema.parse(r))),
 );

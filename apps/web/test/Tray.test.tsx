@@ -412,7 +412,7 @@ describe("CatalogTray", () => {
     (tool) => {
       renderTray({ tool, actions: [action("terrain_raise", "terrain"), action("ui.pause", "ui")] });
       expect(screen.getByText("Coming with the next update")).toBeTruthy();
-      expect(screen.getByText("Rides, scenery, shops and staff are coming soon.")).toBeTruthy();
+      expect(screen.getByText("Scenery and staff are coming soon.")).toBeTruthy();
       expect(screen.queryByRole("button")).toBeNull();
     },
   );

@@ -88,6 +88,27 @@ const migrateV3ToV4: Migration = (doc) => {
 };
 
 /**
+ * Schema 4 to 5: parks gained rides and stalls. The new occupant layer (which ride stands on each
+ * tile) starts empty, the park has no rides, and the first ride to be built gets id 1. A document
+ * whose terrain is missing or has unusable dimensions gets no occupant layer, so the schema check
+ * refuses it with the reason.
+ */
+const migrateV4ToV5: Migration = (doc) => {
+  if (!isRecord(doc)) throw new SaveError(CORRUPT_MESSAGE);
+  const terrain =
+    isRecord(doc.terrain) && isDimension(doc.terrain.width) && isDimension(doc.terrain.height)
+      ? {
+          ...doc.terrain,
+          occupant: {
+            $t: "Uint16Array",
+            $b64: toBase64(new Uint8Array(doc.terrain.width * doc.terrain.height * 2)),
+          },
+        }
+      : doc.terrain;
+  return { ...doc, terrain, rides: [], nextRideId: 1 };
+};
+
+/**
  * Migrations keyed by the schema version they upgrade FROM, so `MIGRATIONS[1]` turns a schema 1
  * document into a schema 2 one. When `SCHEMA_VERSION` goes up, add the entry for the version it
  * left behind.
@@ -96,6 +117,7 @@ export const MIGRATIONS: Record<number, Migration> = {
   1: migrateV1ToV2,
   2: migrateV2ToV3,
   3: migrateV3ToV4,
+  4: migrateV4ToV5,
 };
 
 /** The document's schema version. Throws `SaveError` if it has none. */

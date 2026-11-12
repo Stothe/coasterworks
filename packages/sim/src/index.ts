@@ -42,6 +42,9 @@ export {
   pathAt,
 } from "./paths/paths.js";
 export { RouteCache, UNREACHABLE } from "./paths/routing.js";
+export { canPlaceRide } from "./rides/rides.js";
+export { MAX_RIDE_ID, MAX_RIDE_NAME, MAX_RIDE_PRICE, RIDE_CAP, RidePhase } from "./rides/types.js";
+export type { RideRecord, RideStats, Tile } from "./rides/types.js";
 export { createDefaultRegistry } from "./registry-default.js";
 export { Rng } from "./rng.js";
 export type { RngState } from "./rng.js";

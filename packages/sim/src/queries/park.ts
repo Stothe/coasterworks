@@ -8,7 +8,7 @@ import { MAX_HEIGHT } from "../world/types.js";
 export const parkStatus = defineQuery({
   name: "park_status",
   description:
-    "Describes the park: name, tick, calendar date, cash and loan in cents, and map size. `month` is 0-based (March = 0). `monthStartCash` is the cash when the month began, in cents, so `cash - monthStartCash` is the month's change. Also whether the park is `open`, the `entryFee` in cents, the `entrance` ({ x, y, side } with side 0 north, 1 east, 2 south, 3 west, or null if not placed), the `rating` (0 to 999), `guestsInPark` (and `guests`, the same number), `totalAdmissions`, and the takings in cents: `income` { entry, rides, shops } and `expenses` { running, wages } so far, and `monthly` { entry, rides, shops, running, wages } for this month.",
+    "Describes the park: name, tick, calendar date, cash and loan in cents, and map size. `month` is 0-based (March = 0). `monthStartCash` is the cash when the month began, in cents, so `cash - monthStartCash` is the month's change. Also whether the park is `open`, the `entryFee` in cents, the `entrance` ({ x, y, side } with side 0 north, 1 east, 2 south, 3 west, or null if not placed), the `rating` (0 to 999), `guestsInPark` (and `guests`, the same number), `totalAdmissions`, and the takings in cents: `income` { entry, rides, shops } and `expenses` { running, wages } so far, and `monthly` { entry, rides, shops, running, wages } for this month. `rides` and `stalls` count the rides and the stalls built (open or closed); `ride_list` lists them.",
   category: "park",
   input: z.object({}),
   run: (world) => {
@@ -36,6 +36,8 @@ export const parkStatus = defineQuery({
       income: { ...park.income },
       expenses: { ...park.expenses },
       monthly: { ...park.monthly },
+      rides: world.rides.filter((ride) => ride.kind === "ride").length,
+      stalls: world.rides.filter((ride) => ride.kind === "stall").length,
     };
   },
 });

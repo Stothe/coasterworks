@@ -169,3 +169,20 @@ describe("rotation", () => {
     }
   });
 });
+
+describe("content data guards", () => {
+  it("is frozen all the way down", () => {
+    for (const type of ALL_TYPES) {
+      expect(Object.isFrozen(type)).toBe(true);
+      expect(Object.isFrozen(type.footprint)).toBe(true);
+    }
+  });
+
+  it("refuses a model that is not the id, and a default price above $20", () => {
+    const ride = RIDE_TYPES[0]!;
+    expect(RideTypeSchema.safeParse({ ...ride, model: "other" }).success).toBe(false);
+    expect(RideTypeSchema.safeParse({ ...ride, defaultPrice: 20_01 }).success).toBe(false);
+    const stall = STALL_TYPES[0]!;
+    expect(StallTypeSchema.safeParse({ ...stall, model: "other" }).success).toBe(false);
+  });
+});

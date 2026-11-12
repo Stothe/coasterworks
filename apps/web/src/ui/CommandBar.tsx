@@ -27,7 +27,18 @@ export interface CommandBarProps {
 /** What the player is told when a placement starts. */
 export const PLACEMENT_HINT = "Click the map to place · Esc to cancel";
 
-const GROUPS = ["Terrain", "Finance", "Park", "View", "Speed", "History", "Time", "Other"] as const;
+const GROUPS = [
+  "Terrain",
+  "Finance",
+  "Park",
+  "Rides",
+  "Shops",
+  "View",
+  "Speed",
+  "History",
+  "Time",
+  "Other",
+] as const;
 type Group = (typeof GROUPS)[number];
 
 /** The group an action is listed under. */
@@ -48,6 +59,10 @@ function groupOf(action: Action): Group {
       return "Finance";
     case "park":
       return "Park";
+    case "ride":
+      return "Rides";
+    case "shop":
+      return "Shops";
     case "sim":
       return "Time";
     default:

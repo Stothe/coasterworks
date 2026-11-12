@@ -8,6 +8,7 @@ export default defineConfig({
     // Test the code as it is in `src`, not a `dist` that may be stale or not built yet. The tests
     // that spawn the built bin skip themselves when `dist` is missing.
     alias: {
+      "@coasterworks/content": source("../../packages/content/src/index.ts"),
       "@coasterworks/sim": source("../../packages/sim/src/index.ts"),
       "@coasterworks/mcp": source("../../packages/mcp/src/index.ts"),
       "@coasterworks/protocol": source("../../packages/protocol/src/index.ts"),

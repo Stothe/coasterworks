@@ -37,7 +37,7 @@ export const RideTypeSchema = z
     /** Cents per month. */
     runningCost: int.min(0),
     /** Cents. */
-    defaultPrice: int.min(0),
+    defaultPrice: int.min(0).max(20_00),
     /** Riders per cycle. */
     capacity: int.min(1),
     loadTicks: int.min(1),
@@ -50,6 +50,9 @@ export const RideTypeSchema = z
   })
   .strict()
   .superRefine((t, ctx) => {
+    if (t.model !== t.id) {
+      ctx.addIssue({ code: "custom", path: ["model"], message: "model must be the type's id" });
+    }
     for (const key of ["entrance", "exit"] as const) {
       if (!isEdgeAdjacentOutside(t[key], t.footprint)) {
         ctx.addIssue({
@@ -76,14 +79,15 @@ export const StallTypeSchema = z
     front: z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]),
     cost: int.min(0),
     runningCost: int.min(0),
-    defaultPrice: int.min(0),
+    defaultPrice: int.min(0).max(20_00),
     serveTicks: int.min(1),
     meets: z.enum(["hunger", "thirst", "bathroom"]),
     /** How much the need is reduced by. */
     amount: int.min(1),
     model: z.string().min(1),
   })
-  .strict();
+  .strict()
+  .refine((t) => t.model === t.id, { path: ["model"], message: "model must be the type's id" });
 
 export type RideType = z.infer<typeof RideTypeSchema>;
 export type StallType = z.infer<typeof StallTypeSchema>;

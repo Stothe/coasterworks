@@ -134,15 +134,22 @@ test("a right click on a tile offers Raise terrain, and it is paid for", async (
   await expect.poll(async () => cents(await cashOf(page).innerText())).toBeLessThan(before);
 });
 
-test("3 is Rides, whose tray is empty until the next update", async ({ page }) => {
+test("3 is Rides, whose tray lists the ride commands; Scenery is still to come", async ({
+  page,
+}) => {
   await openPark(page);
 
   await page.keyboard.press("3");
   const rides = page.getByRole("region", { name: "Rides tray" });
   await expect(rides).toBeVisible();
-  await expect(rides.getByText("Coming with the next update")).toBeVisible();
+  await expect(rides.getByRole("button", { name: /^Ride build/ })).toBeVisible();
+  await expect(rides.getByText("Coming with the next update")).toHaveCount(0);
   await expect(page.getByRole("region", { name: "Terrain tray" })).toHaveCount(0);
   expect((await uiState(page))?.tool).toBe("ride");
+
+  await page.keyboard.press("4");
+  const scenery = page.getByRole("region", { name: "Scenery tray" });
+  await expect(scenery.getByText("Coming with the next update")).toBeVisible();
 });
 
 test("? shows the keyboard map and Esc puts it away", async ({ page }) => {

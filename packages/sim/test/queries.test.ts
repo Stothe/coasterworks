@@ -22,7 +22,7 @@ function setup(opts: { width?: number; height?: number } = {}) {
 }
 
 describe("default registry", () => {
-  it("registers the eleven queries, after the commands, with their categories", () => {
+  it("registers the fourteen queries, after the commands, with their categories", () => {
     const queries = createDefaultRegistry()
       .catalog()
       .filter((e) => e.kind === "query");
@@ -37,6 +37,9 @@ describe("default registry", () => {
       ["guest_get", "park", false],
       ["guest_thoughts", "park", false],
       ["path_check_tiles", "path", false],
+      ["ride_list", "ride", false],
+      ["ride_get", "ride", false],
+      ["content_list", "ride", false],
       ["catalog_list", "sim", false],
     ]);
   });
@@ -120,6 +123,8 @@ describe("park_status", () => {
         income: { entry: 0, rides: 0, shops: 0 },
         expenses: { running: 0, wages: 0 },
         monthly: { entry: 0, rides: 0, shops: 0, running: 0, wages: 0 },
+        rides: 0,
+        stalls: 0,
       },
     });
   });
@@ -154,6 +159,8 @@ describe("park_status", () => {
         income: { entry: 0, rides: 0, shops: 0 },
         expenses: { running: 0, wages: 0 },
         monthly: { entry: 0, rides: 0, shops: 0, running: 0, wages: 0 },
+        rides: 0,
+        stalls: 0,
       },
     });
   });

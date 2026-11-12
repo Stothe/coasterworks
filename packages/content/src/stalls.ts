@@ -1,3 +1,4 @@
+import { deepFreeze } from "./freeze.js";
 import { StallTypeSchema, type StallType } from "./schema.js";
 
 // Money is in cents, time in sim ticks (400 ticks = one game day). `front` is the side the
@@ -55,5 +56,5 @@ const stalls: StallType[] = [
 ];
 
 export const STALL_TYPES: readonly StallType[] = Object.freeze(
-  stalls.map((s) => Object.freeze(StallTypeSchema.parse(s))),
+  stalls.map((s) => deepFreeze(StallTypeSchema.parse(s))),
 );
