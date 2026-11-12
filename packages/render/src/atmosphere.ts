@@ -879,19 +879,6 @@ export function createAtmosphere(ctx: RenderContext): AtmosphereModule {
     }
     // The offsets that hide a shadow map's stair steps grow with its texels. A texel is as long
     // on the ground as it is wide, whatever the sun's height: the box is squeezed to match.
-    (globalThis as Record<string, unknown>).__cwAtm = {
-      circle: { ...circle },
-      box: { ...box },
-      low,
-      high,
-      reach,
-      sun,
-      renderer,
-      atmosphereUniforms,
-      skyUniforms,
-      scene,
-      rig,
-    }; // DEBUG
     // Soft edges about a pixel and a half wide on the screen, and never wider than the tier's
     // filter: close up the texels are far smaller than a pixel, and a filter counted in texels
     // alone would either smear a guest's shadow away or leave the far view's edges hard.

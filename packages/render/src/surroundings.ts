@@ -424,12 +424,6 @@ export function createSurroundings(ctx: RenderContext): SurroundingsModule {
     }
     applyQuality();
     chooseDetail();
-    console.log(
-      "clusters",
-      clusters.length,
-      "instances",
-      clusters.reduce((n, c) => n + c.rank.length, 0),
-    );
   }
 
   /** Sets everything near the park back on the ground after the ground there changed. */

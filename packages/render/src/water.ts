@@ -526,7 +526,6 @@ void main() {
   light = mix(light, cwWater_foam * (sunLight + skyLight), foam);
   through *= 1.0 - foam;
 
-  light = mix(vec3(4.0, 0.0, 0.0), light, getShadowMask()); // DEBUG
   float alpha = 1.0 - through;
   gl_FragColor = vec4(light / max(alpha, 1e-3), alpha * edge);
 

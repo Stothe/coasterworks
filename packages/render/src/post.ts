@@ -136,17 +136,10 @@ let lookUsers = 0;
 function installLook(): void {
   if (lookUsers++ > 0) return;
   stockToneMappingChunk = ShaderChunk.tonemapping_pars_fragment;
-  // DEBUG-TEMP
-  const params = new URLSearchParams(
-    (globalThis as { location?: { search?: string } }).location?.search ?? "",
+  ShaderChunk.tonemapping_pars_fragment = withCustomToneMapping(
+    stockToneMappingChunk,
+    LOOK_TONE_MAPPING_GLSL,
   );
-  let look = LOOK_TONE_MAPPING_GLSL;
-  const tm = params.get("tm");
-  if (tm === "aces") look = look.replace("NeutralToneMapping", "ACESFilmicToneMapping");
-  if (tm === "agx") look = look.replace("NeutralToneMapping", "AgXToneMapping");
-  if (params.get("grade") === "off")
-    look = look.replace("1.0 + 0.08 *", "1.0 + 0.0 *").replace("+= 0.8 *", "+= 0.0 *");
-  ShaderChunk.tonemapping_pars_fragment = withCustomToneMapping(stockToneMappingChunk, look);
 }
 
 function uninstallLook(): void {
@@ -154,11 +147,6 @@ function uninstallLook(): void {
   ShaderChunk.tonemapping_pars_fragment = stockToneMappingChunk;
   stockToneMappingChunk = null;
 }
-
-// DEBUG-TEMP: look development switches read from the page's address.
-const debugParams = new URLSearchParams(
-  (globalThis as { location?: { search?: string } }).location?.search ?? "",
-);
 
 // Ambient occlusion ------------------------------------------------------------------------------
 
@@ -230,9 +218,6 @@ void main() {
   float luma = dot( color.rgb, vec3( 0.2126, 0.7152, 0.0722 ) );
   strength *= 1.0 - 0.45 * smoothstep( 0.25, 0.9, luma );
 
-  #ifdef CW_AO_SPLIT
-    strength *= step( 0.5, vUv.x );
-  #endif
   vec3 occlusion = cwAoBounce( ao, clamp( color.rgb, 0.0, 1.0 ) );
   #ifdef CW_AO_VIEW
     gl_FragColor = vec4( pow( mix( vec3( 1.0 ), vec3( ao ), strength ), vec3( 2.0 ) ) * 0.8, 1.0 );
@@ -457,7 +442,6 @@ class AoCompositePass extends Pass {
     const defines: Record<string, string> = {};
     if (coarse) defines.CW_AO_COARSE = "";
     if (view) defines.CW_AO_VIEW = "";
-    if (debugParams.get("ao") === "split") defines.CW_AO_SPLIT = ""; // DEBUG-TEMP
     this.material = new ShaderMaterial({
       name: "CwAoComposite",
       defines,
@@ -737,46 +721,12 @@ function createPipeline(
   // Sizes are given to the composer in device pixels throughout.
   composer.setPixelRatio(1);
 
-  // DEBUG-TEMP
-  if (debugParams.get("aos") !== null)
-    plan = { ...plan, aoSamples: Number(debugParams.get("aos")) };
-  if (debugParams.get("aoscale") !== null)
-    plan = { ...plan, aoScale: Number(debugParams.get("aoscale")) };
   const scenePass = new ScenePass(scene, camera, sceneTarget);
   const ao = new AoPass(scene, camera, plan.aoScale, plan.aoSamples);
-  if (debugParams.get("pds") !== null)
-    ao.gtao.updatePdMaterial({ samples: Number(debugParams.get("pds")) });
-  if (debugParams.get("pd") === "off") ao.gtao.pdMaterial.defines.SAMPLES = 0;
-  if (debugParams.get("aop") !== null)
-    ao.gtao.updateGtaoMaterial({ scale: Number(debugParams.get("aop")) });
-  const aoComposite = new AoCompositePass(
-    sceneTarget.texture,
-    ao,
-    plan.aoScale < 1,
-    debugParams.get("ao") === "view", // DEBUG-TEMP
-  );
+  const aoComposite = new AoCompositePass(sceneTarget.texture, ao, plan.aoScale < 1, false);
   const bloom = createBloom(width, height);
   const finish = new FinishPass(plan.tiltShift);
   const antialias: Pass = plan.antialias === "smaa" ? new SMAAPass() : new FXAAPass();
-
-  // DEBUG-TEMP
-  if (debugParams.get("bloom") !== null) bloom.strength = Number(debugParams.get("bloom"));
-  if (debugParams.get("ao") === "off") aoComposite.material.uniforms.uIntensity!.value = 0;
-  if (debugParams.get("aoi") !== null)
-    aoComposite.material.uniforms.uIntensity!.value = Number(debugParams.get("aoi"));
-  if (debugParams.get("aa") === "none") antialias.enabled = false;
-  const off = (debugParams.get("off") ?? "").split(",");
-  if (off.includes("aa")) antialias.enabled = false;
-  if (off.includes("bloom")) bloom.enabled = false;
-  if (off.includes("ao")) {
-    ao.enabled = false;
-    aoComposite.material.uniforms.uIntensity!.value = 0;
-  }
-  if (off.includes("tilt")) {
-    delete finish.material.defines!.CW_TILT_SHIFT;
-  }
-  if (debugParams.get("vig") !== null)
-    finish.material.uniforms.uVignette!.value = Number(debugParams.get("vig"));
 
   composer.addPass(scenePass);
   composer.addPass(ao);
@@ -895,12 +845,7 @@ export function createPost(ctx: RenderContext): PostModule {
         wanted = governor.quality;
       }
 
-      if (
-        plan === null ||
-        bufferSize.x < 1 ||
-        bufferSize.y < 1 ||
-        debugParams.get("post") === "direct"
-      ) {
+      if (plan === null || bufferSize.x < 1 || bufferSize.y < 1) {
         renderer.setRenderTarget(null);
         renderer.render(scene, camera);
         return;
@@ -909,10 +854,7 @@ export function createPost(ctx: RenderContext): PostModule {
 
       const distance = rig.distance;
       const fadeEnd = aoFadeEndFor(distance);
-      pipeline.ao.setReach(
-        aoRadiusFor(distance) * Number(debugParams.get("aor") ?? 1), // DEBUG-TEMP
-        fadeEnd * 1.05,
-      );
+      pipeline.ao.setReach(aoRadiusFor(distance), fadeEnd * 1.05);
       pipeline.aoComposite.setFade(aoFadeStartFor(distance), fadeEnd);
       pipeline.finish.setTilt(
         tiltShiftFor(distance, rig.pitch) * TILT_MAX_RADIUS * (pipeline.height / 900),
