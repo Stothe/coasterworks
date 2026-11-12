@@ -1,3 +1,4 @@
+import { typeById } from "@coasterworks/content";
 import { PATH_FOOT } from "../paths/paths.js";
 import { RouteCache, UNREACHABLE } from "../paths/routing.js";
 import { queueCapacity, queueInfo, queueSlotTile } from "../rides/queue.js";
@@ -5,6 +6,7 @@ import { findRide } from "../rides/rides.js";
 import type { RideRecord } from "../rides/types.js";
 import type { Rng } from "../rng.js";
 import { inBounds, tileBase } from "../terrain/terrain.js";
+import { TICKS_PER_DAY } from "../time.js";
 import type { World } from "../world/types.js";
 import { TILE_UNITS, forEachGuest, laneTileX, laneTileY, removeGuest } from "./guests.js";
 import { THOUGHT } from "./thoughts.js";
@@ -40,6 +42,27 @@ export const LOST_GIVE_UP = 2400;
 
 /** A guest that has queued this many ticks (six game days) gives up on the ride and wanders. */
 export const QUEUE_PATIENCE = 2400;
+
+/**
+ * A hunger, thirst or need for the toilet at this level or more sends a wandering guest to the
+ * nearest open stall that meets it.
+ */
+export const NEED_SEEK_LEVEL = 160;
+
+/**
+ * A guest that finds nothing to meet its need thinks so, and not again for this many ticks (a day)
+ * unless it has thought something else meanwhile.
+ */
+export const NEED_SEEK_THOUGHT_INTERVAL = TICKS_PER_DAY;
+
+/**
+ * A guest likes a ride whose intensity is within this many rating points of its preference
+ * (`intensityPref * 4`); a ride more intense than that is too intense for it.
+ */
+export const INTENSITY_WINDOW = 300;
+
+/** Happiness a guest gains when it is served at a stall. */
+export const STALL_HAPPINESS = 10;
 
 /** Ticks between one point of hunger, and of thirst, and of a step of mood. */
 export const HUNGER_INTERVAL = 40;
@@ -263,7 +286,8 @@ function shouldLeave(g: GuestStore, slot: number): boolean {
  *
  *  - ENTERING: at the entrance tile, pays the fee and comes in, or is turned away if the park is
  *    shut or it cannot pay. If the entrance has gone or moved, it turns back before paying.
- *  - WANDERING: on its turn (every 120 ticks, staggered by id), picks one of a few waypoints.
+ *  - WANDERING: on its turn (every 120 ticks, staggered by id), goes to a stall if it needs one,
+ *    or maybe to a ride (see `seekStallOrRide`), or else picks one of a few waypoints.
  *  - HEADING: takes the next step along the route to `dest`, or arrives.
  *  - LEAVING: follows the route to the entrance, then walks out along the lane and is gone.
  *  - LOST: on its turn (every 200 ticks), looks again for a way out, or about.
@@ -271,6 +295,7 @@ function shouldLeave(g: GuestStore, slot: number): boolean {
  *    queue to the tile its place in the line belongs on; if the tile it stands on is no longer part
  *    of the queue (the line was broken), it steps out of it.
  *  - RIDING: nothing; the ride system takes it off again.
+ *  - BUYING: stands at the stall until it has been served, then pays and wanders (see `buying`).
  *
  * A guest whose ride has gone, or closed while it was on its way, goes back to wandering.
  * Guests inside who are unhappy, worn out, or have been idle too long start LEAVING.
@@ -298,6 +323,9 @@ export function decide(world: World, slot: number, rng: Rng, routes: RouteCache)
       break;
     case GuestState.RIDING:
       riding(world, slot);
+      break;
+    case GuestState.BUYING:
+      buying(world, slot);
       break;
   }
 }
@@ -390,6 +418,9 @@ function wander(world: World, slot: number, rng: Rng, routes: RouteCache): void 
   const g = world.guests;
   if (shouldLeave(g, slot) && startLeaving(world, slot, routes)) return;
   if ((world.tick + (g.id[slot] as number)) % WANDER_INTERVAL !== 0) return;
+  // A park with no rides or stalls skips this altogether, so it plays exactly as it did before
+  // there were any.
+  if (world.rides.length > 0 && seekStallOrRide(world, slot, rng, routes)) return;
   if (pickDestination(world, slot, rng, routes)) return;
   // Nowhere to go. If the tile it stands on has lost its path, it is lost; if not, it just waits.
   if (!walkable(world, ownIndex(world, slot))) goLost(world, slot, routes);
@@ -401,7 +432,11 @@ function head(world: World, slot: number, routes: RouteCache): void {
   let ride: RideRecord | undefined;
   if (rideId !== 0) {
     ride = findRide(world, rideId);
-    if (ride === undefined || !ride.open || ride.entrance === null) {
+    if (
+      ride === undefined ||
+      !ride.open ||
+      (ride.kind === "ride" ? ride.entrance === null : ride.service === null)
+    ) {
       clearRide(world, slot);
       return;
     }
@@ -410,12 +445,16 @@ function head(world: World, slot: number, routes: RouteCache): void {
   if (!atTarget(g, slot)) return;
 
   const here = ownIndex(world, slot);
-  if (ride !== undefined && queueInfo(world, ride).dist.has(here)) {
+  if (ride !== undefined && ride.kind === "ride" && queueInfo(world, ride).dist.has(here)) {
     joinQueue(world, slot, ride);
     return;
   }
   const dest = g.dest[slot] as number;
   if (here === dest) {
+    if (ride !== undefined && ride.kind === "stall") {
+      startBuying(world, slot);
+      return;
+    }
     g.state[slot] = GuestState.WANDERING;
     g.dest[slot] = NO_DEST;
     return;
@@ -472,7 +511,8 @@ function leave(world: World, slot: number, routes: RouteCache): void {
 
 /**
  * Sends every guest inside the park home, as when the park closes: each one wandering, heading
- * somewhere (a ride included), queuing (it steps out of the queue), or lost starts LEAVING for the
+ * somewhere (a ride included), queuing (it steps out of the queue), buying at a stall (it goes
+ * without being served or paying), or lost starts LEAVING for the
  * entrance, thinking the park is closed. A guest keeps walking to the tile it is already heading
  * for, and then follows the route out. Guests on a ride finish it and leave when it unloads.
  * Guests already leaving are left alone, and so are guests still outside the gate, who are turned
@@ -489,7 +529,8 @@ export function sendGuestsHome(world: World): void {
       state !== GuestState.WANDERING &&
       state !== GuestState.HEADING &&
       state !== GuestState.LOST &&
-      state !== GuestState.QUEUING
+      state !== GuestState.QUEUING &&
+      state !== GuestState.BUYING
     ) {
       return;
     }
@@ -615,9 +656,23 @@ function leaveQueue(world: World, slot: number): void {
   if (position >= 0) ride.queue.splice(position, 1);
 }
 
-/** A guest that has stepped onto `ride`'s queue joins the back of it, or finds it full. */
+/**
+ * A guest that has stepped onto `ride`'s queue joins the back of it, or finds it full, or (if it
+ * was sent to a ride more intense than it likes, which it never chooses by itself) thinks the ride
+ * is too intense and wanders off.
+ */
 function joinQueue(world: World, slot: number, ride: RideRecord): void {
   const g = world.guests;
+  const type = typeById(ride.type);
+  if (
+    type !== undefined &&
+    type.kind === "ride" &&
+    type.intensity > (g.intensityPref[slot] as number) * 4 + INTENSITY_WINDOW
+  ) {
+    think(world, slot, THOUGHT.TOO_INTENSE);
+    clearRide(world, slot);
+    return;
+  }
   if (ride.queue.length >= queueCapacity(world, ride)) {
     think(world, slot, THOUGHT.QUEUE_TOO_LONG);
     clearRide(world, slot);
@@ -690,4 +745,214 @@ function riding(world: World, slot: number): void {
   const g = world.guests;
   const ride = findRide(world, g.ride[slot] as number);
   if (ride === undefined || !ride.riders.includes(g.id[slot] as number)) clearRide(world, slot);
+}
+
+/** The needs a stall can meet, as content names them. */
+export type Need = "hunger" | "thirst" | "bathroom";
+
+/**
+ * The guest's most pressing need at `NEED_SEEK_LEVEL` or more (hunger, then thirst, then the
+ * toilet, on a tie), or null if none is that pressing.
+ */
+function pressingNeed(g: GuestStore, slot: number): Need | null {
+  const hunger = g.hunger[slot] as number;
+  const thirst = g.thirst[slot] as number;
+  const bathroom = g.bathroom[slot] as number;
+  let need: Need | null = null;
+  let level = NEED_SEEK_LEVEL - 1;
+  if (hunger > level) {
+    need = "hunger";
+    level = hunger;
+  }
+  if (thirst > level) {
+    need = "thirst";
+    level = thirst;
+  }
+  if (bathroom > level) need = "bathroom";
+  return need;
+}
+
+/** What a guest thinks when it cannot find a stall for `need`. */
+function nothingFor(need: Need): number {
+  return need === "hunger"
+    ? THOUGHT.NOTHING_TO_EAT
+    : need === "thirst"
+      ? THOUGHT.NOTHING_TO_DRINK
+      : THOUGHT.NO_TOILETS;
+}
+
+/** What a guest thinks when it has been served at a stall that meets `need`. */
+function servedFor(need: Need): number {
+  return need === "hunger"
+    ? THOUGHT.GOOD_FOOD
+    : need === "thirst"
+      ? THOUGHT.REFRESHING
+      : THOUGHT.BETTER_NOW;
+}
+
+/**
+ * The open stall meeting `need` that a guest on tile `here` can walk to in the fewest steps along
+ * the paths (to its service tile, by the route cache's distance field), the lowest id on a tie, or
+ * undefined if it can reach none. A stall whose service tile has no path cannot be reached.
+ */
+export function nearestStall(
+  world: World,
+  here: number,
+  need: Need,
+  routes: RouteCache,
+): RideRecord | undefined {
+  const width = world.terrain.width;
+  let best: RideRecord | undefined;
+  let bestSteps = UNREACHABLE;
+  for (const ride of world.rides) {
+    if (ride.kind !== "stall" || !ride.open || ride.service === null) continue;
+    const type = typeById(ride.type);
+    if (type === undefined || type.kind !== "stall" || type.meets !== need) continue;
+    const steps = routes.distanceField(ride.service.y * width + ride.service.x)[here] as number;
+    if (steps < bestSteps) {
+      best = ride;
+      bestSteps = steps;
+    }
+  }
+  return best;
+}
+
+/**
+ * The ride the guest in `slot`, standing on tile `here`, would most like to go on, or undefined if
+ * none will do. A ride will do if it is open, its entrance can be reached along the paths, it is
+ * not the guest's `lastRide`, its intensity is within `INTENSITY_WINDOW` of the guest's preference
+ * (`intensityPref * 4`), and its queue is not full. Of those, the best scores
+ * `excitement - |intensity - preference| / 2 - 4 * steps to the entrance` (the halving rounds
+ * down); the lowest id wins a tie.
+ */
+export function bestRide(
+  world: World,
+  slot: number,
+  here: number,
+  routes: RouteCache,
+): RideRecord | undefined {
+  const g = world.guests;
+  const width = world.terrain.width;
+  const preference = (g.intensityPref[slot] as number) * 4;
+  const last = g.lastRide[slot] as number;
+  let best: RideRecord | undefined;
+  let bestScore = 0;
+  for (const ride of world.rides) {
+    if (ride.kind !== "ride" || !ride.open || ride.entrance === null || ride.id === last) continue;
+    const type = typeById(ride.type);
+    if (type === undefined || type.kind !== "ride") continue;
+    const gap = Math.abs(type.intensity - preference);
+    if (gap > INTENSITY_WINDOW) continue;
+    if (ride.queue.length >= queueCapacity(world, ride)) continue;
+    const steps = routes.distanceField(ride.entrance.y * width + ride.entrance.x)[here] as number;
+    if (steps === UNREACHABLE) continue;
+    const score = type.excitement - (gap >> 1) - steps * 4;
+    if (best === undefined || score > bestScore) {
+      best = ride;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+/** Whether the park has a ride (not a stall) open. */
+function anyRideOpen(world: World): boolean {
+  for (const ride of world.rides) if (ride.kind === "ride" && ride.open) return true;
+  return false;
+}
+
+/**
+ * A wandering guest's turn, in a park with rides or stalls, before it thinks of walking about:
+ *
+ *  1. If hunger, thirst or the need for the toilet is at `NEED_SEEK_LEVEL` or more, it heads for
+ *     the nearest open stall that meets the most pressing of them (see `nearestStall`). If there is
+ *     none, it thinks so (at most once a `NEED_SEEK_THOUGHT_INTERVAL`, unless it has thought of
+ *     something else since) and carries on.
+ *  2. If any ride is open, it draws one number from `rng`: on one draw in two it goes for the ride
+ *     it likes best (see `bestRide`), if any will do.
+ *
+ * Returns true if the guest is now HEADING for a stall or ride (and has taken its first step).
+ * Draws nothing in a park with no open ride, so stalls alone leave the guest stream as it was.
+ */
+function seekStallOrRide(world: World, slot: number, rng: Rng, routes: RouteCache): boolean {
+  const here = ownIndex(world, slot);
+  if (here < 0) return false;
+  const g = world.guests;
+  const need = pressingNeed(g, slot);
+  if (need !== null) {
+    const stall = nearestStall(world, here, need, routes);
+    if (stall !== undefined && stall.service !== null) {
+      g.ride[slot] = stall.id;
+      g.dest[slot] = stall.service.y * world.terrain.width + stall.service.x;
+      g.state[slot] = GuestState.HEADING;
+      g.sinceAction[slot] = 0;
+      head(world, slot, routes);
+      return true;
+    }
+    const thought = nothingFor(need);
+    if (
+      g.thought[slot] !== thought ||
+      world.tick - (g.thoughtTick[slot] as number) >= NEED_SEEK_THOUGHT_INTERVAL
+    ) {
+      think(world, slot, thought);
+    }
+  }
+  if (!anyRideOpen(world) || rng.int(2) !== 0) return false;
+  const ride = bestRide(world, slot, here, routes);
+  if (ride === undefined || !sendGuestToRide(world, slot, ride.id)) return false;
+  head(world, slot, routes);
+  return true;
+}
+
+/** A guest that has reached its stall's service tile stands there to be served. */
+function startBuying(world: World, slot: number): void {
+  const g = world.guests;
+  g.state[slot] = GuestState.BUYING;
+  g.dest[slot] = NO_DEST;
+  g.queueTicks[slot] = 0;
+  g.sinceAction[slot] = 0;
+}
+
+/**
+ * A guest buying at a stall stands still for the stall type's `serveTicks`, then pays its price
+ * if it can: out of its cash into the park's, `park.income.shops`, `park.monthly.shops` and the
+ * stall's stats; the need the stall meets drops by the type's `amount` (not below 0), it is
+ * `STALL_HAPPINESS` happier, and it thinks well of it. A guest that cannot pay thinks it cannot
+ * afford it and is not served. Either way it then wanders. If the stall has gone or closed, the
+ * guest wanders without being served or paying (closing and demolishing let such guests go at
+ * once; this is the same rule, for safety).
+ */
+function buying(world: World, slot: number): void {
+  const g = world.guests;
+  const stall = findRide(world, g.ride[slot] as number);
+  const type = stall === undefined ? undefined : typeById(stall.type);
+  if (stall === undefined || !stall.open || type === undefined || type.kind !== "stall") {
+    clearRide(world, slot);
+    return;
+  }
+  const ticks = (g.queueTicks[slot] as number) + 1;
+  if (ticks < type.serveTicks) {
+    g.queueTicks[slot] = ticks;
+    return;
+  }
+  const price = stall.price;
+  if ((g.cash[slot] as number) < price) {
+    think(world, slot, THOUGHT.CANT_AFFORD_RIDE);
+    clearRide(world, slot);
+    return;
+  }
+  const { park } = world;
+  g.cash[slot] = (g.cash[slot] as number) - price;
+  world.finance.cash += price;
+  park.income.shops += price;
+  park.monthly.shops += price;
+  stall.stats.income += price;
+  stall.stats.monthIncome += price;
+  stall.stats.customers++;
+  stall.stats.monthCustomers++;
+  const need = g[type.meets];
+  need[slot] = Math.max(0, (need[slot] as number) - type.amount);
+  g.happiness[slot] = Math.min(255, (g.happiness[slot] as number) + STALL_HAPPINESS);
+  think(world, slot, servedFor(type.meets));
+  clearRide(world, slot);
 }

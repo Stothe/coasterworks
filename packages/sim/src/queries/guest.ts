@@ -3,9 +3,11 @@ import { defineQuery } from "../commands/define.js";
 import { findGuest, forEachGuest } from "../guests/guests.js";
 import { THOUGHTS, thoughtText } from "../guests/thoughts.js";
 import { guestName } from "../guests/names.js";
+import { GuestState } from "../guests/types.js";
+import { findRide } from "../rides/rides.js";
 import type { World } from "../world/types.js";
 
-/** What a guest is doing, in words, indexed by `GuestState` (entering is 0, gone is 5). */
+/** What a guest is doing, in words, indexed by `GuestState` (entering is 0, gone is 5, buying 8). */
 const STATE_NAMES = [
   "entering",
   "wandering",
@@ -15,6 +17,7 @@ const STATE_NAMES = [
   "gone",
   "queuing",
   "riding",
+  "buying",
 ] as const;
 
 /** The states a list can be filtered by: all of them but "gone", which no live guest is in. */
@@ -26,7 +29,11 @@ const FILTER_STATES = [
   "lost",
   "queuing",
   "riding",
+  "buying",
 ] as const;
+
+/** What a guest is doing with the ride or stall in its `ride`. */
+type RideDoing = "heading" | "queuing" | "riding" | "buying";
 
 interface GuestView {
   id: number;
@@ -43,6 +50,28 @@ interface GuestView {
   nausea: number;
   cash: number;
   thought: { id: number; text: string } | null;
+  ride: { id: number; name: string; doing: RideDoing } | null;
+}
+
+/** The ride or stall the guest in `slot` is heading for, queuing for, on, or buying at, or null. */
+function rideViewOf(world: World, slot: number): GuestView["ride"] {
+  const g = world.guests;
+  const id = g.ride[slot] as number;
+  if (id === 0) return null;
+  const state = g.state[slot];
+  const doing: RideDoing | null =
+    state === GuestState.HEADING
+      ? "heading"
+      : state === GuestState.QUEUING
+        ? "queuing"
+        : state === GuestState.RIDING
+          ? "riding"
+          : state === GuestState.BUYING
+            ? "buying"
+            : null;
+  const ride = findRide(world, id);
+  if (doing === null || ride === undefined) return null;
+  return { id, name: ride.name, doing };
 }
 
 /** A fresh plain-object description of the guest in `slot`. */
@@ -66,11 +95,12 @@ function viewOf(world: World, slot: number): GuestView {
     nausea: g.nausea[slot] as number,
     cash: g.cash[slot] as number,
     thought: thought === 0 ? null : { id: thought, text: thoughtText(thought) },
+    ride: rideViewOf(world, slot),
   };
 }
 
 const GUEST_FIELDS =
-  "`{ id, name, x, y, tile: { x, y }, state, happiness, energy, hunger, thirst, bathroom, nausea, cash, thought }`. `x` and `y` are in 1/32 of a tile (the middle of tile t is t * 32 + 16) and `tile` is the tile they fall in, which is just off the map (-1 or the map's width or height) for a guest still coming in from the entrance. `state` is entering, wandering, heading, leaving, lost, queuing (in a ride's queue), or riding. Needs and moods run 0 to 255; `cash` is in cents; `thought` is the guest's last thought as `{ id, text }`, or null.";
+  "`{ id, name, x, y, tile: { x, y }, state, happiness, energy, hunger, thirst, bathroom, nausea, cash, thought, ride }`. `x` and `y` are in 1/32 of a tile (the middle of tile t is t * 32 + 16) and `tile` is the tile they fall in, which is just off the map (-1 or the map's width or height) for a guest still coming in from the entrance. `state` is entering, wandering, heading, leaving, lost, queuing (in a ride's queue), riding, or buying (being served at a stall). Needs and moods run 0 to 255; `cash` is in cents; `thought` is the guest's last thought as `{ id, text }`, or null; `ride` is the ride or stall it is busy with as `{ id, name, doing }`, where `doing` is heading (on its way there), queuing, riding, or buying, or null when it is doing none of those.";
 
 export const guestList = defineQuery({
   name: "guest_list",

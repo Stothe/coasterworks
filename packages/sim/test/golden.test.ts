@@ -30,6 +30,10 @@ const scenario = () => parseScenario(JSON.parse(scenarioText));
  *    ground away from the paths before the park opens, prices, renames, opens and closes them,
  *    demolishes the stall (with an undo and a redo, which hands the refund back and takes it again)
  *    and builds a drinks stand where it stood. Guests only walk on paths, so they behave as before.
+ *  - Plan D2 Task 4 (guests choose rides and stalls): re-recorded. The drinks stand now stands
+ *    beside the footpath at (17, 27), turned to serve onto the path tile (16, 27), and is opened
+ *    before the park opens, so thirsty guests walk to it, are served, and pay; ride and shop takings
+ *    go into the month's books. The carousel stays closed, so no guest draws for a ride choice.
  */
 describe("golden scenario 1", () => {
   it("ends on the recorded hash", () => {
@@ -127,14 +131,21 @@ describe("runScenario", () => {
     // The snack stand (1) was demolished, the demolish undone and redone; its id is not reused.
     expect(world.rides.map((r) => [r.id, r.type, r.rot, r.name, r.open, r.price])).toEqual([
       [2, "carousel", 1, "Carousel 1", false, 150],
-      [3, "drinks_stand", 2, "Drinks Stand 1", false, 120],
+      [3, "drinks_stand", 1, "Drinks Stand 1", true, 120],
     ]);
     expect(world.nextRideId).toBe(4);
-    // The carousel turned once stands on (4..6, 22..24); the drinks stand on (9, 24).
+    // The carousel turned once stands on (4..6, 22..24); the drinks stand on (17, 27), where the
+    // snack stand stood is free again.
     const occupant = (x: number, y: number) => world.terrain.occupant[y * 32 + x];
-    expect([occupant(4, 22), occupant(6, 24), occupant(9, 24), occupant(7, 22)]).toEqual([
-      2, 2, 3, 0,
-    ]);
+    expect([
+      occupant(4, 22),
+      occupant(6, 24),
+      occupant(17, 27),
+      occupant(9, 24),
+      occupant(7, 22),
+    ]).toEqual([2, 2, 3, 0, 0]);
+    expect(world.rides[1]?.service).toEqual({ x: 16, y: 27 });
+    expect(world.terrain.path[27 * 32 + 16]).not.toBe(0);
     expect(world.rideVersion).toBeGreaterThan(0);
   });
 
@@ -196,8 +207,20 @@ describe("runScenario", () => {
     expect(booked + summary.thisMonth.entry).toBe(sim.world.park.income.entry);
     // The scenario's carousel and drinks stand cost a little to run each day; nothing else is spent.
     expect(summary.thisMonth.running).toBeGreaterThan(0);
-    expect(summary.thisMonth.net).toBe(summary.thisMonth.entry - summary.thisMonth.running);
+    const month = sim.world.park.monthly;
+    expect(summary.thisMonth.net).toBe(month.entry + month.shops - month.running);
     expect(sim.world.park.income.entry).toBe(sim.world.park.totalAdmissions * 300);
+  });
+
+  it("lets thirsty guests buy drinks, so the hash is guarding stall visits too", () => {
+    const { world } = runScenario(scenario());
+    const stand = world.rides.find((ride) => ride.type === "drinks_stand");
+    expect(stand?.stats.customers).toBeGreaterThan(0);
+    expect(stand?.stats.income).toBe((stand?.stats.customers ?? 0) * 120);
+    expect(world.park.income.shops).toBe(stand?.stats.income);
+    expect(world.park.income.rides).toBe(0);
+    const booked = world.park.history.reduce((total, r) => total + r.shops, 0);
+    expect(booked + world.park.monthly.shops).toBe(world.park.income.shops);
   });
 
   it("throws with the step number and the reason when a step fails", () => {

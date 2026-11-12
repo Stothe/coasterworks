@@ -7,6 +7,7 @@ import { THOUGHT } from "../src/guests/thoughts.js";
 import { GuestState, NO_TILE } from "../src/guests/types.js";
 import { QUEUE_PER_TILE, queueCapacity } from "../src/rides/queue.js";
 import { findRide } from "../src/rides/rides.js";
+import { MAX_ENTRY_FEE } from "../src/park/types.js";
 import { RidePhase } from "../src/rides/types.js";
 import { validateWorldInvariants } from "../src/save/invariants.js";
 import { DAYS_PER_MONTH, TICKS_PER_DAY } from "../src/time.js";
@@ -504,14 +505,16 @@ describe("running costs", () => {
     expect(world.park.history).toHaveLength(1);
     expect(world.park.history[0]?.running).toBe(monthly);
     expect(world.park.monthly.running).toBe(0);
-    // Guests may have come in meanwhile; nobody rode, and the park has no loan.
-    expect(world.finance.cash).toBe(cash - monthly + world.park.income.entry);
+    // Guests may have come in meanwhile, and ridden or bought; the park has no loan.
+    const { income } = world.park;
+    expect(world.finance.cash).toBe(cash - monthly + income.entry + income.rides + income.shops);
     sim.step(TICKS_PER_DAY * DAYS_PER_MONTH);
     expect(world.park.history[1]?.running).toBe(monthly);
   });
 
   it("clear a ride's month stats when the month closes", () => {
-    const sim = makeRidePark();
+    // At the highest fee nobody else comes in to ride over the month.
+    const sim = makeRidePark({ fee: MAX_ENTRY_FEE });
     const { world } = sim;
     queueGuest(world);
     sim.step(1);

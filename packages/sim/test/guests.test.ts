@@ -93,6 +93,7 @@ describe("the guest store", () => {
       GONE: 5,
       QUEUING: 6,
       RIDING: 7,
+      BUYING: 8,
     });
   });
 });
@@ -376,6 +377,13 @@ describe("thoughts", () => {
       RIDE_SICK: 13,
       QUEUE_TOO_LONG: 14,
       CANT_AFFORD_RIDE: 15,
+      TOO_INTENSE: 16,
+      GOOD_FOOD: 17,
+      REFRESHING: 18,
+      BETTER_NOW: 19,
+      NOTHING_TO_EAT: 20,
+      NOTHING_TO_DRINK: 21,
+      NO_TOILETS: 22,
     });
     expect(thoughtText(THOUGHT.HUNGRY)).toBe("I'm hungry");
     expect(thoughtText(THOUGHT.QUEUE_TOO_LONG)).toBe("This queue is too long");

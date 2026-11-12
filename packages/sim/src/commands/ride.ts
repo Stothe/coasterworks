@@ -103,7 +103,7 @@ interface DemolishUndo {
 export const rideDemolish = defineCommand({
   name: "ride_demolish",
   description:
-    "Demolishes a ride or stall by id and frees its tiles. Guests queuing for it step out of the queue and wander; guests on it are let off at once at its exit (or, if the exit has no path, on the nearest path tile), without finishing the ride. Refunds half of what the type cost to build, rounded down to the cent, straight into cash (the command's own cost is 0). Undoing it puts the ride back as it was, with the same id, name, price and stats, but empty and idle (the guests it let go stay where they are), and takes the refund back, so the undo is refused if the park no longer has that much cash.",
+    "Demolishes a ride or stall by id and frees its tiles. Guests queuing for it step out of the queue and wander; guests on it are let off at once at its exit (or, if the exit has no path, on the nearest path tile), without finishing the ride. Guests buying at a stall, or on their way to it, wander off unserved and are not charged. Refunds half of what the type cost to build, rounded down to the cent, straight into cash (the command's own cost is 0). Undoing it puts the ride back as it was, with the same id, name, price and stats, but empty and idle (the guests it let go stay where they are), and takes the refund back, so the undo is refused if the park no longer has that much cash.",
   category: "ride",
   input: idSchema,
   undoable: true,
@@ -134,7 +134,7 @@ function openCommand(open: boolean) {
     name: open ? "ride_open" : "ride_close",
     description: open
       ? "Opens a ride or stall by id to guests. Opening an open ride changes nothing. Free."
-      : "Closes a ride or stall by id to guests: guests queuing for it step out of the queue and wander, and guests on it finish the ride they are on. Closing a closed ride changes nothing. Free. Undoing it reopens the ride but does not bring the queue back.",
+      : "Closes a ride or stall by id to guests: guests queuing for it step out of the queue and wander, and guests on it finish the ride they are on. At a stall, guests being served or on their way to it wander off unserved and are not charged. Closing a closed ride changes nothing. Free. Undoing it reopens the ride but does not bring the queue back.",
     category: "ride",
     input: idSchema,
     undoable: true,

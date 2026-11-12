@@ -19,12 +19,17 @@ export const GuestState = {
   QUEUING: 6,
   /** On the ride `ride`, out of sight at the middle of its footprint until the ride unloads. */
   RIDING: 7,
+  /**
+   * At the stall `ride`, standing on its service tile while it is served (for the stall type's
+   * `serveTicks`, counted in `queueTicks`), then paying and going back to WANDERING.
+   */
+  BUYING: 8,
 } as const;
 
 export type GuestState = (typeof GuestState)[keyof typeof GuestState];
 
 /** Highest value of `GuestState`. */
-export const MAX_GUEST_STATE = GuestState.RIDING;
+export const MAX_GUEST_STATE = GuestState.BUYING;
 
 /** The value of both `tx` and `ty` when a guest has no tile it is walking to. */
 export const NO_TILE = -1;
@@ -145,7 +150,10 @@ export interface GuestStore {
    * gives up and goes home. 0 for a guest that is not lost.
    */
   lostTicks: Int32Array;
-  /** Id of the ride the guest is heading for, queuing for, or riding; 0 for none. */
+  /**
+   * Id of the ride the guest is heading for, queuing for, or riding, or of the stall it is heading
+   * for or buying at; 0 for none.
+   */
   ride: Int32Array;
   /**
    * The ride intensity the guest likes, in units of 4 rating points: the preference is
@@ -154,7 +162,10 @@ export interface GuestStore {
   intensityPref: Uint8Array;
   /** Id of the last ride the guest got off; 0 for none yet. */
   lastRide: Int32Array;
-  /** Ticks the guest has spent in its current queue; 0 when it is not queuing. */
+  /**
+   * Ticks the guest has spent in its current queue, or (BUYING) being served at its stall; 0 when it
+   * is doing neither.
+   */
   queueTicks: Int32Array;
 }
 

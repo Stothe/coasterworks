@@ -157,8 +157,24 @@ export function unloadRide(world: World, ride: RideRecord): void {
   ride.riders = [];
 }
 
-/** Every guest in `ride`'s queue steps out of it and wanders; the queue is empty after. */
+/**
+ * Every guest in `ride`'s queue steps out of it and wanders; the queue is empty after. For a stall,
+ * which has no queue, every guest buying at it or on its way to it wanders instead, unserved and
+ * not charged.
+ */
 export function releaseQueue(world: World, ride: RideRecord): void {
+  if (ride.kind === "stall") {
+    const g = world.guests;
+    forEachGuest(world, (slot) => {
+      const state = g.state[slot];
+      if (
+        (state === GuestState.BUYING || state === GuestState.HEADING) &&
+        g.ride[slot] === ride.id
+      ) {
+        clearRide(world, slot);
+      }
+    });
+  }
   for (const id of ride.queue) {
     const slot = slotOfGuest(world, id);
     if (slot >= 0) clearRide(world, slot);

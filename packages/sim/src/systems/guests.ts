@@ -2,6 +2,7 @@ import { compactGuests, moveToward, spawnGuest } from "../guests/guests.js";
 import { decide, guestRoutes, tickNeeds } from "../guests/behavior.js";
 import { DEST_TURNED_AWAY, GUEST_CAP, GuestState } from "../guests/types.js";
 import { DEFAULT_RATING, MAX_ENTRY_FEE, MAX_RATING } from "../park/types.js";
+import type { RideRecord } from "../rides/types.js";
 import type { Rng } from "../rng.js";
 import { TICKS_PER_DAY } from "../time.js";
 import type { World } from "../world/types.js";
@@ -18,6 +19,10 @@ const CROWDING_FREE_GUESTS = 1500;
 const CROWDING_PER_POINT = 5;
 const CROWDING_MAX_PENALTY = 100;
 
+/** Each different type of ride open adds this to the rating's target, up to `VARIETY_MAX`. */
+export const VARIETY_PER_TYPE = 10;
+export const VARIETY_MAX = 60;
+
 /*
  * Each tick an open park has this chance of a group of guests arriving:
  * `rating / 999 * (1 - fee / $100.00) * 2%`. To keep it in integers, a roll `r` from
@@ -32,10 +37,17 @@ const MOST_IN_A_GROUP = 3;
 /**
  * The park rating one day on: 1/16 of the way (at least a point, so it gets there) from `rating`
  * to a target that is the guests' average happiness scaled to 999, less a point for every 5 guests
- * past 1,500 (at most 100). With no guests in the park the target is the default 500. Clamped to
- * 0..999. `happinessSum` is the total happiness of the `inPark` guests.
+ * past 1,500 (at most 100), plus `VARIETY_PER_TYPE` (10) for each of the `rideTypes` different
+ * types of ride open (at most `VARIETY_MAX`, 60). With no guests in the park the target is the
+ * default 500 plus the same variety. Clamped to 0..999. `happinessSum` is the total happiness of the
+ * `inPark` guests.
  */
-export function nextRating(rating: number, inPark: number, happinessSum: number): number {
+export function nextRating(
+  rating: number,
+  inPark: number,
+  happinessSum: number,
+  rideTypes = 0,
+): number {
   let target = DEFAULT_RATING;
   if (inPark > 0) {
     const crowding = Math.min(
@@ -44,11 +56,32 @@ export function nextRating(rating: number, inPark: number, happinessSum: number)
     );
     target = Math.floor((happinessSum * MAX_RATING) / (255 * inPark)) - crowding;
   }
+  target += Math.min(VARIETY_MAX, rideTypes * VARIETY_PER_TYPE);
   target = Math.min(MAX_RATING, Math.max(0, target));
   const gap = target - rating;
   let step = Math.trunc(gap / RATING_STEP_DIVISOR);
   if (step === 0 && gap !== 0) step = gap < 0 ? -1 : 1;
   return Math.min(MAX_RATING, Math.max(0, rating + step));
+}
+
+/**
+ * How many different types of ride (not stalls) are open: two open carousels and a closed swing
+ * tower count 1.
+ */
+export function openRideTypes(world: World): number {
+  const rides = world.rides;
+  let count = 0;
+  for (let i = 0; i < rides.length; i++) {
+    const ride = rides[i] as RideRecord;
+    if (ride.kind !== "ride" || !ride.open) continue;
+    let seen = false;
+    for (let j = 0; j < i && !seen; j++) {
+      const other = rides[j] as RideRecord;
+      seen = other.kind === "ride" && other.open && other.type === ride.type;
+    }
+    if (!seen) count++;
+  }
+  return count;
 }
 
 /** With the chance the rating and fee give, brings a group of one to three guests to the gate. */
@@ -68,7 +101,8 @@ function admitArrivals(world: World, rng: Rng): void {
  *  1. If the store has gaps from guests removed since the last tick, packs it.
  *  2. Maybe brings a group of guests to the gate.
  *  3. For every guest in slot order: ages its needs, lets it decide, and walks it a step.
- *  4. Counts the guests in the park (and their happiness), and once a day moves the park rating.
+ *  4. Counts the guests in the park (and their happiness), and once a day moves the park rating
+ *     (see `nextRating`, which also counts the types of ride open).
  *  5. Packs the store again if guests left during the tick.
  *
  * All the randomness is drawn, in that order, from the world's guest stream, so the same park
@@ -104,6 +138,7 @@ export const guestSystem: System = {
         state === GuestState.LOST ||
         state === GuestState.QUEUING ||
         state === GuestState.RIDING ||
+        state === GuestState.BUYING ||
         (state === GuestState.LEAVING && g.dest[slot] !== DEST_TURNED_AWAY)
       ) {
         inPark++;
@@ -112,7 +147,7 @@ export const guestSystem: System = {
     }
     world.park.guestsInPark = inPark;
     if (world.tick % RATING_INTERVAL === 0) {
-      world.park.rating = nextRating(world.park.rating, inPark, happinessSum);
+      world.park.rating = nextRating(world.park.rating, inPark, happinessSum, openRideTypes(world));
     }
     if (g.fragmented) compactGuests(world);
   },

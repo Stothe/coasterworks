@@ -1,14 +1,33 @@
+import { typeById } from "@coasterworks/content";
 import { describe, expect, it } from "vitest";
 import { GUEST_CAP, GuestState, PATH_FOOT, Sim, createWorld } from "../src/index.js";
 import { spawnGuest } from "../src/guests/guests.js";
 
+/** Rides and stalls in the packed park: type, top-left tile, turn. */
+const ATTRACTIONS = [
+  { type: "carousel", x: 10, y: 10, rot: 0 },
+  { type: "swing_tower", x: 40, y: 40, rot: 0 },
+  { type: "big_wheel", x: 50, y: 8, rot: 0 },
+  { type: "snack_stand", x: 20, y: 30, rot: 0 },
+  { type: "drinks_stand", x: 44, y: 24, rot: 0 },
+  { type: "restrooms", x: 28, y: 50, rot: 0 },
+] as const;
+
 /**
  * 2,000 guests on a 64 by 64 map that is path from edge to edge, the busiest park the sim allows
  * and the worst case for routing: every tile is walkable and every guest has somewhere to go.
- * The gate is open, the rating is 0 (nobody else arrives) and the fee is nothing.
+ * Three rides and three stalls stand in it, open, on ground cleared of path, and the guests'
+ * needs are spread over the whole range, so many of them go to the stalls and rides as well as
+ * walking about. The gate is open, the rating is 0 (nobody else arrives) and the fee is nothing.
  */
 function packedPark(): Sim {
-  const world = createWorld({ width: 64, height: 64, seed: 11, name: "Packed" });
+  const world = createWorld({
+    width: 64,
+    height: 64,
+    seed: 11,
+    name: "Packed",
+    cash: 1_000_000_00,
+  });
   const sim = new Sim(world);
   world.terrain.path.fill(PATH_FOOT);
   // The entrance tile itself carries no path; the sim treats it as walkable all the same.
@@ -18,12 +37,29 @@ function packedPark(): Sim {
   world.park.entryFee = 0;
   world.park.rating = 0;
   world.pathVersion++;
+  for (const { type, x, y, rot } of ATTRACTIONS) {
+    const kind = typeById(type)?.kind;
+    const { w, h } = typeById(type)?.footprint ?? { w: 1, h: 1 };
+    for (let ty = y; ty < y + h; ty++) world.terrain.path.fill(0, ty * 64 + x, ty * 64 + x + w);
+    world.pathVersion++;
+    const built = sim.execute(kind === "stall" ? "stall_build" : "ride_build", { type, x, y, rot });
+    if (!built.ok) throw new Error(built.error);
+  }
+  for (const ride of world.rides) {
+    const opened = sim.execute("ride_open", { id: ride.id });
+    if (!opened.ok) throw new Error(opened.error);
+  }
 
   const rng = world.rngStreams.guests;
   for (let i = 0; i < GUEST_CAP; i++) {
     const slot = spawnGuest(world, rng);
-    const x = rng.int(64);
-    const y = rng.int(63);
+    // On a path tile: not on the ground cleared for a ride or stall.
+    let x = rng.int(64);
+    let y = rng.int(63);
+    while (world.terrain.path[y * 64 + x] === 0) {
+      x = rng.int(64);
+      y = rng.int(63);
+    }
     const g = world.guests;
     g.x[slot] = x * 32 + 16;
     g.y[slot] = y * 32 + 16;
@@ -31,6 +67,9 @@ function packedPark(): Sim {
     g.ty[slot] = y;
     g.state[slot] = GuestState.WANDERING;
     g.dest[slot] = -1;
+    g.hunger[slot] = rng.int(256);
+    g.thirst[slot] = rng.int(256);
+    g.bathroom[slot] = rng.int(256);
   }
   return sim;
 }
@@ -51,6 +90,9 @@ describe("guest performance", () => {
     }
     expect(heading).toBeGreaterThan(200);
     expect(elapsed).toBeLessThan(500);
+    // And, given a little longer, riding every ride and buying at every stall.
+    sim.step(400);
+    for (const ride of sim.world.rides) expect(ride.stats.customers).toBeGreaterThan(0);
   });
 
   // Run with PERF=1: the stricter budget is a benchmark, not something every CI machine can promise.

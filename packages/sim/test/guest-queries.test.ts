@@ -66,6 +66,7 @@ describe("guest_list", () => {
       nausea: 7,
       cash: 4321,
       thought: null,
+      ride: null,
     });
   });
 

@@ -12,7 +12,7 @@ import {
 } from "../guests/types.js";
 import { HISTORY_MONTHS, MAX_ENTRY_FEE, MAX_RATING, type ParkState } from "../park/types.js";
 import { PATH_QUEUE, edgeSide } from "../paths/paths.js";
-import { accessTiles, footprintRect } from "../rides/rides.js";
+import { accessTiles, findRide, footprintRect } from "../rides/rides.js";
 import {
   MAX_RIDE_ID,
   MAX_RIDE_NAME,
@@ -220,8 +220,19 @@ function guestProblem(world: World): string | null {
     if ((g.queueTicks[slot] as number) > QUEUE_PATIENCE) {
       return `${label} has queueTicks ${g.queueTicks[slot]}, more than the patience of ${QUEUE_PATIENCE}`;
     }
-    if ((state === GuestState.QUEUING || state === GuestState.RIDING) && g.ride[slot] === 0) {
-      return `${label} is ${state === GuestState.QUEUING ? "queuing" : "riding"} with no ride`;
+    if (
+      (state === GuestState.QUEUING ||
+        state === GuestState.RIDING ||
+        state === GuestState.BUYING) &&
+      g.ride[slot] === 0
+    ) {
+      const what =
+        state === GuestState.QUEUING
+          ? "queuing"
+          : state === GuestState.RIDING
+            ? "riding"
+            : "buying";
+      return `${label} is ${what} with no ride`;
     }
 
     // A guest is on the map or one tile outside it, where the entrance lane is.
@@ -353,6 +364,13 @@ function rideProblem(world: World): string | null {
     }
     if (state === GuestState.RIDING && !listed.has(id)) {
       return `guest ${id} is riding ride ${g.ride[slot]} but is not among its riders`;
+    }
+    const rideId = g.ride[slot] as number;
+    if (state === GuestState.BUYING && findRide(world, rideId)?.kind !== "stall") {
+      return `guest ${id} is buying at ${rideId}, which is not a stall in the park`;
+    }
+    if (state === GuestState.HEADING && rideId !== 0 && findRide(world, rideId) === undefined) {
+      return `guest ${id} is heading for ride ${rideId}, which is not in the park`;
     }
   }
 

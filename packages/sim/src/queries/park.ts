@@ -59,7 +59,7 @@ export const parkBounds = defineQuery({
 export const financeSummary = defineQuery({
   name: "finance_summary",
   description:
-    "Summarizes the park's money, all in cents. `cash` and `loan`; `thisMonth` { entry, rides, shops, running, wages, net } for the month so far, where `net` is income less running costs and wages; `lastMonth`, the month that has just ended (or null in the first month); and `history`, up to the last 12 finished months, oldest first, each { year, month, entry, rides, shops, running, wages, net } with `month` 0-based (March = 0). Loan interest is taken from `cash` at the start of each month but is not part of `running` or `net`.",
+    "Summarizes the park's money, all in cents. `cash` and `loan`; `thisMonth` { entry, rides, shops, running, wages, net } for the month so far, where `net` is income less running costs and wages; `lastMonth`, the month that has just ended (or null in the first month); and `history`, up to the last 12 finished months, oldest first, each { year, month, entry, rides, shops, running, wages, net } with `month` 0-based (March = 0). `entry` is entry fees, `rides` what guests paid to ride, `shops` what they paid at stalls, `running` the rides' and stalls' running costs (charged a share each day, a month's worth over a month). `allTime` { entry, rides, shops, running, wages } is the same since the park began. `rides` lists every ride and stall in id order as { id, name, kind, income, customers, runningCost, monthIncome, monthCustomers }: all-time takings, customers and running costs, and this month's takings and customers. Loan interest is taken from `cash` at the start of each month but is not part of `running` or `net`.",
   category: "finance",
   input: z.object({}),
   run: (world) => {
@@ -78,6 +78,23 @@ export const financeSummary = defineQuery({
       },
       lastMonth: history.at(-1) ?? null,
       history,
+      allTime: {
+        entry: park.income.entry,
+        rides: park.income.rides,
+        shops: park.income.shops,
+        running: park.expenses.running,
+        wages: park.expenses.wages,
+      },
+      rides: world.rides.map((ride) => ({
+        id: ride.id,
+        name: ride.name,
+        kind: ride.kind,
+        income: ride.stats.income,
+        customers: ride.stats.customers,
+        runningCost: ride.stats.runningCost,
+        monthIncome: ride.stats.monthIncome,
+        monthCustomers: ride.stats.monthCustomers,
+      })),
     };
   },
 });
