@@ -660,7 +660,9 @@ describe("save integrity", () => {
     expect(loadedAnyway).toBeGreaterThan(0);
     // Flips in the compressed data that change what it unzips to are refused.
     expect(refusedInBody).toBeGreaterThan(0);
-  });
+    // Three loads for every byte of the save: about 0.3 s on Linux and 2 to 3 s on a macOS CI
+    // runner, and over the default 5 s there when the rest of the suite is busy.
+  }, 30_000);
 
   it("refuses every change to the gzip trailer, though the content is intact", () => {
     const bytes = serializeWorld(playedSim().world);
