@@ -6,7 +6,8 @@ import {
   type ContentType,
   type Rot,
 } from "@coasterworks/content";
-import { getCorner } from "../terrain/terrain.js";
+import { MAX_PATH_SLOPE } from "../paths/paths.js";
+import { getCorner, tileCorners } from "../terrain/terrain.js";
 import type { Rect, Terrain, World } from "../world/types.js";
 import { MAX_RIDE_ID, RIDE_CAP, RidePhase, type RideRecord, type Tile } from "./types.js";
 
@@ -79,6 +80,18 @@ function isParkEntrance(world: World, x: number, y: number): boolean {
   return entrance !== null && entrance.x === x && entrance.y === y;
 }
 
+/** The reason for an entrance, exit or service tile too steep for the path that must reach it. */
+export const ACCESS_TOO_STEEP = "The way in or out is too steep for a path";
+
+/** Flat indexes of every ride's and stall's access tiles: entrances, exits and service tiles. */
+export function accessIndexes(world: World): Set<number> {
+  const out = new Set<number>();
+  for (const ride of world.rides) {
+    for (const tile of rideAccessTiles(ride)) out.add(tile.y * world.terrain.width + tile.x);
+  }
+  return out;
+}
+
 /**
  * The reason `type` cannot be placed with its rotated top-left at (x, y), or null if it can.
  * Checked in this order:
@@ -144,10 +157,16 @@ export function canPlaceRide(
     if (
       (t.occupant[index] as number) !== 0 ||
       (t.water[index] as number) > 0 ||
+      reserved.has(index) ||
       isParkEntrance(world, tile.x, tile.y)
     ) {
       return SOMETHING_HERE;
     }
+  }
+  // Guests reach a ride by a path on its access tiles, so each must be able to take one.
+  for (const tile of access) {
+    const corners = tileCorners(t, tile.x, tile.y);
+    if (Math.max(...corners) - Math.min(...corners) > MAX_PATH_SLOPE) return ACCESS_TOO_STEEP;
   }
 
   if (world.rides.length >= RIDE_CAP) return TOO_MANY_RIDES;

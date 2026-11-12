@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { MAX_PATH_SLOPE, PATH_NONE } from "../paths/paths.js";
+import { accessIndexes } from "../rides/rides.js";
 import { forEachCornerInRect, inBounds, tileBase } from "../terrain/terrain.js";
 import { MAX_HEIGHT, type Rect, type World } from "../world/types.js";
 import { defineCommand } from "./define.js";
@@ -88,6 +89,8 @@ export function checkPathSlopes(world: World, changes: readonly HeightChange[]):
     return after.get(index) ?? (t.corners[index] as number);
   };
   const checked = new Set<number>();
+  // A ride's entrance, exit or service tile must stay able to take the path that reaches it.
+  const access = world.rides.length > 0 ? accessIndexes(world) : null;
   for (const [index] of changes) {
     const cx = index % stride;
     const cy = (index - cx) / stride;
@@ -99,7 +102,7 @@ export function checkPathSlopes(world: World, changes: readonly HeightChange[]):
         checked.add(tile);
         // A ride stands on level ground: the ground under it is not to be reshaped.
         if ((t.occupant[tile] as number) !== 0) return RIDE_IN_THE_WAY;
-        if (t.path[tile] === PATH_NONE) continue;
+        if (t.path[tile] === PATH_NONE && !access?.has(tile)) continue;
         const hs = [height(tx, ty), height(tx + 1, ty), height(tx + 1, ty + 1), height(tx, ty + 1)];
         if (Math.max(...hs) - Math.min(...hs) > MAX_PATH_SLOPE) return PATH_TOO_STEEP;
       }
@@ -294,7 +297,9 @@ export const terrainSetWater = defineCommand({
     let aboveGround = true;
     let blocked = false;
     const { entrance } = world.park;
+    const access = world.rides.length > 0 ? accessIndexes(world) : null;
     forEachTileInRect(world, input, (x, y, index) => {
+      if (access?.has(index)) blocked = true;
       if (input.level <= tileBase(world.terrain, x, y)) aboveGround = false;
       if (world.terrain.path[index] !== PATH_NONE) blocked = true;
       if ((world.terrain.occupant[index] as number) !== 0) blocked = true;
