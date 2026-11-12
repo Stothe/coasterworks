@@ -317,6 +317,7 @@ describe("save format", () => {
       "park",
       "guests",
       "rides",
+      "tracks",
       "nextRideId",
       "rng",
       "rngStreams",
@@ -415,12 +416,12 @@ describe("deserializeWorld errors", () => {
     }
   });
 
-  it("throws the exact newer-version message for schema 7", () => {
+  it("throws the exact newer-version message for schema 8", () => {
     const doc = readDoc(serializeWorld(freshWorld()));
-    doc.schemaVersion = 7;
+    doc.schemaVersion = 8;
     expect(() => deserializeWorld(writeDoc(doc))).toThrow(SaveError);
     expect(() => deserializeWorld(writeDoc(doc))).toThrow(
-      "Save is from a newer version (schema 7, this build reads 6)",
+      "Save is from a newer version (schema 8, this build reads 7)",
     );
     let caught: unknown;
     try {
@@ -429,7 +430,7 @@ describe("deserializeWorld errors", () => {
       caught = error;
     }
     expect((caught as Error).message).toBe(
-      "Save is from a newer version (schema 7, this build reads 6)",
+      "Save is from a newer version (schema 8, this build reads 7)",
     );
     expect((caught as Error).name).toBe("SaveError");
   });
@@ -437,7 +438,7 @@ describe("deserializeWorld errors", () => {
   it("interpolates the versions into the newer-version message", () => {
     expectSaveError(
       () => deserializeWorld(writeDoc({ schemaVersion: 41 })),
-      /^Save is from a newer version \(schema 41, this build reads 6\)$/,
+      /^Save is from a newer version \(schema 41, this build reads 7\)$/,
     );
   });
 
@@ -994,8 +995,8 @@ describe("migrate", () => {
   });
 
   it("has a migration for each schema before the current one, and none after", () => {
-    expect(Object.keys(MIGRATIONS).map(Number)).toEqual([1, 2, 3, 4, 5]);
-    expect(SCHEMA_VERSION).toBe(6);
+    expect(Object.keys(MIGRATIONS).map(Number)).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(SCHEMA_VERSION).toBe(7);
   });
 
   it("runs the migration for the document's version and stamps the new schema version", () => {
@@ -1009,6 +1010,7 @@ describe("migrate", () => {
       3: (doc: unknown) => doc,
       4: (doc: unknown) => doc,
       5: (doc: unknown) => doc,
+      6: (doc: unknown) => doc,
     };
     const input = { schemaVersion: 0, title: "Old Park" };
     const out = migrate(input, migrations);
@@ -1025,6 +1027,7 @@ describe("migrate", () => {
       3: (doc: unknown) => doc,
       4: (doc: unknown) => doc,
       5: (doc: unknown) => doc,
+      6: (doc: unknown) => doc,
       [SCHEMA_VERSION]: (doc: unknown) => ({ ...(doc as object), ranCurrent: true }),
     };
     const out = migrate({ schemaVersion: 0 }, migrations) as Record<string, unknown>;
@@ -1847,6 +1850,59 @@ function busyPark(): Sim {
   sim.step(700);
   return sim;
 }
+
+const V6_FIXTURE = fromBase64(
+  readFileSync(new URL("./fixtures/sample-v6.park.b64", import.meta.url), "utf8").trim(),
+);
+
+/**
+ * The `hashWorld` of the schema 6 fixture, which was saved by the schema 6 build from
+ * `createSamplePark(7)` (Plan E, Task 2, before any change). A park with no coasters hashes as it
+ * did before tracks were saved, so loading it keeps the hash the schema 6 build gave it.
+ */
+const V6_FIXTURE_LOADED_HASH = "3e2a5722b781dac7";
+
+describe("schema 6 saves", () => {
+  it("has a fixture that really is a schema 6 document: rides and stalls but no tracks", () => {
+    const doc = readDoc(V6_FIXTURE);
+    expect(doc.schemaVersion).toBe(6);
+    expect(doc).not.toHaveProperty("tracks");
+    expect((doc.rides as unknown[]).length).toBe(5);
+    expect(doc.hash).toBe(V6_FIXTURE_LOADED_HASH);
+  });
+
+  it("loads as the current schema with no tracks, keeping its hash", () => {
+    const world = deserializeWorld(V6_FIXTURE);
+    expect(world.meta.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(world.tracks).toEqual([]);
+    expect(world.rides).toHaveLength(5);
+    expect(validateWorldInvariants(world)).toBeNull();
+    expect(hashWorld(world)).toBe(V6_FIXTURE_LOADED_HASH);
+    expect(hashWorld(createSamplePark(7))).toBe(V6_FIXTURE_LOADED_HASH);
+  });
+
+  it("saves again as the current schema and reloads to the same world", () => {
+    const resaved = serializeWorld(deserializeWorld(V6_FIXTURE));
+    const doc = readDoc(resaved);
+    expect(doc.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(doc.tracks).toEqual([]);
+    expect(hashWorld(deserializeWorld(resaved))).toBe(V6_FIXTURE_LOADED_HASH);
+  });
+});
+
+describe("MIGRATIONS[6]", () => {
+  it("gives the park an empty list of tracks and keeps the rest", () => {
+    const doc = { schemaVersion: 6, rides: [{ id: 1 }], other: { kept: true } };
+    expect((MIGRATIONS[6] as Migration)(doc)).toEqual({ ...doc, tracks: [] });
+    expect(doc).not.toHaveProperty("tracks");
+  });
+
+  it("refuses a document that is not an object as corrupt", () => {
+    for (const doc of [null, 5, [], "x"]) {
+      expect(() => (MIGRATIONS[6] as Migration)(doc)).toThrow(SaveError);
+    }
+  });
+});
 
 describe("guests in a save", () => {
   it("round-trips every guest array, the counters, the stream, and the hash", () => {

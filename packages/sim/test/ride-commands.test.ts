@@ -1,4 +1,5 @@
 import {
+  COASTER_FAMILIES,
   RIDE_TYPES,
   STALL_TYPES,
   rotateOffset,
@@ -580,7 +581,11 @@ describe("ride queries", () => {
   it("content_list lists the types, all or one kind", () => {
     const { sim } = setup();
     const all = query(sim, "content_list", {}) as Array<{ id: string; kind: string }>;
-    expect(all.map((t) => t.id)).toEqual([...RIDE_TYPES, ...STALL_TYPES].map((t) => t.id));
+    expect(all.map((t) => t.id)).toEqual(
+      [...RIDE_TYPES, ...STALL_TYPES, ...COASTER_FAMILIES].map((t) => t.id),
+    );
+    const families = query(sim, "content_list", { kind: "coaster" }) as Array<{ id: string }>;
+    expect(families.map((t) => t.id)).toEqual(["steel_coaster", "wooden_coaster"]);
     const rides = query(sim, "content_list", { kind: "ride" }) as Array<{ id: string }>;
     expect(rides.map((t) => t.id)).toEqual(RIDE_TYPES.map((t) => t.id));
     const stalls = query(sim, "content_list", { kind: "stall" }) as Array<Record<string, unknown>>;

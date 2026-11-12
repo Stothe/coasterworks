@@ -5,6 +5,8 @@ import { GUEST_ARRAYS, GUEST_CAP, type GuestArray, type GuestStore } from "../gu
 import { copyParkState } from "../park/types.js";
 import { copyRide, type RideRecord } from "../rides/types.js";
 import { Rng } from "../rng.js";
+import type { Dir } from "../track/pose.js";
+import { copyTrack, type TrackRecord } from "../track/record.js";
 import { hashWorld } from "../world/hash.js";
 import { MAX_MAP, SCHEMA_VERSION, type LogEntry, type World } from "../world/types.js";
 import { fromBase64, toBase64 } from "./base64.js";
@@ -22,14 +24,15 @@ import { migrate, schemaVersionOf } from "./migrate.js";
  *     guests: { count, nextGuestId, id, x, y, tx, ty, dest, state, happiness, energy, hunger,
  *               thirst, bathroom, nausea, cash, color, name, thought, thoughtTick, sinceAction,
  *               lostTicks, ride, intensityPref, lastRide, queueTicks },
- *     rides: [RideRecord...], nextRideId,
+ *     rides: [RideRecord...], tracks: [TrackRecord...], nextRideId,
  *     rng: [w0, w1, w2, w3], rngStreams: { guests: [w0, w1, w2, w3] },
  *     log, undoStack, redoStack, nextId, hash }
  *
  * Each array is `{ "$t": "Int16Array" | "Int32Array" | "Uint16Array" | "Uint8Array", "$b64":
  * "<base64>" }`, holding the array's values as little-endian bytes. `park` is plain JSON
  * (`ParkState`, no typed arrays; its `history` is an array of month records), and so is each
- * entry of `rides` (`RideRecord`, in id order). The guest arrays
+ * entry of `rides` (`RideRecord`, in id order) and of `tracks` (`TrackRecord`, one per coaster,
+ * in ride id order; the runtime track index is rebuilt from them, never saved). The guest arrays
  * hold only the `count` live guests, in slot order, with the gaps squeezed out; loading puts them
  * in slots `0..count-1`. The sim packs the store the same way every tick, so a loaded park carries
  * on exactly as the saved one would have.
@@ -203,7 +206,7 @@ const tileSchema = z.object({ x: int, y: int }).nullable();
 const rideSchema = z.object({
   id: int,
   type: z.string(),
-  kind: z.enum(["ride", "stall"]),
+  kind: z.enum(["ride", "stall", "coaster"]),
   x: int,
   y: int,
   rot: edgeSide,
@@ -224,6 +227,17 @@ const rideSchema = z.object({
     monthCustomers: int,
     monthIncome: int,
   }),
+});
+
+// Whether the pieces exist, fit together and fit the park is the invariants' business.
+const trackSchema = z.object({
+  id: int,
+  family: z.string(),
+  start: z.object({ x: int, y: int, z: int, dir: edgeSide, pitch: int, bank: int }),
+  pieces: z.array(z.string()),
+  complete: z.boolean(),
+  tested: z.boolean(),
+  stats: z.null(),
 });
 
 // Ranges (a fee of at most $100, a rating of at most 999, counters that are not negative, at most
@@ -304,6 +318,7 @@ const saveSchema = z.object({
   park: parkSchema,
   guests: guestsSchema,
   rides: z.array(rideSchema),
+  tracks: z.array(trackSchema),
   nextRideId: int,
   rng: rngWords,
   rngStreams: z.object({ guests: rngWords }),
@@ -363,6 +378,7 @@ export function serializeWorld(world: World): Uint8Array {
     park: copyParkState(world.park),
     guests: encodeGuests(world.guests),
     rides: world.rides.map(copyRide),
+    tracks: world.tracks.map(copyTrack),
     nextRideId: world.nextRideId,
     rng: [...world.rng.state],
     rngStreams: { guests: [...world.rngStreams.guests.state] },
@@ -493,6 +509,9 @@ export function deserializeWorld(bytes: Uint8Array): World {
     park: copyParkState(doc.park),
     guests,
     rides: doc.rides.map((ride): RideRecord => copyRide(ride)),
+    tracks: doc.tracks.map((track): TrackRecord =>
+      copyTrack({ ...track, start: { ...track.start, dir: track.start.dir as Dir } }),
+    ),
     nextRideId: doc.nextRideId,
     pathVersion: 0,
     rideVersion: 0,

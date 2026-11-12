@@ -1,4 +1,12 @@
-import { typeById, type Rot } from "@coasterworks/content";
+import {
+  STEP,
+  familyById,
+  pieceById,
+  typeById,
+  type CoasterFamily,
+  type Rot,
+  type TrackPiece,
+} from "@coasterworks/content";
 import { QUEUE_PATIENCE } from "../guests/behavior.js";
 import { THOUGHTS } from "../guests/thoughts.js";
 import {
@@ -20,9 +28,20 @@ import {
   MAX_RIDE_PRICE,
   RIDE_CAP,
   RidePhase,
+  type RideRecord,
   type Tile,
 } from "../rides/types.js";
 import { inBounds } from "../terrain/terrain.js";
+import { isJoinPose, placementRefusal, reservedTiles, stationAccess } from "../track/occupancy.js";
+import {
+  applyPiece,
+  circuitCloses,
+  pieceRefusal,
+  poseAtTile,
+  posesEqual,
+  type Dir,
+} from "../track/pose.js";
+import { MAX_TRACK_PIECES } from "../track/record.js";
 import { MONTHS_PER_YEAR } from "../time.js";
 import { MAX_HEIGHT, type World } from "../world/types.js";
 
@@ -55,6 +74,10 @@ const MAX_SURFACE = 4;
  *     riding) for that ride, listed in no other queue or ride, and every queuing (or riding) guest
  *     is in its ride's queue (or riders); a ride has at most its type's capacity of riders, and
  *     none while idle
+ *   - a coaster (kind `coaster`) names a coaster family, has its entrance and exit beside its
+ *     first station tile, marks no tiles, and has no riders yet; `tracks` holds one track per
+ *     coaster, in id order, each of which replays piece by piece under the placement rules (see
+ *     `checkTracks`)
  *   - log ids start above 0, strictly increase, and are all below `nextId`
  *   - every id on the undo and redo stacks names a log entry, and no id is on the stacks twice,
  *     which covers an id on both
@@ -289,7 +312,8 @@ function rideProblem(world: World): string | null {
     previous = id;
 
     const label = `ride ${id}`;
-    const type = typeById(ride.type);
+    const coaster = ride.kind === "coaster";
+    const type = coaster ? familyById(ride.type) : typeById(ride.type);
     if (type === undefined) return `${label} has unknown type ${ride.type}`;
     if (ride.kind !== type.kind) {
       return `${label} has kind ${ride.kind} but its type ${type.id} is a ${type.kind}`;
@@ -332,6 +356,21 @@ function rideProblem(world: World): string | null {
     }
     if (type.kind === "ride" && ride.riders.length > type.capacity) {
       return `${label} has ${ride.riders.length} riders, more than its capacity of ${type.capacity}`;
+    }
+
+    if (type.kind === "coaster") {
+      // A coaster marks no tiles; its track is checked below, with the others.
+      const access = stationAccess(ride.x, ride.y, ride.rot as Dir);
+      const tiles = { entrance: access.entrance, exit: access.exit, service: null };
+      for (const key of ["entrance", "exit", "service"] as const) {
+        if (!sameTile(ride[key], tiles[key])) {
+          return `${label} has ${key} ${showTile(ride[key])}, expected ${showTile(tiles[key])}`;
+        }
+      }
+      if (ride.riders.length > 0 || ride.phase !== RidePhase.IDLE) {
+        return `${label} is a coaster with riders or out of its idle phase, which has no trains yet`;
+      }
+      continue;
     }
 
     const rot = ride.rot as Rot;
@@ -379,6 +418,83 @@ function rideProblem(world: World): string | null {
     if (actual !== expected[i]) {
       return `tile ${i} has occupant ${actual}, but the rides put ${expected[i]} there`;
     }
+  }
+  return checkTracks(world);
+}
+
+/**
+ * The coaster tracks: sorted by id, one for each coaster ride and none for anything else, of the
+ * ride's family, starting where pieces join on the tile and facing the way the ride says, every
+ * piece a known one, and each track, replayed piece by piece from its start, taken by the same
+ * placement rules the commands use against the world without it (`placementRefusal`, with a track
+ * index rebuilt from the tracks rather than trusted). A complete track closes on its start.
+ */
+function checkTracks(world: World): string | null {
+  const coasters = world.rides.filter((ride) => ride.kind === "coaster");
+  if (coasters.length !== world.tracks.length) {
+    return `${world.tracks.length} tracks for ${coasters.length} coasters`;
+  }
+  // Each track's shape on its own first, so that the index can be built from them all.
+  for (const [i, track] of world.tracks.entries()) {
+    const ride = coasters[i] as RideRecord;
+    const label = `track ${track.id}`;
+    if (track.id !== ride.id) return `${label} does not match coaster ${ride.id}`;
+    if (track.family !== ride.type) {
+      return `${label} is of family ${track.family} but its coaster is a ${ride.type}`;
+    }
+    if (familyById(track.family) === undefined) {
+      return `${label} has unknown family ${track.family}`;
+    }
+    if (track.pieces.length < 1 || track.pieces.length > MAX_TRACK_PIECES) {
+      return `${label} has ${track.pieces.length} pieces, outside 1 to ${MAX_TRACK_PIECES}`;
+    }
+    const { start } = track;
+    if (!isJoinPose(start) || start.pitch !== 0 || start.bank !== 0) {
+      return `${label} does not start flat on the middle of a tile edge at a whole step`;
+    }
+    const expected = poseAtTile(ride.x, ride.y, ride.rot as Dir, start.z / STEP);
+    if (!posesEqual(start, expected)) {
+      return `${label} does not start on its coaster's tile (${ride.x}, ${ride.y}) facing ${ride.rot}`;
+    }
+    if (track.pieces[0] !== "station") return `${label} does not begin with a station piece`;
+    let pose = start;
+    for (const [n, id] of track.pieces.entries()) {
+      const piece = pieceById(id);
+      if (piece === undefined) return `${label} piece ${n} is unknown: ${id}`;
+      const mismatch = pieceRefusal(pose, piece);
+      if (mismatch !== null) return `${label} piece ${n} (${id}) does not follow: ${mismatch}`;
+      pose = applyPiece(pose, piece);
+      if (pose.z < 0) return `${label} piece ${n} (${id}) goes below height 0`;
+    }
+  }
+  // Rebuilt here and not taken from the world, which may hold an index made before a change.
+  world.trackIndex = undefined;
+  const reserved = reservedTiles(world);
+  for (const [i, track] of world.tracks.entries()) {
+    const ride = coasters[i] as RideRecord;
+    const label = `track ${track.id}`;
+    const family = familyById(track.family) as CoasterFamily;
+    const { start } = track;
+    let pose = start;
+    for (const [n, id] of track.pieces.entries()) {
+      const piece = pieceById(id) as TrackPiece;
+      const ctx = {
+        rideId: track.id,
+        family,
+        start,
+        pieces: track.pieces.slice(0, n),
+        pose,
+        reserved,
+      };
+      const refused = placementRefusal(world, ctx, piece);
+      if (refused !== null) return `${label} piece ${n} (${id}) does not fit: ${refused}`;
+      pose = applyPiece(pose, piece);
+    }
+    if (track.complete && !circuitCloses(start, track.pieces)) {
+      return `${label} is complete but does not close`;
+    }
+    if (track.tested && !track.complete) return `${label} is tested but not complete`;
+    if (ride.open && !track.tested) return `coaster ${ride.id} is open but has not been tested`;
   }
   return null;
 }

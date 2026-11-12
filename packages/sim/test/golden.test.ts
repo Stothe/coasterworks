@@ -46,6 +46,13 @@ const scenario = () => parseScenario(JSON.parse(scenarioText));
  *    food and drink at 80 rather than 160 and for the toilets at 56, complain of no stall only at
  *    160, and turn for a stall on their way when they need one, so the drinks stand gets its
  *    customers days sooner. The scenario is unchanged and spawning draws what it did.
+ *  - Plan E Task 2 (coasters built piece by piece): re-recorded (b0bf2d8eea6f7d38 to
+ *    3bb4278fee8f344a). `hashWorld` now covers the coaster tracks (only when there are some, so
+ *    nothing earlier moved), and after the park closes the scenario begins a steel coaster at
+ *    (21, 11) facing east, clear of the paths, rides and water, lays a small oval of a second
+ *    station, a two-piece lift, two large-curve U-turns, a drop and two straights, removes the
+ *    last curve (with an undo and a redo, which take the refund back and pay it again), lays it
+ *    again, completes the circuit (undone and redone) and renames the coaster.
  */
 describe("golden scenario 1", () => {
   it("ends on the recorded hash", () => {
@@ -99,6 +106,10 @@ describe("golden scenario 1", () => {
       "ride_close",
       "ride_set_price",
       "ride_rename",
+      "coaster_begin",
+      "coaster_add_piece",
+      "coaster_remove_piece",
+      "coaster_complete",
       "sim_advance",
       "tick",
       "undo",
@@ -145,8 +156,9 @@ describe("runScenario", () => {
     expect(world.rides.map((r) => [r.id, r.type, r.rot, r.name, r.open, r.price])).toEqual([
       [2, "carousel", 1, "Carousel 1", false, 150],
       [3, "drinks_stand", 1, "Drinks Stand 1", true, 120],
+      [4, "steel_coaster", 1, "Golden Loop", false, 300],
     ]);
-    expect(world.nextRideId).toBe(4);
+    expect(world.nextRideId).toBe(5);
     // The carousel turned once stands on (4..6, 22..24); the drinks stand on (17, 27), where the
     // snack stand stood is free again.
     const occupant = (x: number, y: number) => world.terrain.occupant[y * 32 + x];
@@ -160,6 +172,18 @@ describe("runScenario", () => {
     expect(world.rides[1]?.service).toEqual({ x: 16, y: 27 });
     expect(world.terrain.path[27 * 32 + 16]).not.toBe(0);
     expect(world.rideVersion).toBeGreaterThan(0);
+  });
+
+  it("builds and completes a coaster, so the hash guards the track too", () => {
+    const { world } = runScenario(scenario());
+    expect(world.tracks).toHaveLength(1);
+    const track = world.tracks[0]!;
+    expect(track).toMatchObject({ id: 4, family: "steel_coaster", complete: true, tested: false });
+    expect(track.pieces).toHaveLength(12);
+    expect(track.pieces.filter((p) => p.endsWith("_lift"))).toHaveLength(2);
+    expect(track.pieces.filter((p) => p === "right_large_curve")).toHaveLength(4);
+    // Coasters stand on no occupant tiles: only the carousel and the drinks stand do.
+    expect(new Set(world.terrain.occupant)).toEqual(new Set([0, 2, 3]));
   });
 
   it("lets guests in, so the hash is guarding the guest system too", () => {

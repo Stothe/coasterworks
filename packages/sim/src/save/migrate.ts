@@ -169,6 +169,15 @@ const migrateV5ToV6: Migration = (doc) => {
 };
 
 /**
+ * Schema 6 to 7: parks gained coasters, whose shapes are kept in `tracks`. A park saved before
+ * then has none, so the list starts empty.
+ */
+const migrateV6ToV7: Migration = (doc) => {
+  if (!isRecord(doc)) throw new SaveError(CORRUPT_MESSAGE);
+  return { ...doc, tracks: [] };
+};
+
+/**
  * Migrations keyed by the schema version they upgrade FROM, so `MIGRATIONS[1]` turns a schema 1
  * document into a schema 2 one. When `SCHEMA_VERSION` goes up, add the entry for the version it
  * left behind.
@@ -179,6 +188,7 @@ export const MIGRATIONS: Record<number, Migration> = {
   3: migrateV3ToV4,
   4: migrateV4ToV5,
   5: migrateV5ToV6,
+  6: migrateV6ToV7,
 };
 
 /** The document's schema version. Throws `SaveError` if it has none. */

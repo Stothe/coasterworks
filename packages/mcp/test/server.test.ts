@@ -125,7 +125,7 @@ describe("tools", () => {
     expect(byName.get("undo")?.annotations).toMatchObject({ readOnlyHint: false });
   });
 
-  it("lists the ride, stall, content and path-stroke tools, each with its input schema", async () => {
+  it("lists the ride, stall, coaster, content and path-stroke tools, each with its input schema", async () => {
     const tools = (await (await connect(makeSim())).listTools()).tools;
     const byName = new Map(tools.map((t) => [t.name, t]));
     const expected: Record<string, string[]> = {
@@ -142,6 +142,13 @@ describe("tools", () => {
       path_build_tiles: ["tiles", "kind"],
       path_remove_tiles: ["tiles"],
       path_check_tiles: ["tiles", "kind"],
+      coaster_begin: ["family", "x", "y", "dir"],
+      coaster_add_piece: ["id", "piece"],
+      coaster_remove_piece: ["id"],
+      coaster_complete: ["id"],
+      coaster_get: ["id"],
+      coaster_piece_options: ["id"],
+      track_pieces_list: [],
     };
     for (const [name, required] of Object.entries(expected)) {
       const tool = byName.get(name);
@@ -154,10 +161,27 @@ describe("tools", () => {
       expect(tool?.inputSchema.required ?? [], name).toEqual(expect.arrayContaining(required));
     }
     expect(Object.keys(byName.get("content_list")?.inputSchema.properties ?? {})).toEqual(["kind"]);
-    for (const name of ["ride_list", "ride_get", "content_list", "path_check_tiles"]) {
+    for (const name of [
+      "ride_list",
+      "ride_get",
+      "content_list",
+      "path_check_tiles",
+      "coaster_get",
+      "coaster_piece_options",
+      "track_pieces_list",
+    ]) {
       expect(byName.get(name)?.annotations, name).toMatchObject({ readOnlyHint: true });
     }
-    for (const name of ["ride_build", "stall_build", "ride_demolish", "path_build_tiles"]) {
+    for (const name of [
+      "ride_build",
+      "stall_build",
+      "ride_demolish",
+      "path_build_tiles",
+      "coaster_begin",
+      "coaster_add_piece",
+      "coaster_remove_piece",
+      "coaster_complete",
+    ]) {
       expect(byName.get(name)?.annotations, name).toMatchObject({ readOnlyHint: false });
     }
   });
@@ -180,11 +204,23 @@ describe("tools", () => {
       "ride_rename",
       "path_build_tiles",
       "path_remove_tiles",
+      "coaster_begin",
+      "coaster_add_piece",
+      "coaster_remove_piece",
+      "coaster_complete",
     ]) {
       expect(byName.get(name), name).toMatchObject({ kind: "command" });
       expect(byName.get(name)?.inputSchema.type, name).toBe("object");
     }
-    for (const name of ["ride_list", "ride_get", "content_list", "path_check_tiles"]) {
+    for (const name of [
+      "ride_list",
+      "ride_get",
+      "content_list",
+      "path_check_tiles",
+      "coaster_get",
+      "coaster_piece_options",
+      "track_pieces_list",
+    ]) {
       expect(byName.get(name), name).toMatchObject({ kind: "query" });
       expect(byName.get(name)?.inputSchema.type, name).toBe("object");
     }

@@ -74,6 +74,26 @@
         }
       ]
     },
+    { "exec": ["coaster_begin", { "family": "steel_coaster", "x": 21, "y": 11, "dir": 1 }] },
+    { "exec": ["coaster_add_piece", { "id": 4, "piece": "station" }] },
+    { "exec": ["coaster_add_piece", { "id": 4, "piece": "flat_to_gentle_up_lift" }] },
+    { "exec": ["coaster_add_piece", { "id": 4, "piece": "gentle_up_to_flat_lift" }] },
+    { "exec": ["coaster_add_piece", { "id": 4, "piece": "right_large_curve" }] },
+    { "exec": ["coaster_add_piece", { "id": 4, "piece": "right_large_curve" }] },
+    { "exec": ["coaster_add_piece", { "id": 4, "piece": "flat_to_gentle_down" }] },
+    { "exec": ["coaster_add_piece", { "id": 4, "piece": "gentle_down_to_flat" }] },
+    { "exec": ["coaster_add_piece", { "id": 4, "piece": "straight" }] },
+    { "exec": ["coaster_add_piece", { "id": 4, "piece": "straight" }] },
+    { "exec": ["coaster_add_piece", { "id": 4, "piece": "right_large_curve" }] },
+    { "exec": ["coaster_add_piece", { "id": 4, "piece": "right_large_curve" }] },
+    { "exec": ["coaster_remove_piece", { "id": 4 }] },
+    { "undo": true },
+    { "redo": true },
+    { "exec": ["coaster_add_piece", { "id": 4, "piece": "right_large_curve" }] },
+    { "exec": ["coaster_complete", { "id": 4 }] },
+    { "undo": true },
+    { "redo": true },
+    { "exec": ["ride_rename", { "id": 4, "name": "Golden Loop" }] },
     { "tick": 400 }
   ]
 }

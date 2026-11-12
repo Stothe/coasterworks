@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildTrackIndex,
   createDefaultRegistry,
   createWorld,
+  executeCommand,
   hashWorld,
   type CommandDef,
+  type TrackIndex,
   type World,
 } from "../src/index.js";
 import { typeById } from "@coasterworks/content";
@@ -50,6 +53,36 @@ function twoRides(world: World): void {
   placeRide(world, "carousel", 2, 2, 1);
   placeRide(world, "snack_stand", 8, 8, 3);
   (world.rides[1] as { open: boolean }).open = true;
+}
+
+/**
+ * A steel coaster (id 3, after `twoRides`) begun at (11, 11) facing east, with `pieces` added: run
+ * through the commands, as a player would build it.
+ */
+function placeCoaster(world: World, pieces: readonly string[]): void {
+  twoRides(world);
+  const registry = createDefaultRegistry();
+  const run = (name: string, input: unknown) => {
+    const result = executeCommand(world, registry, name, input, "player");
+    if (!result.ok) throw new Error(`${name}: ${result.error}`);
+  };
+  run("coaster_begin", { family: "steel_coaster", x: 11, y: 11, dir: 1 });
+  for (const piece of pieces) run("coaster_add_piece", { id: 3, piece });
+}
+
+/** A flat circuit from (11, 11): two stations, a small U-turn, two straights, a small U-turn. */
+const SMALL_CIRCUIT = [
+  "station",
+  "right_small_curve",
+  "right_small_curve",
+  "straight",
+  "straight",
+  "right_small_curve",
+  "right_small_curve",
+];
+
+function indexData(index: TrackIndex | undefined): unknown {
+  return index === undefined ? null : [...index.tiles.entries()].sort((a, b) => a[0] - b[0]);
 }
 
 /**
@@ -121,6 +154,21 @@ const FIXTURES: Record<string, Fixture> = {
   ride_close: { input: { id: 2 }, setup: twoRides },
   ride_set_price: { input: { id: 2, cents: 1_999 }, setup: twoRides },
   ride_rename: { input: { id: 1, name: "Whirligig" }, setup: twoRides },
+  // Beside two rides, so the ride id counter and the sorted lists have to come back.
+  coaster_begin: { input: { family: "steel_coaster", x: 11, y: 11, dir: 1 }, setup: twoRides },
+  coaster_add_piece: {
+    input: { id: 3, piece: "right_small_curve" },
+    setup: (world) => placeCoaster(world, ["station"]),
+  },
+  // Removes the last piece of a complete circuit, which must come back complete.
+  coaster_remove_piece: {
+    input: { id: 3 },
+    setup: (world) => {
+      placeCoaster(world, SMALL_CIRCUIT);
+      (world.tracks[0] as { complete: boolean }).complete = true;
+    },
+  },
+  coaster_complete: { input: { id: 3 }, setup: (world) => placeCoaster(world, SMALL_CIRCUIT) },
   sim_advance: { input: { days: 5 } },
   finance_take_loan: { input: { amount: 20_000_00 } },
   finance_repay_loan: { input: { amount: 10_00 }, setup: (world) => takeLoan(world, 20_000_00) },
@@ -191,5 +239,9 @@ describe("registry-wide undo", () => {
     const stored = undo === undefined ? undefined : JSON.parse(JSON.stringify(undo));
     def.revert(world, input, stored);
     expect(hashWorld(world)).toBe(before);
+    // The track index is not hashed: it must match one rebuilt from the tracks.
+    if (world.trackIndex !== undefined) {
+      expect(indexData(world.trackIndex)).toEqual(indexData(buildTrackIndex(world)));
+    }
   });
 });

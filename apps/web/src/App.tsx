@@ -57,15 +57,15 @@ function LiveStatusPills({
   "cash" | "monthChange" | "date" | "guests" | "rating" | "rides" | "stalls"
 > & {
   source: SnapshotSource;
-  /** The host's list of rides and stalls, null before the first. */
-  rides: readonly { kind: "ride" | "stall" }[] | null;
+  /** The host's list of rides, stalls and coasters (counted as rides), null before the first. */
+  rides: readonly { kind: "ride" | "stall" | "coaster" }[] | null;
 }) {
   const cash = useSnapshot(source, (snapshot) => snapshot?.header.cash);
   const guests = useSnapshot(source, (snapshot) => snapshot?.header.park.guestsInPark);
   const rating = useSnapshot(source, (snapshot) => snapshot?.header.park.rating);
   const monthStartCash = useSnapshot(source, (snapshot) => snapshot?.header.monthStartCash);
   const date = useSnapshot(source, (snapshot) => snapshot?.header.date);
-  const rideCount = rides?.filter((r) => r.kind === "ride").length;
+  const rideCount = rides?.filter((r) => r.kind !== "stall").length;
   const stallCount = rides ? rides.length - (rideCount ?? 0) : undefined;
   if (cash === undefined || monthStartCash === undefined || date === undefined) return null;
   return (

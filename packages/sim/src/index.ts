@@ -72,6 +72,17 @@ export {
   sampleTrack,
 } from "./track/pose.js";
 export type { Dir, PieceTile, Pose, Segment } from "./track/pose.js";
+export {
+  MAX_STATION_PIECES,
+  MIN_STATION_PIECES,
+  PATH_CLEARANCE,
+  TRACK_CLEARANCE,
+  buildTrackIndex,
+  trackIndex,
+} from "./track/occupancy.js";
+export type { TrackBand, TrackIndex } from "./track/occupancy.js";
+export { MAX_TRACK_PIECES } from "./track/record.js";
+export type { TrackRecord } from "./track/record.js";
 export { LOAN_MAX, financeSystem } from "./systems/finance.js";
 export { guestSystem } from "./systems/guests.js";
 export { rideSystem } from "./systems/rides.js";
