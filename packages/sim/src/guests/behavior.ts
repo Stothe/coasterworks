@@ -1,6 +1,6 @@
 import { PATH_FOOT } from "../paths/paths.js";
 import { RouteCache, UNREACHABLE } from "../paths/routing.js";
-import { QUEUE_PER_TILE, queueCapacity, queueInfo } from "../rides/queue.js";
+import { queueCapacity, queueInfo, queueSlotTile } from "../rides/queue.js";
 import { findRide } from "../rides/rides.js";
 import type { RideRecord } from "../rides/types.js";
 import type { Rng } from "../rng.js";
@@ -268,7 +268,8 @@ function shouldLeave(g: GuestStore, slot: number): boolean {
  *  - LEAVING: follows the route to the entrance, then walks out along the lane and is gone.
  *  - LOST: on its turn (every 200 ticks), looks again for a way out, or about.
  *  - QUEUING: counts its time in the queue (giving up at `QUEUE_PATIENCE`), and walks up the
- *    queue to the tile its place in the line belongs on.
+ *    queue to the tile its place in the line belongs on; if the tile it stands on is no longer part
+ *    of the queue (the line was broken), it steps out of it.
  *  - RIDING: nothing; the ride system takes it off again.
  *
  * A guest whose ride has gone, or closed while it was on its way, goes back to wandering.
@@ -293,7 +294,7 @@ export function decide(world: World, slot: number, rng: Rng, routes: RouteCache)
       lost(world, slot, routes);
       break;
     case GuestState.QUEUING:
-      queueing(world, slot);
+      queueing(world, slot, routes);
       break;
     case GuestState.RIDING:
       riding(world, slot);
@@ -630,11 +631,16 @@ function joinQueue(world: World, slot: number, ride: RideRecord): void {
 
 /**
  * A queuing guest counts its time in the queue, and gives up at `QUEUE_PATIENCE`. Its place in the
- * line is its index in `ride.queue`; it belongs on `queueTiles[floor(place / QUEUE_PER_TILE)]`, and
+ * line is its index in `ride.queue`; it belongs on `queueSlotTile(info, place)` (the entrance tile for
+ * the first platform's worth of guests, then `QUEUE_PER_TILE` a tile behind it), and
  * walks there through the queue tiles, one step nearer the entrance at a time. It never walks back
  * down the line or off it: a guest nearer the front than its tile waits where it is.
+ *
+ * A guest standing still on a tile that is not one of the ride's queue tiles (a queue tile between
+ * it and the entrance was taken away) steps out of the queue: it wanders from where it is, or, if
+ * there is no path under it, it is lost.
  */
-function queueing(world: World, slot: number): void {
+function queueing(world: World, slot: number, routes: RouteCache): void {
   const g = world.guests;
   const ride = findRide(world, g.ride[slot] as number);
   const position = ride === undefined ? -1 : ride.queue.indexOf(g.id[slot] as number);
@@ -654,31 +660,29 @@ function queueing(world: World, slot: number): void {
   if (!atTarget(g, slot)) return;
 
   const info = queueInfo(world, ride);
-  if (info.tiles.length === 0) return;
-  const target = info.tiles[
-    Math.min(Math.floor(position / QUEUE_PER_TILE), info.tiles.length - 1)
-  ] as number;
   const here = ownIndex(world, slot);
-  if (here === target) return;
   const own = info.dist.get(here);
+  if (own === undefined) {
+    // Cut off from the entrance: out of the line.
+    ride.queue.splice(position, 1);
+    clearRide(world, slot);
+    if (!walkable(world, here)) goLost(world, slot, routes);
+    return;
+  }
+  const target = queueSlotTile(info, position);
+  if (here === target) return;
   const want = info.dist.get(target) as number;
-  if (own === undefined || own <= want) return;
+  if (own <= want) return;
   const { width, height } = world.terrain;
   const y = Math.floor(here / width);
   const x = here - y * width;
   // North, east, south, west: the first queue tile a step nearer the entrance.
-  const neighbours = [
-    y > 0 ? here - width : -1,
-    x < width - 1 ? here + 1 : -1,
-    y < height - 1 ? here + width : -1,
-    x > 0 ? here - 1 : -1,
-  ];
-  for (const n of neighbours) {
-    if (n >= 0 && info.dist.get(n) === own - 1) {
-      setTarget(world, slot, n);
-      return;
-    }
-  }
+  const step = own - 1;
+  if (y > 0 && info.dist.get(here - width) === step) setTarget(world, slot, here - width);
+  else if (x < width - 1 && info.dist.get(here + 1) === step) setTarget(world, slot, here + 1);
+  else if (y < height - 1 && info.dist.get(here + width) === step) {
+    setTarget(world, slot, here + width);
+  } else if (x > 0 && info.dist.get(here - 1) === step) setTarget(world, slot, here - 1);
 }
 
 /** A riding guest waits for the ride system to let it off; if its ride has gone, it wanders. */

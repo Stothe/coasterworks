@@ -1,31 +1,17 @@
 import { typeById } from "@coasterworks/content";
-import { TILE_UNITS, slotOfGuest } from "../guests/guests.js";
 import { boardRide, unloadRide } from "../rides/operation.js";
 import { RidePhase, type RideRecord } from "../rides/types.js";
 import type { World } from "../world/types.js";
 import type { System } from "./types.js";
 
-/** Whether the guest at the front of `ride`'s queue is standing in the middle of the entrance. */
-function frontAtEntrance(world: World, ride: RideRecord): boolean {
-  const entrance = ride.entrance;
-  const front = ride.queue[0];
-  if (entrance === null || front === undefined) return false;
-  const slot = slotOfGuest(world, front);
-  if (slot < 0) return false;
-  const g = world.guests;
-  return (
-    g.x[slot] === entrance.x * TILE_UNITS + TILE_UNITS / 2 &&
-    g.y[slot] === entrance.y * TILE_UNITS + TILE_UNITS / 2
-  );
-}
-
 /**
  * Runs one ride through a tick of its cycle:
  *
- *  - IDLE: if the ride is open and the guest at the front of the queue stands on the entrance,
- *    boards up to `capacity` guests from the front (see `boardRide`) and, if anyone got on, starts
- *    LOADING.
- *  - LOADING for `loadTicks`, then RUNNING for `cycleTicks`, then UNLOADING.
+ *  - IDLE: if the ride is open, boards up to `capacity` guests standing on the entrance tile at
+ *    the front of the queue (see `boardRide`) and, if anyone got on, starts LOADING.
+ *  - LOADING for `loadTicks`: while the ride is open and has seats left, it keeps boarding the
+ *    guests who walk up onto the platform, so a ride fed by a queue fills.
+ *  - Then RUNNING for `cycleTicks`, then UNLOADING.
  *  - UNLOADING (one tick): lets the riders off at the exit (see `unloadRide`) and goes back to IDLE.
  *
  * A closed ride finishes the cycle it is in but boards nobody new.
@@ -35,12 +21,15 @@ function tickRide(world: World, ride: RideRecord): void {
   if (type === undefined || type.kind !== "ride") return;
   switch (ride.phase) {
     case RidePhase.IDLE:
-      if (ride.open && frontAtEntrance(world, ride) && boardRide(world, ride, type.capacity) > 0) {
+      if (ride.open && boardRide(world, ride, type.capacity) > 0) {
         ride.phase = RidePhase.LOADING;
         ride.phaseTicks = 0;
       }
       break;
     case RidePhase.LOADING:
+      if (ride.open && ride.riders.length < type.capacity) {
+        boardRide(world, ride, type.capacity - ride.riders.length);
+      }
       ride.phaseTicks++;
       if (ride.phaseTicks >= type.loadTicks) {
         ride.phase = RidePhase.RUNNING;

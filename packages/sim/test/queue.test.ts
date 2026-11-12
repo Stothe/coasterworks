@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { QUEUE_PER_TILE, queueCapacity, queueInfo } from "../src/rides/queue.js";
+import { QUEUE_PER_TILE, queueCapacity, queueInfo, queueSlotTile } from "../src/rides/queue.js";
 import { run, tileIndexOf } from "./helpers/guests.js";
 import { QUEUE_LINE, RIDE_ENTRANCE, makeRidePark, rideOf } from "./helpers/rides.js";
 
@@ -14,18 +14,28 @@ describe("queue tiles", () => {
     expect(info.dist.has(tileIndexOf(world, 8, 10))).toBe(false);
   });
 
-  it("hold four guests a tile", () => {
+  it("hold a full load on the entrance tile, then four guests a tile behind it", () => {
     const sim = makeRidePark();
     expect(QUEUE_PER_TILE).toBe(4);
-    expect(queueCapacity(sim.world, rideOf(sim.world))).toBe(5 * QUEUE_PER_TILE);
+    const info = queueInfo(sim.world, rideOf(sim.world));
+    // The carousel loads 12: its entrance tile is the platform for all of them.
+    expect(info.platform).toBe(12);
+    expect(queueCapacity(sim.world, rideOf(sim.world))).toBe(
+      12 + (info.tiles.length - 1) * QUEUE_PER_TILE,
+    );
+    expect(queueSlotTile(info, 0)).toBe(info.tiles[0]);
+    expect(queueSlotTile(info, 11)).toBe(info.tiles[0]);
+    expect(queueSlotTile(info, 12)).toBe(info.tiles[1]);
+    expect(queueSlotTile(info, 15)).toBe(info.tiles[1]);
+    expect(queueSlotTile(info, 16)).toBe(info.tiles[2]);
   });
 
-  it("are only the entrance tile, for one tile's worth of guests, when there is no queue path", () => {
+  it("are only the entrance tile, for one load of guests, when there is no queue path", () => {
     const sim = makeRidePark({ queue: false });
     const { world } = sim;
     const info = queueInfo(world, rideOf(world));
     expect(info.tiles).toEqual([tileIndexOf(world, RIDE_ENTRANCE.x, RIDE_ENTRANCE.y)]);
-    expect(queueCapacity(world, rideOf(world))).toBe(QUEUE_PER_TILE);
+    expect(queueCapacity(world, rideOf(world))).toBe(12);
   });
 
   it("are ordered by distance from the entrance, then by tile index", () => {

@@ -181,9 +181,22 @@ export function fillOccupancy(t: Terrain, rect: Rect, value: number): void {
   }
 }
 
-/** The ride or stall with this id, or undefined. */
+/**
+ * The ride or stall with this id, or undefined. A binary search: `world.rides` is kept in id order
+ * (see `addRide`; the save invariants refuse a world whose rides are not).
+ */
 export function findRide(world: World, id: number): RideRecord | undefined {
-  return world.rides.find((ride) => ride.id === id);
+  const rides = world.rides;
+  let lo = 0;
+  let hi = rides.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const ride = rides[mid] as RideRecord;
+    if (ride.id === id) return ride;
+    if (ride.id < id) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  return undefined;
 }
 
 /** The error for an id with no ride, or null. */

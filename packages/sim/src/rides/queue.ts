@@ -1,3 +1,4 @@
+import { typeById } from "@coasterworks/content";
 import { PATH_QUEUE } from "../paths/paths.js";
 import type { World } from "../world/types.js";
 import type { RideRecord } from "./types.js";
@@ -14,8 +15,20 @@ export interface QueueInfo {
   tiles: number[];
   /** Steps from the entrance for each tile in `tiles`, by flat index. */
   dist: Map<number, number>;
-  /** Most guests the queue holds: `max(1, queue path tiles) * QUEUE_PER_TILE`. */
+  /**
+   * Guests the entrance tile holds: a ride's loading platform, room for a full load (its
+   * capacity, and never less than `QUEUE_PER_TILE`), so a ride can fill on every cycle.
+   */
+  platform: number;
+  /** Most guests the queue holds: the platform, then `QUEUE_PER_TILE` on each tile behind it. */
   capacity: number;
+}
+
+/** The flat index of the tile the guest at `position` in the line stands on (front is 0). */
+export function queueSlotTile(info: QueueInfo, position: number): number {
+  if (position < info.platform || info.tiles.length <= 1) return info.tiles[0] as number;
+  const behind = 1 + Math.floor((position - info.platform) / QUEUE_PER_TILE);
+  return info.tiles[Math.min(behind, info.tiles.length - 1)] as number;
 }
 
 /**
@@ -44,7 +57,10 @@ function buildQueue(world: World, ride: RideRecord): QueueInfo {
   const dist = new Map<number, number>();
   const entrance = ride.entrance;
   const { width, height, path } = world.terrain;
-  if (entrance === null) return { tiles: [], dist, capacity: QUEUE_PER_TILE };
+  const type = typeById(ride.type);
+  const load = type && type.kind === "ride" ? type.capacity : 0;
+  const platform = Math.max(QUEUE_PER_TILE, load);
+  if (entrance === null) return { tiles: [], dist, platform, capacity: platform };
 
   const start = entrance.y * width + entrance.x;
   const order: number[] = [start];
@@ -65,9 +81,7 @@ function buildQueue(world: World, ride: RideRecord): QueueInfo {
     }
   }
   const tiles = order.sort((a, b) => (dist.get(a) as number) - (dist.get(b) as number) || a - b);
-  let queuePaths = 0;
-  for (const index of tiles) if (path[index] === PATH_QUEUE) queuePaths++;
-  return { tiles, dist, capacity: Math.max(1, queuePaths) * QUEUE_PER_TILE };
+  return { tiles, dist, platform, capacity: platform + (tiles.length - 1) * QUEUE_PER_TILE };
 }
 
 /** The queue tiles of `ride`, from the world's cache (built or rebuilt as needed). */

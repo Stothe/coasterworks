@@ -1,11 +1,12 @@
 import { typeById, type RideType } from "@coasterworks/content";
 import { describe, expect, it } from "vitest";
-import { Sim, deserializeWorld, serializeWorld, type World } from "../src/index.js";
+import { Sim, createWorld, deserializeWorld, serializeWorld, type World } from "../src/index.js";
 import { QUEUE_PATIENCE, sendGuestToRide } from "../src/guests/behavior.js";
 import { findGuest, intensityPrefForId } from "../src/guests/guests.js";
 import { THOUGHT } from "../src/guests/thoughts.js";
 import { GuestState, NO_TILE } from "../src/guests/types.js";
-import { QUEUE_PER_TILE } from "../src/rides/queue.js";
+import { QUEUE_PER_TILE, queueCapacity } from "../src/rides/queue.js";
+import { findRide } from "../src/rides/rides.js";
 import { RidePhase } from "../src/rides/types.js";
 import { validateWorldInvariants } from "../src/save/invariants.js";
 import { DAYS_PER_MONTH, TICKS_PER_DAY } from "../src/time.js";
@@ -44,10 +45,15 @@ function stateOf(world: World, id: number): number {
  * Puts a guest straight into ride 1's queue, at the back, standing on the queue tile its place
  * belongs on, as if it had walked there. Returns its id.
  */
-function queueGuest(world: World, patch: { cash?: number } = {}): number {
+function queueGuest(
+  world: World,
+  patch: { cash?: number; tile?: { x: number; y: number } } = {},
+): number {
   const ride = rideOf(world);
   const position = ride.queue.length;
-  const tile = QUEUE_LINE[Math.min(QUEUE_LINE.length - 1, Math.floor(position / QUEUE_PER_TILE))];
+  const tile =
+    patch.tile ??
+    QUEUE_LINE[Math.min(QUEUE_LINE.length - 1, Math.floor(position / QUEUE_PER_TILE))];
   const slot = placeGuest(world, tile as { x: number; y: number }, GuestState.QUEUING, patch);
   world.guests.ride[slot] = ride.id;
   world.guests.dest[slot] = tileIndexOf(world, RIDE_ENTRANCE.x, RIDE_ENTRANCE.y);
@@ -56,9 +62,32 @@ function queueGuest(world: World, patch: { cash?: number } = {}): number {
   return id;
 }
 
+/**
+ * For a test that queues more guests than stand on one queue tile and wants a full ride: all of
+ * them on the entrance tile, where `boardRide` takes guests from.
+ */
+const AT_ENTRANCE = { tile: RIDE_ENTRANCE };
+
 function expectSound(world: World): void {
   expect(validateWorldInvariants(world)).toBeNull();
 }
+
+describe("a full load", () => {
+  it("walks up a spread-out queue onto the platform and fills the ride", () => {
+    const sim = makeRidePark();
+    const { world } = sim;
+    // Fourteen guests along the queue path, four a tile, as they would have walked in.
+    for (let i = 0; i < 14; i++) queueGuest(world);
+    let filled = 0;
+    for (let t = 0; t < 600 && filled === 0; t++) {
+      sim.step(1);
+      if (rideOf(world).phase === RidePhase.RUNNING) filled = rideOf(world).riders.length;
+    }
+    expect(filled).toBe(CAROUSEL_TYPE.capacity);
+    expect(rideOf(world).queue).toHaveLength(2);
+    expectSound(world);
+  });
+});
 
 describe("sendGuestToRide", () => {
   it("sends a wandering guest to the ride's entrance", () => {
@@ -153,15 +182,26 @@ describe("riding a ride", () => {
     }
     const order = [ids[2], ids[0], ids[1]];
     stepUntil(sim, () => rideOf(world).queue.length + rideOf(world).riders.length === 3, 100);
-    stepUntil(sim, () => rideOf(world).riders.length === 3, 300);
-    expect(rideOf(world).riders).toEqual(order);
+    // Each boards as it reaches the entrance; record the order they got on in.
+    const boarded: number[] = [];
+    stepUntil(
+      sim,
+      () => {
+        for (const id of rideOf(world).riders) if (!boarded.includes(id)) boarded.push(id);
+        return boarded.length === 3;
+      },
+      600,
+    );
+    expect(boarded).toEqual(order);
     expectSound(world);
   });
 
   it("boards no more than the ride's capacity, from the front, and the rest wait in order", () => {
     const sim = makeRidePark();
     const { world } = sim;
-    const ids = Array.from({ length: CAROUSEL_TYPE.capacity + 2 }, () => queueGuest(world));
+    const ids = Array.from({ length: CAROUSEL_TYPE.capacity + 2 }, () =>
+      queueGuest(world, AT_ENTRANCE),
+    );
     expectSound(world);
     sim.step(1);
     const ride = rideOf(world);
@@ -193,7 +233,7 @@ describe("riding a ride", () => {
     const sim = makeRidePark();
     const { world } = sim;
     run(sim, "ride_set_price", { id: 1, cents: 1_50 });
-    for (let i = 0; i < 5; i++) queueGuest(world);
+    for (let i = 0; i < 5; i++) queueGuest(world, AT_ENTRANCE);
     const cash = world.finance.cash;
     sim.step(1);
     expect(rideOf(world).riders).toHaveLength(5);
@@ -235,7 +275,9 @@ describe("queue patience and length", () => {
   it("counts the ticks a guest queues, and at the limit it gives up and wanders", () => {
     const sim = makeRidePark();
     const { world } = sim;
-    const ids = Array.from({ length: CAROUSEL_TYPE.capacity + 1 }, () => queueGuest(world));
+    const ids = Array.from({ length: CAROUSEL_TYPE.capacity + 1 }, () =>
+      queueGuest(world, AT_ENTRANCE),
+    );
     sim.step(1);
     const last = ids[ids.length - 1] as number;
     expect(rideOf(world).queue).toEqual([last]);
@@ -263,7 +305,8 @@ describe("queue patience and length", () => {
     const { world } = sim;
     // Running, so nobody boards while the newcomer walks over.
     rideOf(world).phase = RidePhase.RUNNING;
-    for (let i = 0; i < QUEUE_LINE.length * QUEUE_PER_TILE; i++) queueGuest(world);
+    const full = queueCapacity(world, rideOf(world));
+    for (let i = 0; i < full; i++) queueGuest(world);
     const slot = wanderer(world);
     const id = at(world.guests.id, slot);
     expect(sendGuestToRide(world, slot, 1)).toBe(true);
@@ -275,7 +318,7 @@ describe("queue patience and length", () => {
     const s = slotOf(world, id);
     expect(at(world.guests.state, s)).toBe(GuestState.WANDERING);
     expect(at(world.guests.ride, s)).toBe(0);
-    expect(rideOf(world).queue).toHaveLength(QUEUE_LINE.length * QUEUE_PER_TILE);
+    expect(rideOf(world).queue).toHaveLength(full);
     expect(rideOf(world).queue).not.toContain(id);
     expectSound(world);
   });
@@ -285,7 +328,9 @@ describe("closing and demolishing with guests aboard", () => {
   it("closing lets the queue go and lets the riders finish their ride", () => {
     const sim = makeRidePark();
     const { world } = sim;
-    const ids = Array.from({ length: CAROUSEL_TYPE.capacity + 3 }, () => queueGuest(world));
+    const ids = Array.from({ length: CAROUSEL_TYPE.capacity + 3 }, () =>
+      queueGuest(world, AT_ENTRANCE),
+    );
     sim.step(1);
     const riders = ids.slice(0, CAROUSEL_TYPE.capacity);
     const queuers = ids.slice(CAROUSEL_TYPE.capacity);
@@ -309,7 +354,9 @@ describe("closing and demolishing with guests aboard", () => {
   it("demolishing mid-ride puts the riders on the exit and lets the queue go", () => {
     const sim = makeRidePark();
     const { world } = sim;
-    const ids = Array.from({ length: CAROUSEL_TYPE.capacity + 2 }, () => queueGuest(world));
+    const ids = Array.from({ length: CAROUSEL_TYPE.capacity + 2 }, () =>
+      queueGuest(world, AT_ENTRANCE),
+    );
     sim.step(CAROUSEL_TYPE.loadTicks + 10);
     expect(rideOf(world).phase).toBe(RidePhase.RUNNING);
     const count = world.guests.count;
@@ -379,7 +426,9 @@ describe("closing the park", () => {
   it("sends the queue home and the riders home once their ride ends", () => {
     const sim = makeRidePark();
     const { world } = sim;
-    const ids = Array.from({ length: CAROUSEL_TYPE.capacity + 2 }, () => queueGuest(world));
+    const ids = Array.from({ length: CAROUSEL_TYPE.capacity + 2 }, () =>
+      queueGuest(world, AT_ENTRANCE),
+    );
     const heading = wanderer(world, { x: 8, y: 20 });
     const headingId = at(world.guests.id, heading);
     sendGuestToRide(world, heading, 1);
@@ -502,6 +551,282 @@ describe("invariants", () => {
     world.guests.state[slotOf(world, id)] = GuestState.RIDING;
     rideOf(world).riders = Array.from({ length: CAROUSEL_TYPE.capacity + 1 }, () => id);
     expect(validateWorldInvariants(world)).not.toBeNull();
+  });
+
+  it("refuse riders on an idle ride", () => {
+    const sim = makeRidePark();
+    const { world } = sim;
+    const id = queueGuest(world);
+    sim.step(1);
+    expectSound(world);
+    expect(rideOf(world).riders).toEqual([id]);
+    rideOf(world).phase = RidePhase.IDLE;
+    expect(validateWorldInvariants(world)).toMatch(/idle/);
+  });
+
+  it("refuse a queue time past the guests' patience", () => {
+    const sim = makeRidePark();
+    const { world } = sim;
+    const id = queueGuest(world);
+    world.guests.queueTicks[slotOf(world, id)] = QUEUE_PATIENCE;
+    expectSound(world);
+    world.guests.queueTicks[slotOf(world, id)] = QUEUE_PATIENCE + 1;
+    expect(validateWorldInvariants(world)).toMatch(/queueTicks/);
+  });
+
+  it("refuse a queuing or riding guest its ride does not list", () => {
+    const sim = makeRidePark();
+    const { world } = sim;
+    const id = queueGuest(world);
+    rideOf(world).queue = [];
+    expect(validateWorldInvariants(world)).toMatch(/not in its queue/);
+    world.guests.state[slotOf(world, id)] = GuestState.RIDING;
+    expect(validateWorldInvariants(world)).toMatch(/not among its riders/);
+    world.guests.ride[slotOf(world, id)] = 9;
+    expect(validateWorldInvariants(world)).toMatch(/not among its riders/);
+  });
+});
+
+describe("a break in the queue line", () => {
+  it("sends the guests cut off out of the queue, and the ride keeps boarding the rest", () => {
+    const sim = makeRidePark();
+    const { world } = sim;
+    const front = queueGuest(world, { tile: { x: 5, y: 9 } });
+    const onGap = queueGuest(world, { tile: { x: 6, y: 10 } });
+    const beyond = queueGuest(world, { tile: { x: 7, y: 10 } });
+    expectSound(world);
+    run(sim, "path_remove_tiles", { tiles: [{ x: 6, y: 10 }] });
+    sim.step(2);
+    expectSound(world);
+    // Standing where the path was: no path under it, so it is lost.
+    const g = slotOf(world, onGap);
+    expect(at(world.guests.state, g)).toBe(GuestState.LOST);
+    expect(at(world.guests.ride, g)).toBe(0);
+    expect(at(world.guests.queueTicks, g)).toBe(0);
+    // On queue path that no longer reaches the entrance: it wanders off.
+    const b = slotOf(world, beyond);
+    expect(at(world.guests.state, b)).toBe(GuestState.WANDERING);
+    expect(at(world.guests.ride, b)).toBe(0);
+    expect(at(world.guests.queueTicks, b)).toBe(0);
+    expect(rideOf(world).queue).toEqual([front]);
+
+    stepUntil(sim, () => stateOf(world, front) === GuestState.RIDING, 40);
+    expect(rideOf(world).riders).toEqual([front]);
+    expect(rideOf(world).queue).toEqual([]);
+    expectSound(world);
+  });
+
+  it("does the same when an undo takes a queue tile away", () => {
+    const sim = makeRidePark();
+    const { world } = sim;
+    run(sim, "path_build_tiles", { tiles: [{ x: 5, y: 11 }], kind: "queue" });
+    const front = queueGuest(world, { tile: { x: 5, y: 9 } });
+    const tail = queueGuest(world, { tile: { x: 5, y: 11 } });
+    expect(sim.undo().ok).toBe(true);
+    sim.step(2);
+    expect(stateOf(world, tail)).toBe(GuestState.LOST);
+    expect(rideOf(world).queue).toEqual([front]);
+    expectSound(world);
+  });
+});
+
+describe("boarding at the entrance", () => {
+  it("boards only guests standing on the entrance tile, from the front, stopping at the first who is not", () => {
+    const sim = makeRidePark();
+    const { world } = sim;
+    const first = queueGuest(world, { tile: RIDE_ENTRANCE });
+    const second = queueGuest(world, { tile: { x: 5, y: 9 } });
+    const third = queueGuest(world, { tile: RIDE_ENTRANCE });
+    sim.step(1);
+    expect(rideOf(world).riders).toEqual([first]);
+    expect(rideOf(world).queue).toEqual([second, third]);
+    expect(stateOf(world, second)).toBe(GuestState.QUEUING);
+    expect(stateOf(world, third)).toBe(GuestState.QUEUING);
+    expectSound(world);
+  });
+
+  it("lets a broke guest at the front step out without costing anyone a seat", () => {
+    const sim = makeRidePark();
+    const { world } = sim;
+    const poor = queueGuest(world, { cash: PRICE - 1, tile: RIDE_ENTRANCE });
+    const rich = Array.from({ length: CAROUSEL_TYPE.capacity }, () =>
+      queueGuest(world, { cash: 50_00, tile: RIDE_ENTRANCE }),
+    );
+    sim.step(1);
+    expect(stateOf(world, poor)).toBe(GuestState.WANDERING);
+    expect(rideOf(world).riders).toEqual(rich);
+    expect(rideOf(world).queue).toEqual([]);
+    expectSound(world);
+  });
+});
+
+describe("unloading onto an exit with no path", () => {
+  it("puts the riders on the nearest path tile, as demolishing does", () => {
+    const sim = makeRidePark();
+    const { world } = sim;
+    const id = queueGuest(world);
+    sim.step(1);
+    expect(stateOf(world, id)).toBe(GuestState.RIDING);
+    run(sim, "path_remove_tiles", { tiles: [RIDE_EXIT] });
+    sim.step(CAROUSEL_TYPE.loadTicks + CAROUSEL_TYPE.cycleTicks + 1);
+    const s = slotOf(world, id);
+    expect(at(world.guests.state, s)).toBe(GuestState.WANDERING);
+    expect(tileOf(world, s)).toEqual({ x: 5, y: 8 });
+    expect(at(world.guests.lastRide, s)).toBe(1);
+    expectSound(world);
+  });
+
+  it("leaves a rider lost when there is no path anywhere near", () => {
+    const sim = makeRidePark();
+    const { world } = sim;
+    const id = queueGuest(world);
+    sim.step(1);
+    // No path anywhere, and no park entrance (which guests can stand on) either.
+    world.terrain.path.fill(0);
+    world.park.entrance = null;
+    world.pathVersion++;
+    sim.step(CAROUSEL_TYPE.loadTicks + CAROUSEL_TYPE.cycleTicks + 1);
+    const s = slotOf(world, id);
+    expect(at(world.guests.state, s)).toBe(GuestState.LOST);
+    expect(at(world.guests.ride, s)).toBe(0);
+    expectSound(world);
+  });
+});
+
+describe("a ride that goes", () => {
+  it("is forgotten by guests who rode it or were heading for it, so a new ride with its id is not mistaken for it", () => {
+    const sim = makeRidePark();
+    const { world } = sim;
+    run(sim, "ride_build", { type: "carousel", x: 10, y: 12, rot: 0 });
+    const rode = wanderer(world, { x: 8, y: 14 });
+    world.guests.lastRide[rode] = 2;
+    const heading = wanderer(world, { x: 8, y: 16 });
+    world.guests.state[heading] = GuestState.HEADING;
+    world.guests.ride[heading] = 2;
+    world.guests.dest[heading] = tileIndexOf(world, 8, 4);
+    const other = wanderer(world, { x: 8, y: 18 });
+    world.guests.lastRide[other] = 1;
+    expect(sim.undo().ok).toBe(true);
+    expect(world.nextRideId).toBe(2);
+    expect(at(world.guests.lastRide, rode)).toBe(0);
+    expect(at(world.guests.ride, heading)).toBe(0);
+    expect(at(world.guests.state, heading)).toBe(GuestState.WANDERING);
+    expect(at(world.guests.lastRide, other)).toBe(1);
+    expectSound(world);
+
+    run(sim, "ride_demolish", { id: 1 });
+    expect(at(world.guests.lastRide, other)).toBe(0);
+    expectSound(world);
+  });
+});
+
+describe("a long randomized run", () => {
+  it("keeps every invariant while guests ride and the player builds, breaks and undoes", () => {
+    const sim = makeRidePark({ rating: 700 });
+    const { world } = sim;
+    // A second carousel east of the main path, its queue and exit joined to it.
+    run(sim, "ride_build", { type: "carousel", x: 10, y: 12, rot: 0 });
+    expect([rideOf(world, 2).entrance, rideOf(world, 2).exit]).toEqual([
+      { x: 11, y: 15 },
+      { x: 13, y: 13 },
+    ]);
+    const queue2 = [
+      { x: 11, y: 15 },
+      { x: 11, y: 16 },
+      { x: 10, y: 16 },
+      { x: 9, y: 16 },
+    ];
+    run(sim, "path_build_tiles", { tiles: queue2, kind: "queue" });
+    const exit2 = [13, 12, 11].map((y) => ({ x: 13, y }));
+    for (let x = 12; x >= 9; x--) exit2.push({ x, y: 11 });
+    run(sim, "path_build_tiles", { tiles: exit2, kind: "foot" });
+    run(sim, "ride_open", { id: 2 });
+
+    // A small fixed-seed generator of the test's own, so the run is the same every time.
+    let seed = 12345;
+    const roll = (n: number) => {
+      seed = (seed * 1103515245 + 12345) >>> 0;
+      return (seed >>> 8) % n;
+    };
+    // Commands the run itself has done and not undone, so undo never takes the park apart.
+    let done = 0;
+    const tryRun = (name: string, input: unknown) => {
+      if (sim.execute(name, input).ok) done++;
+    };
+    const cuts = [
+      { x: 5, y: 9 },
+      { x: 10, y: 16 },
+    ];
+    let queued = 0;
+    let rode = 0;
+    for (let tick = 1; tick <= 20_000; tick++) {
+      sim.step(1);
+      if (tick % 7 === 0) {
+        for (let slot = 0; slot < world.guests.live.length; slot++) {
+          if (world.guests.live[slot] === 1 && roll(3) === 0) {
+            sendGuestToRide(world, slot, 1 + roll(2));
+          }
+        }
+      }
+      if (tick % 61 === 0) {
+        const id = 1 + roll(2);
+        const cut = cuts[roll(2)] as { x: number; y: number };
+        switch (roll(10)) {
+          case 0:
+            tryRun("ride_close", { id });
+            break;
+          case 1:
+            tryRun("ride_demolish", { id });
+            break;
+          case 2:
+          case 3:
+            if (done > 0 && sim.undo().ok) done--;
+            break;
+          case 4:
+            tryRun("path_remove_tiles", { tiles: [cut] });
+            break;
+          case 5:
+          case 6:
+            tryRun("path_build_tiles", { tiles: [cut], kind: "queue" });
+            break;
+          case 7:
+            tryRun("ride_set_price", { id, cents: roll(4) * 1_00 });
+            break;
+          default:
+            tryRun("ride_open", { id });
+        }
+      }
+      for (const ride of world.rides) {
+        queued += ride.queue.length;
+        rode += ride.riders.length;
+      }
+      if (tick % 500 === 0) {
+        expectSound(world);
+        expect(validateWorldInvariants(deserializeWorld(serializeWorld(world)))).toBeNull();
+      }
+    }
+    // The run did exercise the queues and the rides.
+    expect(queued).toBeGreaterThan(20_000);
+    expect(rode).toBeGreaterThan(20_000);
+  });
+});
+
+describe("findRide", () => {
+  it("finds every ride by id in the sorted list, and nothing for an id with no ride", () => {
+    const sim = makeRidePark();
+    const { world } = sim;
+    run(sim, "stall_build", { type: "snack_stand", x: 10, y: 6, rot: 3 });
+    run(sim, "stall_build", { type: "snack_stand", x: 10, y: 9, rot: 3 });
+    run(sim, "stall_build", { type: "snack_stand", x: 10, y: 12, rot: 3 });
+    run(sim, "ride_demolish", { id: 3 });
+    const ids = world.rides.map((r) => r.id);
+    expect(ids).toEqual([1, 2, 4]);
+    expect([...ids].sort((a, b) => a - b)).toEqual(ids);
+    for (const ride of world.rides) expect(findRide(world, ride.id)).toBe(ride);
+    for (const id of [0, 3, 5, 99]) expect(findRide(world, id)).toBeUndefined();
+    expect(findRide(createWorld({ width: 8, height: 8, seed: 1, name: "E", cash: 0 }), 1)).toBe(
+      undefined,
+    );
   });
 });
 

@@ -18,7 +18,15 @@ const STATE_NAMES = [
 ] as const;
 
 /** The states a list can be filtered by: all of them but "gone", which no live guest is in. */
-const FILTER_STATES = ["entering", "wandering", "heading", "leaving", "lost"] as const;
+const FILTER_STATES = [
+  "entering",
+  "wandering",
+  "heading",
+  "leaving",
+  "lost",
+  "queuing",
+  "riding",
+] as const;
 
 interface GuestView {
   id: number;
@@ -62,7 +70,7 @@ function viewOf(world: World, slot: number): GuestView {
 }
 
 const GUEST_FIELDS =
-  "`{ id, name, x, y, tile: { x, y }, state, happiness, energy, hunger, thirst, bathroom, nausea, cash, thought }`. `x` and `y` are in 1/32 of a tile (the middle of tile t is t * 32 + 16) and `tile` is the tile they fall in, which is just off the map (-1 or the map's width or height) for a guest still coming in from the entrance. `state` is entering, wandering, heading, leaving, or lost. Needs and moods run 0 to 255; `cash` is in cents; `thought` is the guest's last thought as `{ id, text }`, or null.";
+  "`{ id, name, x, y, tile: { x, y }, state, happiness, energy, hunger, thirst, bathroom, nausea, cash, thought }`. `x` and `y` are in 1/32 of a tile (the middle of tile t is t * 32 + 16) and `tile` is the tile they fall in, which is just off the map (-1 or the map's width or height) for a guest still coming in from the entrance. `state` is entering, wandering, heading, leaving, lost, queuing (in a ride's queue), or riding. Needs and moods run 0 to 255; `cash` is in cents; `thought` is the guest's last thought as `{ id, text }`, or null.";
 
 export const guestList = defineQuery({
   name: "guest_list",

@@ -42,7 +42,7 @@ export {
   pathAt,
 } from "./paths/paths.js";
 export { RouteCache, UNREACHABLE } from "./paths/routing.js";
-export { QUEUE_PER_TILE, queueCapacity, queueInfo } from "./rides/queue.js";
+export { QUEUE_PER_TILE, queueCapacity, queueInfo, queueSlotTile } from "./rides/queue.js";
 export type { QueueInfo } from "./rides/queue.js";
 export { canPlaceRide } from "./rides/rides.js";
 export { MAX_RIDE_ID, MAX_RIDE_NAME, MAX_RIDE_PRICE, RIDE_CAP, RidePhase } from "./rides/types.js";

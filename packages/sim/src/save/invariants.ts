@@ -1,4 +1,5 @@
 import { typeById, type Rot } from "@coasterworks/content";
+import { QUEUE_PATIENCE } from "../guests/behavior.js";
 import { THOUGHTS } from "../guests/thoughts.js";
 import {
   DEST_TURNED_AWAY,
@@ -18,6 +19,7 @@ import {
   MAX_RIDE_PHASE,
   MAX_RIDE_PRICE,
   RIDE_CAP,
+  RidePhase,
   type Tile,
 } from "../rides/types.js";
 import { inBounds } from "../terrain/terrain.js";
@@ -39,7 +41,8 @@ const MAX_SURFACE = 4;
  *     numbers of cents, with the income and costs not negative
  *   - every live guest has an id that is above 0, below `nextGuestId`, and used by no other guest;
  *     a state 0 to 7, a colour 0 to 8, a name and a thought that exist, cash, idle times, lost
- *     times, ride ids and queue times that are not negative (and a ride if it is queuing or riding); a position and a target tile on the map or one tile outside it
+ *     times, ride ids and queue times that are not negative (and a ride if it is queuing or riding),
+ *     a queue time no more than `QUEUE_PATIENCE`; a position and a target tile on the map or one tile outside it
  *     (the entrance lane); and a destination that is a tile on the map or one of the two "walking
  *     out" markers
  *   - at most 255 rides and stalls, sorted by id, each id above 0, below `nextRideId` and used once,
@@ -49,8 +52,9 @@ const MAX_SURFACE = 4;
  *     the ones its type, position and rotation give; and the occupant layer holds exactly each
  *     ride's id on its footprint tiles (which are on the map and overlap no other ride's) and 0
  *     everywhere else; every guest id in a ride's queue or riders is a live guest, queuing (or
- *     riding) for that ride, listed in no other queue or ride; a ride has at most its type's
- *     capacity of riders
+ *     riding) for that ride, listed in no other queue or ride, and every queuing (or riding) guest
+ *     is in its ride's queue (or riders); a ride has at most its type's capacity of riders, and
+ *     none while idle
  *   - log ids start above 0, strictly increase, and are all below `nextId`
  *   - every id on the undo and redo stacks names a log entry, and no id is on the stacks twice,
  *     which covers an id on both
@@ -213,6 +217,9 @@ function guestProblem(world: World): string | null {
       const value = g[key][slot] as number;
       if (value < 0) return `${label} has ${key} ${value}, which is below 0`;
     }
+    if ((g.queueTicks[slot] as number) > QUEUE_PATIENCE) {
+      return `${label} has queueTicks ${g.queueTicks[slot]}, more than the patience of ${QUEUE_PATIENCE}`;
+    }
     if ((state === GuestState.QUEUING || state === GuestState.RIDING) && g.ride[slot] === 0) {
       return `${label} is ${state === GuestState.QUEUING ? "queuing" : "riding"} with no ride`;
     }
@@ -309,6 +316,9 @@ function rideProblem(world: World): string | null {
         }
       }
     }
+    if (ride.phase === RidePhase.IDLE && ride.riders.length > 0) {
+      return `${label} is idle with ${ride.riders.length} riders`;
+    }
     if (type.kind === "ride" && ride.riders.length > type.capacity) {
       return `${label} has ${ride.riders.length} riders, more than its capacity of ${type.capacity}`;
     }
@@ -332,6 +342,17 @@ function rideProblem(world: World): string | null {
         if (other !== 0) return `${label} overlaps ride ${other} at (${x}, ${y})`;
         expected[index] = id;
       }
+    }
+  }
+
+  // Every guest queuing or riding is listed by its ride; the lists checked the other way above.
+  for (const [id, slot] of slotOf) {
+    const state = g.state[slot];
+    if (state === GuestState.QUEUING && !listed.has(id)) {
+      return `guest ${id} is queuing for ride ${g.ride[slot]} but is not in its queue`;
+    }
+    if (state === GuestState.RIDING && !listed.has(id)) {
+      return `guest ${id} is riding ride ${g.ride[slot]} but is not among its riders`;
     }
   }
 
