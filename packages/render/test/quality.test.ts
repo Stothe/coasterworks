@@ -10,6 +10,7 @@ import {
   createGovernor,
   detectQuality,
   higherQuality,
+  postPlan,
   isSoftwareRenderer,
   lowerQuality,
   softwareFrameDue,
@@ -19,16 +20,24 @@ import {
 
 const FAST = 16.7;
 const SLOW = 40;
+/** A machine the drawing slows down: every step down makes its frames faster, but none fast. */
+const GPU_BOUND = (q: Quality) => (q === "high" ? 60 : q === "medium" ? 40 : 30);
 
 /**
  * Runs the governor for `ms` of frames that each take `frameMs`, from time `from`. Returns the
  * state, the time it ended at, and every quality change with when it happened.
  */
-function run(state: GovernorState, from: number, ms: number, frameMs: number) {
+function run(
+  state: GovernorState,
+  from: number,
+  ms: number,
+  frame: number | ((quality: Quality) => number),
+) {
   const changes: { at: number; quality: Quality }[] = [];
   let now = from;
   let s = state;
   while (now < from + ms) {
+    const frameMs = typeof frame === "number" ? frame : frame(s.quality);
     now += frameMs;
     const next = stepGovernor(s, frameMs, now);
     if (next.quality !== s.quality) changes.push({ at: now, quality: next.quality });
@@ -106,7 +115,7 @@ describe("stepGovernor", () => {
   });
 
   it("goes down a step at a time, with time to settle between, and stops at low", () => {
-    const { state, changes } = run(createGovernor("high", 0), 0, 60_000, SLOW);
+    const { state, changes } = run(createGovernor("high", 0), 0, 60_000, GPU_BOUND);
     expect(changes.map((c) => c.quality)).toEqual(["medium", "low"]);
     expect((changes[1]?.at ?? 0) - (changes[0]?.at ?? 0)).toBeGreaterThanOrEqual(SETTLE_MS);
     expect(state.quality).toBe("low");
@@ -129,7 +138,7 @@ describe("stepGovernor", () => {
   });
 
   it("never steps up more than once a minute", () => {
-    const down = run(createGovernor("high", 0), 0, 20_000, SLOW);
+    const down = run(createGovernor("high", 0), 0, 20_000, GPU_BOUND);
     expect(down.state.quality).toBe("low");
     const { changes } = run(down.state, down.now, 5 * 60_000, FAST);
     expect(changes.map((c) => c.quality)).toEqual(["medium", "high"]);
@@ -152,6 +161,29 @@ describe("stepGovernor", () => {
     expect(changes).toEqual(["medium", "high", "medium"]);
     expect(state.quality).toBe("medium");
     expect(state.ceiling).toBe("medium");
+  });
+
+  it("takes back a step down that made frames no faster, and stays (a capped frame rate)", () => {
+    // 30 frames a second whatever is drawn: the display or the browser caps it.
+    const capped = run(createGovernor("high", 0), 0, 60 * 60_000, 33.3);
+    expect(capped.changes.map((c) => c.quality)).toEqual(["medium", "high"]);
+    expect(capped.state.quality).toBe("high");
+  });
+
+  it("keeps a step down that helped, even when frames stay slow", () => {
+    const { state, changes } = run(createGovernor("high", 0), 0, 60 * 60_000, (q) =>
+      q === "high" ? 60 : 40,
+    );
+    // Medium is still slow and low would be no better than medium is than high: it reaches low.
+    expect(changes[0]?.quality).toBe("medium");
+    expect(state.quality).not.toBe("high");
+  });
+
+  it("steps down again from a held level when frames get much slower", () => {
+    const capped = run(createGovernor("high", 0), 0, 20_000, 33.3);
+    expect(capped.state.quality).toBe("high");
+    const worse = run(capped.state, capped.now, 20_000, GPU_BOUND);
+    expect(worse.changes[0]?.quality).toBe("medium");
   });
 
   it("returns the same state object when nothing changed", () => {
@@ -226,14 +258,14 @@ describe("stepGovernor", () => {
 
   it("does not count a pause toward the settling time after a change", () => {
     // Slow from the start: the step down comes with the last frame of this run.
-    const down = run(createGovernor("high", 0), 0, SETTLE_MS, SLOW);
+    const down = run(createGovernor("high", 0), 0, SETTLE_MS, GPU_BOUND);
     expect(down.changes).toEqual([{ at: down.now, quality: "medium" }]);
     // Hidden right after the step down, for far longer than the settling time.
-    const back = stepGovernor(down.state, SLOW, down.now + 60_000, 60_000);
-    const early = run(back, down.now + 60_000, SLOW_HOLD_MS + 200, SLOW);
+    const back = stepGovernor(down.state, GPU_BOUND("medium"), down.now + 60_000, 60_000);
+    const early = run(back, down.now + 60_000, SLOW_HOLD_MS + 200, GPU_BOUND);
     expect(early.state.quality).toBe("medium");
     // The settling time is still served in frames drawn.
-    expect(run(early.state, early.now, SETTLE_MS, SLOW).state.quality).toBe("low");
+    expect(run(early.state, early.now, SETTLE_MS, GPU_BOUND).state.quality).toBe("low");
   });
 });
 
@@ -307,7 +339,7 @@ describe("createFrameMeter with a page visibility probe", () => {
     let now = 0;
     meter.sample(now);
     for (let i = 0; i < 40; i++) {
-      now += 400;
+      now += state.quality === "high" ? 400 : 150;
       const frameMs = meter.sample(now);
       state = stepGovernor(state, frameMs, now, meter.pausedMs);
     }
@@ -337,5 +369,18 @@ describe("isSoftwareRenderer", () => {
     ).toBe(true);
     expect(isSoftwareRenderer("llvmpipe (LLVM 15.0.7, 256 bits)")).toBe(true);
     expect(isSoftwareRenderer("ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Max)")).toBe(false);
+  });
+});
+
+describe("postPlan", () => {
+  it("builds a pipeline at medium and high, none at low", () => {
+    expect(postPlan("low", 1)).toBeNull();
+    expect(postPlan("medium", 1)).not.toBeNull();
+    expect(postPlan("high", 2)).not.toBeNull();
+  });
+
+  it("builds none where the context cannot render into half-float targets", () => {
+    expect(postPlan("medium", 1, false)).toBeNull();
+    expect(postPlan("high", 1, false)).toBeNull();
   });
 });

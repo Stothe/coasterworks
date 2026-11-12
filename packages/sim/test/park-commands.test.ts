@@ -345,3 +345,21 @@ describe("park commands and the hash", () => {
     }
   });
 });
+
+describe("undoing park_open", () => {
+  it("closes the park the way park_close does: the guests inside go home", () => {
+    const { world, sim } = setup(16, 16);
+    run(sim, "park_set_entrance", { x: 0, y: 8 });
+    run(sim, "path_build", { x: 1, y: 8, w: 10, h: 1, kind: "foot" });
+    world.park.entryFee = 0;
+    world.park.rating = 999;
+    run(sim, "park_open", {});
+    sim.step(3000);
+    expect(world.park.guestsInPark).toBeGreaterThan(0);
+
+    expect(sim.undo().ok).toBe(true);
+    expect(world.park.open).toBe(false);
+    sim.step(3000);
+    expect(world.park.guestsInPark).toBe(0);
+  });
+});

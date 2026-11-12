@@ -91,6 +91,17 @@ export const SLOW_HOLD_MS = 2000;
 export const SETTLE_MS = 3000;
 /** The governor steps up at most this often, and only after frames stayed fast this long. */
 export const STEP_UP_MS = 60_000;
+/**
+ * A step down must bring the frame time under this share of what it was, once it has settled, or
+ * it bought nothing and is taken back: the frames were slow for a reason drawing less does not
+ * touch (the display or the browser capping the frame rate, a busy page).
+ */
+export const FUTILE_RATIO = 0.85;
+/**
+ * After a step down was taken back, the governor steps down from that level again only if frames
+ * get this much slower than they were then.
+ */
+export const FUTILE_WORSE = 1.3;
 
 /** What the governor remembers between frames. Treat it as opaque and immutable. */
 export interface GovernorState {
@@ -106,6 +117,10 @@ export interface GovernorState {
   changedAt: number;
   /** Whether the last change was a step up: if that proves too much, it is not tried again. */
   steppedUp: boolean;
+  /** After a step down, the level it left and the frame time then, until it is judged. */
+  before: { quality: Quality; frameMs: number } | null;
+  /** A level a step down from which was taken back, and the frame time then; null for none. */
+  floor: { quality: Quality; frameMs: number } | null;
 }
 
 /** A governor that starts at `quality` at time `nowMs` and never goes above it. */
@@ -117,6 +132,8 @@ export function createGovernor(quality: Quality, nowMs: number): GovernorState {
     fastSince: null,
     changedAt: nowMs,
     steppedUp: false,
+    before: null,
+    floor: null,
   };
 }
 
@@ -133,6 +150,10 @@ export function createGovernor(quality: Quality, nowMs: number): GovernorState {
  *   it goes up at most once a minute.
  * - A step up that has to be taken back is the last one: the level it failed at becomes out of
  *   reach for good. That is what keeps it from going back and forth all session.
+ * - A step down is judged once it has settled (`SETTLE_MS`): if the frame time is not below
+ *   `FUTILE_RATIO` of what it was, drawing less did not help (the frame rate is capped by the
+ *   display or the browser, or the page is busy), so the old level comes back, and it is not left
+ *   again unless frames get `FUTILE_WORSE` slower than they were.
  * - Time with nothing drawn is not time spent slow or fast. A pause ends whatever run was going,
  *   so the first frame back starts a new one, and it is left out of both waits: a tab hidden for
  *   a minute right after one long frame comes back at the quality it left with.
@@ -157,11 +178,34 @@ export function stepGovernor(
   const fastSince = slow ? null : (state.fastSince ?? nowMs);
   const sinceChange = nowMs - state.changedAt;
 
+  if (state.before !== null && sinceChange >= SETTLE_MS) {
+    const { before } = state;
+    if (frameMs >= before.frameMs * FUTILE_RATIO) {
+      // Drawing less bought nothing: go back, and stay there.
+      return {
+        ...state,
+        quality: before.quality,
+        slowSince: null,
+        fastSince: null,
+        changedAt: nowMs,
+        steppedUp: false,
+        before: null,
+        floor: before,
+      };
+    }
+    state = { ...state, before: null };
+  }
+
+  const heldByFloor =
+    state.floor !== null &&
+    state.floor.quality === state.quality &&
+    frameMs < state.floor.frameMs * FUTILE_WORSE;
   if (
     slowSince !== null &&
     nowMs - slowSince >= SLOW_HOLD_MS &&
     sinceChange >= SETTLE_MS &&
-    state.quality !== "low"
+    state.quality !== "low" &&
+    !heldByFloor
   ) {
     const quality = lowerQuality(state.quality);
     return {
@@ -172,6 +216,8 @@ export function stepGovernor(
       fastSince: null,
       changedAt: nowMs,
       steppedUp: false,
+      before: { quality: state.quality, frameMs },
+      floor: state.floor,
     };
   }
 
@@ -182,8 +228,8 @@ export function stepGovernor(
     state.quality !== state.ceiling
   ) {
     return {
+      ...state,
       quality: higherQuality(state.quality),
-      ceiling: state.ceiling,
       slowSince: null,
       fastSince: null,
       changedAt: nowMs,
@@ -318,9 +364,19 @@ const DENSE_PIXEL_RATIO = 1.5;
  * every CSS pixel in each direction, so `high` works its occlusion out at half the buffer, which
  * is still every CSS pixel, and both tiers take two samples a pixel where they would take four:
  * the picture is no softer for it and the frame costs about what it does at a ratio of 1.
+ *
+ * `floatTargets` says whether the context can render into half-float targets
+ * (`EXT_color_buffer_float` or `EXT_color_buffer_half_float`); without them there is no pipeline.
  */
-export function postPlan(quality: Quality, pixelRatio: number): PostPlan | null {
+export function postPlan(
+  quality: Quality,
+  pixelRatio: number,
+  floatTargets = true,
+): PostPlan | null {
   if (quality === "low") return null;
+  // The pipeline draws into half-float targets; a context that cannot render into those would
+  // leave every frame black, so it draws straight to the screen as `low` does.
+  if (!floatTargets) return null;
   const dense = pixelRatio >= DENSE_PIXEL_RATIO;
   const high = quality === "high";
   return {

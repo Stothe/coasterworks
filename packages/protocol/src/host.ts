@@ -558,7 +558,8 @@ export class SimHostServer {
   /** Sends one client a full snapshot, terrain and paths included. */
   private sendSnapshot(client: ClientState): void {
     this.trackPaths();
-    this.deliverSnapshot(client, this.buildSnapshot(true, true), true, true);
+    const versions = { terrain: this.terrainVersion, paths: this.pathVersion };
+    this.deliverSnapshot(client, this.buildSnapshot(true, true), versions, true, true);
   }
 
   /**
@@ -567,34 +568,41 @@ export class SimHostServer {
    */
   private broadcastSnapshot(): void {
     this.trackPaths();
+    // The versions as they are now, before any frame goes out: a client's handler can run while
+    // its frame is delivered and change the world, and a client sent a frame built before that
+    // must not be recorded as holding what came after (it is sent the layers again instead).
+    const versions = { terrain: this.terrainVersion, paths: this.pathVersion };
     const frames = new Map<number, Uint8Array>();
     for (const client of this.helloClients()) {
-      const withTerrain = client.lastTerrainVersion < this.terrainVersion;
-      const withPaths = client.lastPathVersion < this.pathVersion;
+      const withTerrain = client.lastTerrainVersion < versions.terrain;
+      const withPaths = client.lastPathVersion < versions.paths;
       const kind = (withTerrain ? 1 : 0) + (withPaths ? 2 : 0);
       let frame = frames.get(kind);
       if (!frame) {
         frame = this.buildSnapshot(withTerrain, withPaths);
         frames.set(kind, frame);
       }
-      this.deliverSnapshot(client, frame, withTerrain, withPaths);
+      this.deliverSnapshot(client, frame, versions, withTerrain, withPaths);
     }
     if (this.timers) this.lastSnapshotAt = this.timers.now();
   }
 
   /**
    * Sends one client a snapshot, and remembers which layers it now holds only once the send worked,
-   * so a client that missed a frame is behind, and is sent them again, in the next one.
+   * so a client that missed a frame is behind, and is sent them again, in the next one. `versions`
+   * are the layer versions the frame was built from, not the host's when the send returns.
    */
   private deliverSnapshot(
     client: ClientState,
     frame: Uint8Array,
+    versions: { terrain: number; paths: number },
     withTerrain: boolean,
     withPaths: boolean,
   ): void {
     if (!this.send(client, frame)) return;
-    if (withTerrain) client.lastTerrainVersion = this.terrainVersion;
-    if (withPaths) client.lastPathVersion = this.pathVersion;
+    if (withTerrain)
+      client.lastTerrainVersion = Math.max(client.lastTerrainVersion, versions.terrain);
+    if (withPaths) client.lastPathVersion = Math.max(client.lastPathVersion, versions.paths);
   }
 
   private helloClients(): ClientState[] {

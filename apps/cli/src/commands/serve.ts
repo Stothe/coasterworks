@@ -172,7 +172,7 @@ export async function serveCommand(args: string[], io: CliIO): Promise<number> {
         return sendJson(res, 405, { error: "method not allowed" }, { allow: "GET" });
       }
       if (!hostAllowed(req)) return sendJson(res, 403, { error: "forbidden" });
-      return sendJson(res, 200, { ok: true, name: sim.world.meta.name, tick: sim.world.tick });
+      return sendJson(res, 200, { ok: true, name: sim.world.park.name, tick: sim.world.tick });
     }
     sendJson(res, 404, { error: "not found" });
   }

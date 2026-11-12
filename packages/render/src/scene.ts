@@ -277,6 +277,20 @@ export function createScene(canvas: HTMLCanvasElement, opts: SceneOptions = {}):
   let clock = opts.frozenTime ?? 0;
   let lastNow: number | null = null;
   let disposed = false;
+  /** True from a lost WebGL context until the browser gives it back: nothing is drawn. */
+  let contextLost = false;
+  // The default for a lost context is that it never comes back; asking for it back means the
+  // browser restores it (after a GPU reset, a driver switch, waking from sleep) and three with it.
+  const onContextLost = (event: Event) => {
+    event.preventDefault();
+    contextLost = true;
+  };
+  const onContextRestored = () => {
+    contextLost = false;
+    for (const module of modules) module.contextRestored?.();
+  };
+  canvas.addEventListener("webglcontextlost", onContextLost);
+  canvas.addEventListener("webglcontextrestored", onContextRestored);
   /** When the last frame was drawn, for the software renderer's frame interval. */
   let lastDrawn: number | null = null;
   /** What the last drawn frame cost, measured at the next frame offered; null until measured. */
@@ -384,7 +398,7 @@ export function createScene(canvas: HTMLCanvasElement, opts: SceneOptions = {}):
   }
 
   function render(nowMs?: number): void {
-    if (disposed) return;
+    if (disposed || contextLost) return;
     const now = nowMs ?? performance.now();
     // A software renderer rests between frames, in proportion to what a frame costs it: a frame
     // offered sooner is skipped whole, so that the page keeps the CPU it needs.
@@ -445,6 +459,9 @@ export function createScene(canvas: HTMLCanvasElement, opts: SceneOptions = {}):
     return rayFromCamera(rig, ndcX, ndcY, camera.aspect, rig.fovY);
   }
 
+  /** How far past the ground a guest's hit may be and still count: a foot's width. */
+  const GUEST_PICK_SLACK = 0.15;
+
   function pickAt(clientX: number, clientY: number): { x: number; y: number } | null {
     if (!terrain) return null;
     const ray = rayAt(clientX, clientY);
@@ -467,6 +484,8 @@ export function createScene(canvas: HTMLCanvasElement, opts: SceneOptions = {}):
   function dispose(): void {
     if (disposed) return;
     disposed = true;
+    canvas.removeEventListener("webglcontextlost", onContextLost);
+    canvas.removeEventListener("webglcontextrestored", onContextRestored);
     // Last made, first unmade.
     for (let i = modules.length - 1; i >= 0; i--) modules[i]?.dispose();
     modules.length = 0;
@@ -532,7 +551,18 @@ export function createScene(canvas: HTMLCanvasElement, opts: SceneOptions = {}):
     pickAt,
     pickGuestAt(clientX: number, clientY: number): { id: number } | null {
       const ray = guests ? rayAt(clientX, clientY) : null;
-      return ray && guests ? guests.pickAt(ray) : null;
+      if (!ray || !guests) return null;
+      // A guest behind a hill or past the ground the ray meets is out of sight: only those
+      // nearer than the ground (with a little slack for feet on it) can be picked.
+      const ground = terrain ? pickTile(ray, terrain) : null;
+      const reach = ground
+        ? Math.hypot(
+            ground.point.x - ray.origin.x,
+            ground.point.y - ray.origin.y,
+            ground.point.z - ray.origin.z,
+          ) + GUEST_PICK_SLACK
+        : Infinity;
+      return guests.pickAt(ray, reach);
     },
     highlightTile,
     info,

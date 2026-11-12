@@ -73,7 +73,9 @@ test("the dock opens a tray for each tool, Water is paid for, and Escape puts it
   await expect(canvas).toBeVisible();
   const box = await canvas.boundingBox();
   if (!box) throw new Error("The park view has no size");
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  // Just up and left of the middle of the view: grass by the pond, clear of the footpaths, which
+  // water may not cover.
+  await page.mouse.click(box.x + box.width * 0.47, box.y + box.height * 0.48);
   await expect.poll(lastCommand).toBe("terrain_set_water");
   await expect.poll(async () => cents(await cash.innerText())).toBeLessThan(before);
 

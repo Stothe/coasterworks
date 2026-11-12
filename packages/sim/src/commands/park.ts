@@ -73,7 +73,7 @@ export const parkSetEntryFee = defineCommand({
 export const parkOpen = defineCommand({
   name: "park_open",
   description:
-    "Opens the park to guests. The park entrance must be placed first. Opening an open park changes nothing.",
+    "Opens the park to guests. The park entrance must be placed first. Opening an open park changes nothing. Undoing an opening closes the park and sends the guests inside home.",
   category: "park",
   input: z.object({}),
   undoable: true,
@@ -85,6 +85,8 @@ export const parkOpen = defineCommand({
   },
   revert: (world, _input, undo: { previous: boolean }) => {
     world.park.open = undo.previous;
+    // Undoing an opening closes the park the way `park_close` does: whoever came in goes home.
+    if (!undo.previous) sendGuestsHome(world);
   },
 });
 
