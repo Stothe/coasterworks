@@ -386,6 +386,13 @@ describe("pickGuest", () => {
     expect(pickGuest(down(2, 0.5), spots, sizes, 3)).toBe(-1);
   });
 
+  it("leaves out a guest further along the ray than its reach (behind the ground)", () => {
+    const along = { origin: { x: -5, y: 1.2, z: 0 }, direction: { x: 1, y: 0, z: 0 } };
+    // Guest 0 is 5 along the ray (less its radius); a wall of ground 3 along hides all of them.
+    expect(pickGuest(along, spots, sizes, 3, 3)).toBe(-1);
+    expect(pickGuest(along, spots, sizes, 3, 6)).toBe(0);
+  });
+
   it("takes the nearest of the guests in the way", () => {
     const along = { origin: { x: -5, y: 1.2, z: 0 }, direction: { x: 1, y: 0, z: 0 } };
     expect(pickGuest(along, spots, sizes, 3)).toBe(0);

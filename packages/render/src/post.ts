@@ -800,7 +800,10 @@ export function createPost(ctx: RenderContext): PostModule {
   const bufferSize = renderer.getDrawingBufferSize(new Vector2());
   let pixelRatio = renderer.getPixelRatio();
   /** What the frame is drawn with: follows the quality in force and the pixel ratio. */
-  let plan = postPlan(ctx.quality, pixelRatio);
+  const floatTargets =
+    renderer.extensions.has("EXT_color_buffer_float") ||
+    renderer.extensions.has("EXT_color_buffer_half_float");
+  let plan = postPlan(ctx.quality, pixelRatio, floatTargets);
   /** Built when a frame first needs it, and again whenever the plan changes. */
   let pipeline: Pipeline | null = null;
 
@@ -862,15 +865,22 @@ export function createPost(ctx: RenderContext): PostModule {
       pipeline.composer.render();
     },
     setQuality(quality: Quality): void {
-      setPlan(postPlan(quality, pixelRatio));
+      setPlan(postPlan(quality, pixelRatio, floatTargets));
     },
     resize(_width: number, _height: number, ratio: number): void {
       // The renderer has its new size already; its drawing buffer is what the targets match.
       renderer.getDrawingBufferSize(bufferSize);
       pixelRatio = ratio;
-      setPlan(postPlan(ctx.quality, pixelRatio));
+      setPlan(postPlan(ctx.quality, pixelRatio, floatTargets));
       if (pipeline && bufferSize.x >= 1 && bufferSize.y >= 1) {
         resizePipeline(pipeline, bufferSize.x, bufferSize.y);
+      }
+    },
+    contextRestored(): void {
+      // The pipeline's targets held frames of a context that is gone: the next frame builds anew.
+      if (pipeline) {
+        disposePipeline(pipeline);
+        pipeline = null;
       }
     },
     dispose(): void {

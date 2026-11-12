@@ -36,8 +36,11 @@ export type GuestsModule = SceneModule & {
    * as it is. Passing the section that is already the latest does nothing.
    */
   setGuests(section: GuestSection | null, atMs: number): void;
-  /** The guest a world-space ray hits first, or null. */
-  pickAt(ray: Ray): { id: number } | null;
+  /**
+   * The guest a world-space ray hits first, or null. With `reach`, only a guest hit nearer than
+   * that distance along the ray counts: what is behind the ground the ray meets is out of sight.
+   */
+  pickAt(ray: Ray, reach?: number): { id: number } | null;
 };
 
 /** The most guests drawn at once. */
@@ -563,13 +566,15 @@ const PICK_RADIUS = 0.11;
  * The first of `count` guests a ray hits, as its index, or -1. `places` holds world x, y (soles)
  * and z per guest and `sizes` each one's size against the standard figure. A guest is taken as an
  * upright rod with rounded ends, a little fatter than the figure so that it is easy to hit. The
- * ray's direction need not be unit length; hits behind its origin do not count.
+ * ray's direction need not be unit length; hits behind its origin, or `reach` or further along
+ * it, do not count.
  */
 export function pickGuest(
   ray: Ray,
   places: Float32Array,
   sizes: Float32Array,
   count: number,
+  reach = Infinity,
 ): number {
   const { origin, direction } = ray;
   const length = Math.hypot(direction.x, direction.y, direction.z);
@@ -577,7 +582,7 @@ export function pickGuest(
   const dx = direction.x / length;
   const dy = direction.y / length;
   const dz = direction.z / length;
-  let best = Infinity;
+  let best = reach;
   let hit = -1;
   for (let i = 0; i < count; i++) {
     const size = sizes[i] as number;
@@ -1309,8 +1314,8 @@ export function createGuests(ctx: RenderContext): GuestsModule {
       // under a guest is all that ties it to the ground, so it is darker there.
       shadeStrength.value = SHADE_STRENGTH[quality];
     },
-    pickAt(ray: Ray): { id: number } | null {
-      const hit = pickGuest(ray, places, pickSizes, mesh.count);
+    pickAt(ray: Ray, reach?: number): { id: number } | null {
+      const hit = pickGuest(ray, places, pickSizes, mesh.count, reach);
       return hit < 0 ? null : { id: shown.id[hit] as number };
     },
     dispose(): void {

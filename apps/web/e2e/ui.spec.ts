@@ -79,7 +79,10 @@ test("Water from the dock, placed at the pond's edge, is paid for", async ({ pag
 
   const before = cents(await cashOf(page).innerText());
   const at = await pondEdge(page);
-  await page.mouse.click(at.x, at.y);
+  // Just up and left of the middle of the view: grass by the pond, clear of the footpaths, which
+  // water may not cover.
+  const box = (await page.getByLabel("Park view").boundingBox())!;
+  await page.mouse.click(at.x - box.width * 0.03, at.y - box.height * 0.02);
   await expect.poll(() => lastCommand(page)).toBe("terrain_set_water");
   await expect.poll(async () => cents(await cashOf(page).innerText())).toBeLessThan(before);
 });

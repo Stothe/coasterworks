@@ -190,5 +190,11 @@ export interface SceneModule {
   setEntrance?(entrance: EntrancePlace | null): void;
   /** Once per rendered frame, before drawing. `frame` is the scene's own object: do not keep it. */
   update?(frame: FrameInfo): void;
+  /**
+   * The WebGL context was lost and has come back. three uploads again what it holds the data of
+   * (buffers, data textures), but whatever was drawn into a render target is gone: anything made
+   * once and kept (a baked light map, a pipeline's targets) must be made again.
+   */
+  contextRestored?(): void;
   dispose(): void;
 }

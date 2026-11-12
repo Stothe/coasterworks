@@ -910,6 +910,11 @@ export function createAtmosphere(ctx: RenderContext): AtmosphereModule {
       atmosphereUniforms.cwAtm_wind.value.w = tier.shadowDetail;
       environmentStale = true;
     },
+    contextRestored(): void {
+      // The sky's light map was drawn into a render target, which the lost context took with it.
+      environmentStale = true;
+      environmentAtMs = -Infinity;
+    },
     resize(_width: number, height: number, pixelRatio: number): void {
       viewHeight = Math.max(1, height * pixelRatio);
       skyUniforms.cwSky_view.value.x = rig.fovY / viewHeight;
