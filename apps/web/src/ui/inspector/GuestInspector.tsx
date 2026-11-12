@@ -90,6 +90,9 @@ function NeedBar({
  * thinking. The sim is asked after them every second while the panel is open; the thoughts it
  * answered with are kept, the latest first, the last five of them.
  */
+/** How the sim's `guest_get` says there is no guest with that id (`No guest with id 4`). */
+const NO_SUCH_GUEST = /^No guest with id \d+$/;
+
 export function GuestInspector({ id, query }: { id: number; query: QueryFn | null }) {
   const [guest, setGuest] = useState<GuestView | null>(null);
   const [gone, setGone] = useState(false);
@@ -106,13 +109,16 @@ export function GuestInspector({ id, query }: { id: number; query: QueryFn | nul
       query("guest_get", { id }).then(
         (answer) => {
           if (!live) return;
-          if (!answer.ok || !isGuestView(answer.result)) {
+          if (!answer.ok && NO_SUCH_GUEST.test(answer.error)) {
             // The sim says there is no such guest, and ids are never given out again: they have
             // left for good, so there is nothing more to ask.
             setGone(true);
             clearInterval(timer);
             return;
           }
+          // Any other refusal, or an answer not shaped like a guest, says nothing about whether
+          // they are still here: keep what is shown and ask again next time.
+          if (!answer.ok || !isGuestView(answer.result)) return;
           const view = answer.result;
           setGuest(view);
           const text = view.thought?.text;

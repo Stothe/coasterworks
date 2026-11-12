@@ -1,4 +1,5 @@
 import { MAX_ENTRY_FEE, type ExecResult } from "@coasterworks/sim";
+import { useEffect, useRef } from "react";
 import type { ParkState } from "../../state/useParkState";
 import { Stepper } from "../trays/Stepper";
 
@@ -19,10 +20,24 @@ export interface ParkControlsProps {
  * so what they show is what the next snapshot says, not what was asked for.
  */
 export function ParkControls({ park, execute, onError, disabled = false }: ParkControlsProps) {
+  // The fee last asked for, until a snapshot shows the fee has changed: a step taken before then
+  // (a typed fee then a click on +, or two quick clicks) goes on from what was asked, not from
+  // the fee the last snapshot had, which would undo the first.
+  const requestedFee = useRef<number | null>(null);
+  useEffect(() => {
+    requestedFee.current = null;
+  }, [park.entryFee]);
+
   const run = (name: string, input: unknown) => {
     void execute(name, input).then((result) => {
-      if (!result.ok) onError(result.error);
+      if (result.ok) return;
+      if (name === "park_set_entry_fee") requestedFee.current = null;
+      onError(result.error);
     });
+  };
+  const setFee = (cents: number) => {
+    requestedFee.current = cents;
+    run("park_set_entry_fee", { cents });
   };
   const noEntrance = park.entrance === null;
   return (
@@ -51,11 +66,14 @@ export function ParkControls({ park, execute, onError, disabled = false }: ParkC
           min={0}
           max={MAX_FEE_DOLLARS}
           commitOnBlur
-          onChange={(dollars) => run("park_set_entry_fee", { cents: dollars * 100 })}
+          onChange={(dollars) => setFee(dollars * 100)}
           onStep={(by) =>
-            run("park_set_entry_fee", {
-              cents: Math.min(MAX_ENTRY_FEE, Math.max(0, park.entryFee + by * 100)),
-            })
+            setFee(
+              Math.min(
+                MAX_ENTRY_FEE,
+                Math.max(0, (requestedFee.current ?? park.entryFee) + by * 100),
+              ),
+            )
           }
           canDecrease={park.entryFee > 0}
           canIncrease={park.entryFee < MAX_ENTRY_FEE}

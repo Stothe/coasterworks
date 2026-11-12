@@ -58,18 +58,20 @@ describe("ParkTray: the gate", () => {
     const execute = vi.fn<(name: string, input: unknown) => Promise<ExecResult>>();
     execute.mockResolvedValue(OK);
     const onError = vi.fn();
-    render(
+    const view = (o: Parameters<typeof makeSource>[0]) => (
       <Tray
         tool="park"
         actions={[]}
         ctx={null}
         lastCharge={null}
         onError={onError}
-        source={makeSource(over)}
+        source={makeSource(o)}
         execute={execute}
-      />,
+      />
     );
-    return { execute, onError };
+    const rendered = render(view(over));
+    const rerender = (o: Parameters<typeof makeSource>[0]) => rendered.rerender(view(o));
+    return { execute, onError, rerender };
   }
   const park = (over: Partial<ParkPublic> = {}): { park: ParkPublic } => ({
     park: {
@@ -139,8 +141,26 @@ describe("ParkTray: the gate", () => {
     expect((button("Decrease entry fee") as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(button("Increase entry fee"));
     expect(execute).toHaveBeenCalledWith("park_set_entry_fee", { cents: 150 });
+    // Before a snapshot shows $1.50, the next step goes on from what was asked.
     fireEvent.click(button("Decrease entry fee"));
-    expect(execute).toHaveBeenCalledWith("park_set_entry_fee", { cents: 0 });
+    expect(execute).toHaveBeenLastCalledWith("park_set_entry_fee", { cents: 50 });
+  });
+
+  it("steps on from the fee asked for until a snapshot shows it", () => {
+    const { execute, rerender } = renderPark(park({ entryFee: 500 }));
+    fireEvent.click(button("Increase entry fee"));
+    fireEvent.click(button("Increase entry fee"));
+    expect(execute.mock.calls.map((call) => call[1])).toEqual([{ cents: 600 }, { cents: 700 }]);
+    // A typed fee, then + before the snapshot comes: + goes on from the typed fee.
+    const field = screen.getByLabelText("Entry fee in dollars");
+    fireEvent.change(field, { target: { value: "20" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+    fireEvent.click(button("Increase entry fee"));
+    expect(execute).toHaveBeenLastCalledWith("park_set_entry_fee", { cents: 2100 });
+    // Once the snapshot shows a fee, steps go from it.
+    rerender(park({ entryFee: 900 }));
+    fireEvent.click(button("Increase entry fee"));
+    expect(execute).toHaveBeenLastCalledWith("park_set_entry_fee", { cents: 1000 });
   });
 
   it("tells a refusal", async () => {
@@ -267,6 +287,26 @@ describe("GuestInspector", () => {
       await vi.advanceTimersByTimeAsync(GUEST_POLL_MS * 5);
     });
     expect(query).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not take another refusal, or an odd answer, as the guest leaving", async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const query = vi.fn(async (): Promise<QueryResult<unknown>> => {
+      calls++;
+      if (calls === 2) return { ok: false, error: "The park is still loading" };
+      if (calls === 3) return { ok: true, result: { nonsense: true } };
+      return { ok: true, result: guest() };
+    });
+    render(<GuestInspector id={4} query={query} />);
+    for (let i = 0; i < 4; i++) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(i === 0 ? 0 : GUEST_POLL_MS);
+      });
+      expect(screen.queryByText("Has left the park")).toBeNull();
+      expect(screen.getByText("Ada Park")).toBeTruthy();
+    }
+    expect(query).toHaveBeenCalledTimes(4);
   });
 
   it("says when the guest has left", async () => {
