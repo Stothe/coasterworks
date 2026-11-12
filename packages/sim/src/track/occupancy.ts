@@ -194,6 +194,11 @@ export interface PieceContext {
   pose: Pose;
   /** Indexes of every ride's and stall's entrance, exit and service tiles. */
   reserved: ReadonlySet<number>;
+  /**
+   * Bands of this track's own pieces that are not in the world's index yet, on a tile index: the
+   * pieces a fit has laid out but not built (see `track/fit.ts`). Checked exactly like indexed ones.
+   */
+  extra?: (tile: number) => Iterable<TrackBand>;
 }
 
 /** Indexes of every ride's and stall's access tiles: entrances, exits and service tiles. */
@@ -239,36 +244,73 @@ export function placementRefusal(
   const t = world.terrain;
   const n = ctx.pieces.length;
   const closes = posesEqual(applyPiece(ctx.pose, piece), ctx.start);
-  const entrance = world.park.entrance;
   const index = trackIndex(world);
   const clearance = TRACK_CLEARANCE * STEP;
+  const extra = ctx.extra;
   for (const tile of pieceTiles(ctx.pose, piece)) {
     const { x, y } = tile;
-    if (!Number.isInteger(x) || x < 1 || y < 1 || x > t.width - 2 || y > t.height - 2) {
-      return TRACK_OUTSIDE;
-    }
+    const ground = tileRefusal(world, ctx.reserved, x, y, tile.zLo);
+    if (ground !== null) return ground;
     const at = y * t.width + x;
-    if ((t.water[at] as number) > 0) return TRACK_OVER_WATER;
-    if ((t.occupant[at] as number) !== 0) return TRACK_RIDE_IN_WAY;
-    if (ctx.reserved.has(at)) return TRACK_ENTRANCE_IN_WAY;
-    if (entrance !== null && entrance.x === x && entrance.y === y) return TRACK_PARK_ENTRANCE;
-    const ground = Math.max(...tileCorners(t, x, y));
-    if (tile.zLo < ground) return TRACK_UNDERGROUND;
-    if ((t.path[at] as number) !== 0 && tile.zLo < ground + PATH_CLEARANCE) {
-      return TRACK_LOW_OVER_PATH;
-    }
     const lo = tile.zLo * STEP;
     const hi = tile.zHi * STEP;
     for (const band of index.tiles.get(at) ?? []) {
-      const own = band.rideId === ctx.rideId;
-      if (own && (band.piece >= n || band.piece === n - 1 || (closes && band.piece === 0))) {
-        continue;
-      }
-      if (band.zLo < hi + clearance && band.zHi > lo - clearance) {
-        return own ? TRACK_HITS_ITSELF : TRACK_HITS_OTHER;
+      const hit = bandClash(band, ctx.rideId, n, closes, lo - clearance, hi + clearance);
+      if (hit !== null) return hit;
+    }
+    if (extra !== undefined) {
+      for (const band of extra(at)) {
+        const hit = bandClash(band, ctx.rideId, n, closes, lo - clearance, hi + clearance);
+        if (hit !== null) return hit;
       }
     }
   }
+  return null;
+}
+
+/**
+ * Why `band` is in the way of piece `n` of ride `rideId` passing between `lo` and `hi` (its band
+ * widened by the clearance): never for its own pieces from `n` on, the piece it joins, or the
+ * first piece when it closes the circuit.
+ */
+function bandClash(
+  band: TrackBand,
+  rideId: number,
+  n: number,
+  closes: boolean,
+  lo: number,
+  hi: number,
+): string | null {
+  const own = band.rideId === rideId;
+  if (own && (band.piece >= n || band.piece === n - 1 || (closes && band.piece === 0))) return null;
+  if (band.zLo < hi && band.zHi > lo) return own ? TRACK_HITS_ITSELF : TRACK_HITS_OTHER;
+  return null;
+}
+
+/**
+ * Why track whose lowest point over tile (x, y) is `zLo` (whole steps) cannot pass there, apart
+ * from other track: rule 4 of `placementRefusal` for one tile. Null when it can.
+ */
+export function tileRefusal(
+  world: World,
+  reserved: ReadonlySet<number>,
+  x: number,
+  y: number,
+  zLo: number,
+): string | null {
+  const t = world.terrain;
+  if (!Number.isInteger(x) || x < 1 || y < 1 || x > t.width - 2 || y > t.height - 2) {
+    return TRACK_OUTSIDE;
+  }
+  const at = y * t.width + x;
+  if ((t.water[at] as number) > 0) return TRACK_OVER_WATER;
+  if ((t.occupant[at] as number) !== 0) return TRACK_RIDE_IN_WAY;
+  if (reserved.has(at)) return TRACK_ENTRANCE_IN_WAY;
+  const entrance = world.park.entrance;
+  if (entrance !== null && entrance.x === x && entrance.y === y) return TRACK_PARK_ENTRANCE;
+  const ground = Math.max(...tileCorners(t, x, y));
+  if (zLo < ground) return TRACK_UNDERGROUND;
+  if ((t.path[at] as number) !== 0 && zLo < ground + PATH_CLEARANCE) return TRACK_LOW_OVER_PATH;
   return null;
 }
 

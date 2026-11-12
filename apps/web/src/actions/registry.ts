@@ -353,14 +353,17 @@ export const TILE_LIST_ENTRIES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * The coaster commands, which the coaster builder sends (Plan E, Task 8): a form in the command
- * bar could not lay track sensibly, so they are not actions either.
+ * The coaster commands, which the coaster builder sends (Plan E, Task 8), and the fit preview it
+ * asks: a form in the command bar could not lay track sensibly, so they are not actions either.
  */
 export const BUILDER_ENTRIES: ReadonlySet<string> = new Set([
   "coaster_begin",
   "coaster_add_piece",
   "coaster_remove_piece",
   "coaster_complete",
+  "coaster_build_from_points",
+  "coaster_extend_to",
+  "coaster_fit_preview",
 ]);
 
 /**

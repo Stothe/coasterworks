@@ -1,6 +1,14 @@
 import { TRACK_PIECES } from "@coasterworks/content";
 import { z } from "zod";
-import { appendRefusal, coasterOf, completeRefusal } from "../commands/coaster.js";
+import {
+  MAX_FIT_POINTS,
+  appendRefusal,
+  coasterOf,
+  completeRefusal,
+  fitPointSchema,
+  planExtend,
+  planFromPoints,
+} from "../commands/coaster.js";
 import { defineQuery } from "../commands/define.js";
 import { checkCash } from "../commands/execute.js";
 import { copyRide } from "../rides/types.js";
@@ -59,4 +67,35 @@ export const trackPiecesList = defineQuery({
   category: "ride",
   input: z.object({}),
   run: () => TRACK_PIECES.map((piece) => JSON.parse(JSON.stringify(piece)) as unknown),
+});
+
+export const coasterFitPreview = defineQuery({
+  name: "coaster_fit_preview",
+  description: `Shows what fitting track through points would lay, without building anything (what the builder's draw mode shows, red where a point fails). Give either \`family\` (a new coaster: points[0] is its station spot, exactly as \`coaster_build_from_points\` takes it) or \`id\` (an incomplete coaster: the points are fitted one after another from where its track ends, as repeated \`coaster_extend_to\` would), plus \`points\` [{ x, y, height? }] (at most ${MAX_FIT_POINTS}) and optionally \`close\` (fit back onto the station and check the circuit as \`coaster_complete\` would). Returns { pieces (for a family the whole track, station included; for an id the pieces it would add), points [{ ok, reason (null, or why not), pieces (how many pieces its stretch has) }] one per point, close ({ ok, reason, pieces } or null), ok, error (the first failure as the command would give it, or null), cost (cents), begin ({ x, y, dir } of the station for a family, else null) }. After the first failing point every later point reports "Fix the point before this one".`,
+  category: "ride",
+  input: z.object({
+    family: z.string().optional(),
+    id: z.int().optional(),
+    points: z.array(fitPointSchema).min(1).max(MAX_FIT_POINTS),
+    close: z.boolean().optional(),
+  }),
+  run: (world, input) => {
+    if ((input.family === undefined) === (input.id === undefined)) {
+      throw new Error("Give either a family (a new coaster) or the id of a coaster");
+    }
+    const close = input.close === true;
+    const plan =
+      input.family !== undefined
+        ? planFromPoints(world, input.family, input.points, close)
+        : planExtend(world, input.id as number, input.points, close);
+    return {
+      pieces: plan.pieces,
+      points: plan.points,
+      close: plan.close,
+      ok: plan.error === null,
+      error: plan.error,
+      cost: plan.cost,
+      begin: plan.begin,
+    };
+  },
 });

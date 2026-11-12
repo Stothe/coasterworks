@@ -60,8 +60,15 @@ describe("fieldsFor", () => {
   });
 
   it("can render every command the sim has today", () => {
-    // The tile lists are sent by a drag of the path tool, never asked for in a form.
-    for (const entry of catalog.filter((e) => !TILE_LIST_ENTRIES.has(e.name))) {
+    // The tile lists are sent by a drag of the path tool, and the lists of points by the coaster
+    // builder's draw mode; neither is ever asked for in a form.
+    const POINT_LISTS = new Set([
+      "coaster_build_from_points",
+      "coaster_extend_to",
+      "coaster_fit_preview",
+    ]);
+    const formless = (name: string) => TILE_LIST_ENTRIES.has(name) || POINT_LISTS.has(name);
+    for (const entry of catalog.filter((e) => !formless(e.name))) {
       expect(fieldsFor(entry.inputSchema as JsonSchemaObject), entry.name).not.toBeNull();
     }
   });

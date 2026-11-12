@@ -169,6 +169,21 @@ const FIXTURES: Record<string, Fixture> = {
     },
   },
   coaster_complete: { input: { id: 3 }, setup: (world) => placeCoaster(world, SMALL_CIRCUIT) },
+  // A station by two rides, so the ride id counter and the sorted lists have to come back.
+  coaster_build_from_points: {
+    input: {
+      family: "steel_coaster",
+      points: [
+        { x: 11, y: 4 },
+        { x: 13, y: 5 },
+      ],
+    },
+    setup: twoRides,
+  },
+  coaster_extend_to: {
+    input: { id: 3, point: { x: 13, y: 12 } },
+    setup: (world) => placeCoaster(world, ["station"]),
+  },
   sim_advance: { input: { days: 5 } },
   finance_take_loan: { input: { amount: 20_000_00 } },
   finance_repay_loan: { input: { amount: 10_00 }, setup: (world) => takeLoan(world, 20_000_00) },

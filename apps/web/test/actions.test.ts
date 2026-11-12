@@ -199,6 +199,8 @@ describe("buildActions: commands", () => {
       "coaster_add_piece",
       "coaster_remove_piece",
       "coaster_complete",
+      "coaster_build_from_points",
+      "coaster_extend_to",
     ]) {
       expect(
         catalog.some((e) => e.name === name),

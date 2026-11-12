@@ -148,6 +148,9 @@ describe("tools", () => {
       coaster_complete: ["id"],
       coaster_get: ["id"],
       coaster_piece_options: ["id"],
+      coaster_build_from_points: ["family", "points"],
+      coaster_extend_to: ["id", "point"],
+      coaster_fit_preview: ["points"],
       track_pieces_list: [],
     };
     for (const [name, required] of Object.entries(expected)) {
@@ -168,6 +171,7 @@ describe("tools", () => {
       "path_check_tiles",
       "coaster_get",
       "coaster_piece_options",
+      "coaster_fit_preview",
       "track_pieces_list",
     ]) {
       expect(byName.get(name)?.annotations, name).toMatchObject({ readOnlyHint: true });
@@ -181,6 +185,8 @@ describe("tools", () => {
       "coaster_add_piece",
       "coaster_remove_piece",
       "coaster_complete",
+      "coaster_build_from_points",
+      "coaster_extend_to",
     ]) {
       expect(byName.get(name)?.annotations, name).toMatchObject({ readOnlyHint: false });
     }
@@ -208,6 +214,8 @@ describe("tools", () => {
       "coaster_add_piece",
       "coaster_remove_piece",
       "coaster_complete",
+      "coaster_build_from_points",
+      "coaster_extend_to",
     ]) {
       expect(byName.get(name), name).toMatchObject({ kind: "command" });
       expect(byName.get(name)?.inputSchema.type, name).toBe("object");
@@ -219,6 +227,7 @@ describe("tools", () => {
       "path_check_tiles",
       "coaster_get",
       "coaster_piece_options",
+      "coaster_fit_preview",
       "track_pieces_list",
     ]) {
       expect(byName.get(name), name).toMatchObject({ kind: "query" });
