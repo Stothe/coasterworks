@@ -20,13 +20,14 @@ import {
 /** What the layer needs to know of a ride: the protocol's public record does. */
 export type RidePlace = Pick<RidePublic, "id" | "type" | "x" | "y" | "rot" | "open">;
 
-/** A ride about to be placed, drawn see-through on its footprint: green when `ok`, else red. */
+/** A ride about to be placed, drawn see-through on its footprint: green when `ok`, red when not,
+ * and grey while `ok` is null: the sim has not said yet. */
 export interface PlacementGhost {
   type: string;
   x: number;
   y: number;
   rot: Rot;
-  ok: boolean;
+  ok: boolean | null;
 }
 
 export type RidesModule = SceneModule & {
@@ -160,7 +161,7 @@ export function createRides(ctx: RenderContext): RidesModule {
   let places: readonly RidePlace[] = [];
   let status: RideStatusSection | null = null;
   let ghostSpec: PlacementGhost | null = null;
-  let ghost: { model: RideModel; instance: RideInstance; ok: boolean } | null = null;
+  let ghost: { model: RideModel; instance: RideInstance; ok: boolean | null } | null = null;
   let simSpeed = 1;
 
   const castsShadow = () => ctx.quality !== "low";
@@ -291,6 +292,9 @@ export function createRides(ctx: RenderContext): RidesModule {
     ghost = null;
   }
 
+  const ghostMaterial = (ok: boolean | null) =>
+    ok === null ? materials.ghostWait : ok ? materials.ghostOk : materials.ghostBad;
+
   function showGhost(spec: PlacementGhost | null): void {
     ghostSpec = spec;
     if (!spec) {
@@ -306,7 +310,7 @@ export function createRides(ctx: RenderContext): RidesModule {
     }
     if (!ghost || ghost.model !== model) {
       dropGhost();
-      const instance = model.instantiate(spec.ok ? materials.ghostOk : materials.ghostBad);
+      const instance = model.instantiate(ghostMaterial(spec.ok));
       shade(instance, true);
       for (const m of instance.meshes) m.renderOrder = 10;
       instance.pose(0, 0);
@@ -316,7 +320,7 @@ export function createRides(ctx: RenderContext): RidesModule {
     }
     if (ghost.ok !== spec.ok) {
       ghost.ok = spec.ok;
-      const material = spec.ok ? materials.ghostOk : materials.ghostBad;
+      const material = ghostMaterial(spec.ok);
       for (const m of ghost.instance.meshes) m.material = material;
     }
     seat(ghost.instance, model, spec.type, spec.x, spec.y, spec.rot);

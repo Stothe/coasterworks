@@ -363,6 +363,7 @@ describe("the terrain tray's charge", () => {
     await ready();
     expect(Object.keys(viewport.props as object).sort()).toEqual([
       "client",
+      "getCheckStamp",
       "getEntrance",
       "getGuests",
       "getRideStatus",

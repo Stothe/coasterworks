@@ -1,6 +1,7 @@
 import type {
   GuestSection,
   ParkPublic,
+  QueryResult,
   RidePublic,
   RideStatusSection,
   SimClient,
@@ -88,6 +89,12 @@ export interface ViewportProps {
   rides?: readonly RidePublic[] | null;
   /** Reads what every ride is doing in the latest snapshot, on the same terms as `getGuests`. */
   getRideStatus?(): RideStatusSection | null;
+  /**
+   * Reads a string that changes when what a placement check depends on does (the cash, the
+   * terrain, the paths, the rides) in the latest snapshot, on the same terms as `getGuests`. The
+   * placement in hand is then asked about again.
+   */
+  getCheckStamp?(): string | null;
   /** The sim's speed (0 paused, 1, 2, 4 or 8), which the rides move by. 1 when not given. */
   simSpeed?: number;
   /** Filled with the view's handle while the view is up. */
@@ -388,32 +395,45 @@ export function Viewport(props: ViewportProps) {
     // A ride or stall in hand is drawn see-through where it would go, green where the sim would
     // build it and red where not, and the tray says why not. The sim is asked (`ride_check`) once
     // the footprint moves to other tiles or turns, one question at a time: an answer that comes
-    // after the pointer has moved on asks again for where it is now. Until an answer comes the
-    // ghost keeps the colour it had.
+    // after the pointer has moved on asks again for where it is now. Until the answer for the very
+    // spot comes the ghost is grey, with nothing in the tray: the last spot's answer is not this
+    // one's. A question that fails (or is answered with nonsense) is not asked again for that spot
+    // until the pointer, the placement or the park moves it on.
     let wanted: { key: string; type: string; x: number; y: number; rot: 0 | 1 | 2 | 3 } | null =
       null;
     let known: { key: string; check: RideCheck } | null = null;
-    let lastOk = false;
+    /** Whether `known` may be out of date: the park changed since it was asked. */
+    let stale = false;
+    /** The spot whose question failed. */
+    let failed: string | null = null;
+    /** Goes up when what was asked no longer holds, so an answer in flight is not taken. */
+    let epoch = 0;
+    let seenPlacement: unknown = null;
     let asking = false;
     const showGhost = () => {
       if (wanted) {
         const { type, x, y, rot } = wanted;
-        scene.setPlacementGhost({ type, x, y, rot, ok: lastOk });
+        const ok = known?.key === wanted.key ? known.check.ok : null;
+        scene.setPlacementGhost({ type, x, y, rot, ok });
       } else scene.setPlacementGhost(null);
+    };
+    /** Shows what is known of the wanted spot: its answer, or nothing yet. */
+    const showCheck = () => {
+      const check = wanted && known?.key === wanted.key ? known.check : null;
+      uiStore.getState().setPlacementCheck(check);
+      showGhost();
     };
     const settle = (key: string, check: RideCheck) => {
       known = { key, check };
-      if (wanted?.key !== key) return;
-      lastOk = check.ok;
-      uiStore.getState().setPlacementCheck(check);
-      showGhost();
+      stale = false;
+      if (wanted?.key === key) showCheck();
     };
     const askCheck = () => {
       const target = wanted;
       const { client } = latest.current;
-      if (!target || asking || !client || disposed) return;
-      if (known?.key === target.key) {
-        settle(target.key, known.check);
+      if (!target || asking || !client || disposed || failed === target.key) return;
+      if (known?.key === target.key && !stale) {
+        showCheck();
         return;
       }
       if (target.x < 0 || target.y < 0) {
@@ -421,15 +441,28 @@ export function Viewport(props: ViewportProps) {
         return;
       }
       asking = true;
+      const asked = epoch;
       const { key, type, x, y, rot } = target;
       const done = (check: RideCheck | null) => {
         asking = false;
         if (disposed) return;
-        if (check) settle(key, check);
-        // The pointer moved on, or the park changed, while the sim was answering.
-        if (wanted && wanted.key !== known?.key) askCheck();
+        if (asked === epoch) {
+          if (check) settle(key, check);
+          else failed = key;
+        }
+        // The pointer moved on, or the park changed, while the sim was answering. A spot whose
+        // question failed is left: asking it again from here could go on without end.
+        if (wanted && failed !== wanted.key && (wanted.key !== known?.key || stale)) askCheck();
       };
-      client.query("ride_check", { type, x, y, rot }).then(
+      let reply: Promise<QueryResult<unknown>>;
+      try {
+        reply = client.query("ride_check", { type, x, y, rot });
+      } catch {
+        // A closed client throws rather than rejects.
+        done(null);
+        return;
+      }
+      reply.then(
         (answer) =>
           done(
             !answer.ok
@@ -441,9 +474,11 @@ export function Viewport(props: ViewportProps) {
         () => done(null),
       );
     };
-    /** Forgets what the sim said: the park has changed, and the same tiles may answer otherwise. */
+    /** The park has changed, and the same tiles may answer otherwise: ask again, and keep the answer shown until the new one comes. */
     const recheck = () => {
-      known = null;
+      stale = true;
+      failed = null;
+      epoch++;
       askCheck();
     };
 
@@ -455,15 +490,26 @@ export function Viewport(props: ViewportProps) {
         const rot = rotOf(placement.defaults);
         const area = at ? footprintAt(type, rot, at.x, at.y) : null;
         const key = area && `${type}:${area.x}:${area.y}:${rot}`;
+        // Another thing in hand is a new question, whatever was known.
+        if (placement !== seenPlacement) {
+          seenPlacement = placement;
+          known = null;
+          stale = false;
+          failed = null;
+          epoch++;
+          wanted = null;
+        }
         if (!area || !key) {
           wanted = null;
+          uiStore.getState().setPlacementCheck(null);
           showGhost();
           scene.highlightTile(null);
           return;
         }
         if (wanted?.key !== key) {
           wanted = { key, type, x: area.x, y: area.y, rot };
-          showGhost();
+          failed = null;
+          showCheck();
           askCheck();
         }
         // The outline is the part of the footprint on the map.
@@ -475,8 +521,10 @@ export function Viewport(props: ViewportProps) {
         else scene.highlightTile(null);
         return;
       }
+      seenPlacement = null;
       if (wanted) {
         wanted = null;
+        uiStore.getState().setPlacementCheck(null);
         showGhost();
       }
       const rect =
@@ -721,6 +769,7 @@ export function Viewport(props: ViewportProps) {
     let guests: GuestSection | null | undefined;
     // The rides and their status the scene was last given: each goes in when it is new.
     let rides: readonly RidePublic[] | null | undefined;
+    let stamp: string | null | undefined;
     let rideStatus: RideStatusSection | null | undefined;
     let frame = requestAnimationFrame(function draw(now) {
       const nextGuests = latest.current.getGuests?.() ?? null;
@@ -734,6 +783,13 @@ export function Viewport(props: ViewportProps) {
         rides = nextRides;
         scene.setRides(nextRides);
         // Someone built or took something down: where the ghost is may answer otherwise.
+        if (changed && wanted) recheck();
+      }
+      // Cash, the ground or the paths changed: so may the answer.
+      const nextStamp = latest.current.getCheckStamp?.() ?? null;
+      if (nextStamp !== stamp) {
+        const changed = stamp !== undefined;
+        stamp = nextStamp;
         if (changed && wanted) recheck();
       }
       const nextStatus = latest.current.getRideStatus?.() ?? null;

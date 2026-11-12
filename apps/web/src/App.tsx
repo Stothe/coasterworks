@@ -253,6 +253,12 @@ export function App() {
   // The view reads these once per frame; they look at the latest snapshot without a render.
   const getGuests = useCallback(() => live.current.host.guests, []);
   const getEntrance = useCallback(() => live.current.host.park?.entrance, []);
+  const getCheckStamp = useCallback(() => {
+    const header = live.current.host.snapshot?.header;
+    return header
+      ? `${header.cash}:${header.terrainVersion}:${header.pathVersion}:${header.rideVersion}`
+      : null;
+  }, []);
 
   useEffect(() => {
     live.current = {
@@ -380,6 +386,7 @@ export function App() {
           paths={host.paths}
           getGuests={getGuests}
           getEntrance={getEntrance}
+          getCheckStamp={getCheckStamp}
           rides={host.rides}
           getRideStatus={host.getRideStatus}
           client={client}

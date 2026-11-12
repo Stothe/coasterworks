@@ -150,6 +150,58 @@ describe("RideInspector: header and overview", () => {
     await vi.waitFor(() => expect(field.value).toBe("2.50"));
   });
 
+  it("keeps stepping from the price last asked for when a poll shows an earlier step", async () => {
+    let price = 100;
+    const pending: Array<() => void> = [];
+    const query = vi.fn(async (): Promise<QueryResult<unknown>> => ({
+      ok: true,
+      result: carousel({ price }),
+    }));
+    const execute = vi.fn(
+      (_name: string, input: unknown) =>
+        new Promise<ExecResult>((resolve) => {
+          const { cents } = input as { cents: number };
+          pending.push(() => {
+            price = cents;
+            resolve(OK);
+          });
+        }),
+    );
+    render(<RideInspector id={1} query={query} execute={execute} notify={vi.fn()} />);
+    await screen.findByRole("heading", { name: "Carousel 1" });
+    const up = () => fireEvent.click(screen.getByRole("button", { name: "Increase price" }));
+    await act(async () => {
+      up();
+      up();
+    });
+    // The first step lands and the poll shows 1.10 while the second is still on its way.
+    await act(async () => pending[0]?.());
+    const field = screen.getByRole("textbox", { name: "Price in dollars" }) as HTMLInputElement;
+    await vi.waitFor(() => expect(field.value).toBe("1.10"));
+    await act(async () => up());
+    expect(execute.mock.calls.map(([, input]) => input)).toEqual([
+      { id: 1, cents: 110 },
+      { id: 1, cents: 120 },
+      { id: 1, cents: 130 },
+    ]);
+  });
+
+  it("leaves Escape in the name box to the box: it reverts the draft and does not reach the window", async () => {
+    const s = sim();
+    await shown(s);
+    const onWindow = vi.fn();
+    window.addEventListener("keydown", onWindow);
+    try {
+      const name = screen.getByRole("textbox", { name: "Name" }) as HTMLInputElement;
+      fireEvent.change(name, { target: { value: "Zoom" } });
+      fireEvent.keyDown(name, { key: "Escape" });
+      expect(name.value).toBe("Carousel 1");
+      expect(onWindow).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keydown", onWindow);
+    }
+  });
+
   it("renames on Enter, and leaves a blank name as it was", async () => {
     const s = sim();
     await shown(s);

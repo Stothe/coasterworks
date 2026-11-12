@@ -223,7 +223,8 @@ function Overview({ ride, run, disabled }: OverviewProps) {
   // then goes on from what was asked, not from the price the last answer had.
   const requested = useRef<number | null>(null);
   useEffect(() => {
-    requested.current = null;
+    // Only the answer to the last step ends it: an earlier step's answer comes while it is pending.
+    if (requested.current === ride.price) requested.current = null;
   }, [ride.price]);
   const setPrice = (cents: number) => {
     requested.current = cents;
@@ -342,6 +343,8 @@ function NameField({
         onKeyDown={(event) => {
           if (event.key === "Enter") commit();
           if (event.key === "Escape") {
+            // The box has dealt with it: the inspector stays open.
+            event.stopPropagation();
             setDraft(name);
             event.currentTarget.blur();
           }

@@ -416,6 +416,22 @@ describe("createRides", () => {
     expect(freed).toBeGreaterThan(0);
   });
 
+  it("draws a ghost not yet checked in a neutral tint, neither the green nor the red", () => {
+    const h = harness();
+    const matOf = () => (meshes(h.scene.children[0] as Object3D)[0] as Mesh).material;
+    h.rides.setPlacementGhost({ type: "drinks_stand", x: 4, y: 4, rot: 0, ok: true });
+    const green = matOf();
+    h.rides.setPlacementGhost({ type: "drinks_stand", x: 4, y: 4, rot: 0, ok: false });
+    const red = matOf();
+    h.rides.setPlacementGhost({ type: "drinks_stand", x: 5, y: 4, rot: 0, ok: null });
+    const neutral = matOf();
+    expect(neutral).not.toBe(green);
+    expect(neutral).not.toBe(red);
+    expect((neutral as Material & { transparent: boolean }).transparent).toBe(true);
+    h.rides.setPlacementGhost({ type: "drinks_stand", x: 5, y: 4, rot: 0, ok: true });
+    expect(matOf()).toBe(green);
+  });
+
   it("casts no shadows at low and builds the cheapest models in software", () => {
     const h = harness("low", true);
     h.rides.setRides([ride(1, "carousel", 2, 2)]);
