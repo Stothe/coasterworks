@@ -310,7 +310,7 @@ export const terrainSetWater = defineCommand({
       if (tileHasTrack(world, index)) blocked = true;
       if (entrance !== null && entrance.x === x && entrance.y === y) blocked = true;
     });
-    if (blocked) return "Cannot flood a path, a ride or the park entrance";
+    if (blocked) return "Cannot flood a path, a ride, coaster track or the park entrance";
     return aboveGround ? null : "Water must be above the ground";
   },
   apply: (world, input) =>

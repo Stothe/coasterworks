@@ -83,15 +83,18 @@ export {
 export type { TrackBand, TrackIndex } from "./track/occupancy.js";
 export { MAX_TRACK_PIECES } from "./track/record.js";
 export {
+  ALREADY_REACHED,
   FIX_EARLIER,
   MAX_EXPANSIONS,
+  MAX_FIT_EXPANSIONS,
   NO_FIT,
+  TOO_LONG,
   TOO_STEEP,
   TOO_TIGHT,
   fitPoints,
   pieceWeight,
 } from "./track/fit.js";
-export type { FitPoint, FitResult, FitStart, PointFit } from "./track/fit.js";
+export type { FitLimits, FitPoint, FitResult, FitStart, FitWork, PointFit } from "./track/fit.js";
 export type { TrackRecord } from "./track/record.js";
 export { LOAN_MAX, financeSystem } from "./systems/finance.js";
 export { guestSystem } from "./systems/guests.js";

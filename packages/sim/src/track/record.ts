@@ -87,3 +87,13 @@ export function trackCost(track: TrackRecord): number {
   for (const piece of track.pieces) total += pieceCost(track.family, piece);
   return total;
 }
+
+/**
+ * What demolishing `track` refunds, in cents: half of each piece's cost rounded down, summed, so
+ * it is exactly what removing its pieces one by one with `coaster_remove_piece` would refund.
+ */
+export function trackRefund(track: TrackRecord): number {
+  let total = 0;
+  for (const piece of track.pieces) total += Math.floor(pieceCost(track.family, piece) / 2);
+  return total;
+}

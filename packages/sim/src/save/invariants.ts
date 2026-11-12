@@ -31,16 +31,17 @@ import {
   type RideRecord,
   type Tile,
 } from "../rides/types.js";
-import { inBounds } from "../terrain/terrain.js";
-import { isJoinPose, placementRefusal, reservedTiles, stationAccess } from "../track/occupancy.js";
+import { MAX_PATH_SLOPE } from "../paths/paths.js";
+import { inBounds, tileCorners } from "../terrain/terrain.js";
 import {
-  applyPiece,
-  circuitCloses,
-  pieceRefusal,
-  poseAtTile,
-  posesEqual,
-  type Dir,
-} from "../track/pose.js";
+  NOT_CLOSED,
+  circuitRefusal,
+  isJoinPose,
+  placementRefusal,
+  reservedTiles,
+  stationAccess,
+} from "../track/occupancy.js";
+import { applyPiece, pieceRefusal, poseAtTile, posesEqual, type Dir } from "../track/pose.js";
 import { MAX_TRACK_PIECES } from "../track/record.js";
 import { MONTHS_PER_YEAR } from "../time.js";
 import { MAX_HEIGHT, type World } from "../world/types.js";
@@ -423,11 +424,44 @@ function rideProblem(world: World): string | null {
 }
 
 /**
+ * Why coaster `ride`'s entrance or exit tile could not be one, as `coaster_begin` checks it (on
+ * the map off its outer ring, no water, no ride or stall, not the park entrance, no steeper than
+ * a path may be), or null. Other track over it is refused by the track replay.
+ */
+function accessRefusal(world: World, ride: RideRecord): string | null {
+  const t = world.terrain;
+  const entrance = world.park.entrance;
+  for (const key of ["entrance", "exit"] as const) {
+    const tile = ride[key];
+    if (tile === null) return `${key} is missing`;
+    const at = showTile(tile);
+    if (tile.x < 1 || tile.y < 1 || tile.x > t.width - 2 || tile.y > t.height - 2) {
+      return `${key} ${at} is off the map or on its outer ring`;
+    }
+    const index = tile.y * t.width + tile.x;
+    if ((t.water[index] as number) > 0) return `${key} ${at} is under water`;
+    if ((t.occupant[index] as number) !== 0) return `${key} ${at} is on a ride or stall`;
+    if (entrance !== null && entrance.x === tile.x && entrance.y === tile.y) {
+      return `${key} ${at} is the park entrance`;
+    }
+    const corners = tileCorners(t, tile.x, tile.y);
+    if (Math.max(...corners) - Math.min(...corners) > MAX_PATH_SLOPE) {
+      return `${key} ${at} is too steep for a path`;
+    }
+  }
+  return null;
+}
+
+/**
  * The coaster tracks: sorted by id, one for each coaster ride and none for anything else, of the
  * ride's family, starting where pieces join on the tile and facing the way the ride says, every
  * piece a known one, and each track, replayed piece by piece from its start, taken by the same
  * placement rules the commands use against the world without it (`placementRefusal`, with a track
- * index rebuilt from the tracks rather than trusted). A complete track closes on its start.
+ * index rebuilt from the tracks rather than trusted). Its first station tile is level ground with
+ * the track at its height, and its entrance and exit tiles are on the map off its outer ring, dry,
+ * clear of rides and stalls and the park entrance, and no steeper than a path may be, as
+ * `coaster_begin` requires. A complete track is a circuit `coaster_complete` takes (it closes on
+ * its start, has one station run of the right length, and a lift or no climb above its station).
  */
 function checkTracks(world: World): string | null {
   const coasters = world.rides.filter((ride) => ride.kind === "coaster");
@@ -457,6 +491,19 @@ function checkTracks(world: World): string | null {
       return `${label} does not start on its coaster's tile (${ride.x}, ${ride.y}) facing ${ride.rot}`;
     }
     if (track.pieces[0] !== "station") return `${label} does not begin with a station piece`;
+    if (!inBounds(world.terrain, ride.x, ride.y)) {
+      return `${label} starts on tile (${ride.x}, ${ride.y}), off the map`;
+    }
+    const corners = tileCorners(world.terrain, ride.x, ride.y);
+    const ground = Math.max(...corners);
+    if (Math.min(...corners) !== ground) {
+      return `${label} starts on tile (${ride.x}, ${ride.y}), which is not flat`;
+    }
+    if (start.z !== ground * STEP) {
+      return `${label} starts at height ${start.z / STEP}, not on the ground at ${ground}`;
+    }
+    const access = accessRefusal(world, ride);
+    if (access !== null) return `coaster ${ride.id}'s ${access}`;
     let pose = start;
     for (const [n, id] of track.pieces.entries()) {
       const piece = pieceById(id);
@@ -476,22 +523,20 @@ function checkTracks(world: World): string | null {
     const family = familyById(track.family) as CoasterFamily;
     const { start } = track;
     let pose = start;
+    // The pieces laid so far, grown one at a time (not sliced per piece) so a replay is linear.
+    const laid: string[] = [];
     for (const [n, id] of track.pieces.entries()) {
       const piece = pieceById(id) as TrackPiece;
-      const ctx = {
-        rideId: track.id,
-        family,
-        start,
-        pieces: track.pieces.slice(0, n),
-        pose,
-        reserved,
-      };
+      const ctx = { rideId: track.id, family, start, pieces: laid, pose, reserved };
       const refused = placementRefusal(world, ctx, piece);
       if (refused !== null) return `${label} piece ${n} (${id}) does not fit: ${refused}`;
+      laid.push(id);
       pose = applyPiece(pose, piece);
     }
-    if (track.complete && !circuitCloses(start, track.pieces)) {
-      return `${label} is complete but does not close`;
+    if (track.complete) {
+      const circuit = circuitRefusal(start, track.pieces);
+      if (circuit === NOT_CLOSED) return `${label} is complete but does not close`;
+      if (circuit !== null) return `${label} is complete but not a circuit: ${circuit}`;
     }
     if (track.tested && !track.complete) return `${label} is tested but not complete`;
     if (ride.open && !track.tested) return `coaster ${ride.id} is open but has not been tested`;

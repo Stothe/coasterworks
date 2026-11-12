@@ -20,7 +20,7 @@ describe("terrain commands keep paths and the entrance buildable", () => {
     const { sim } = setup();
     expect(sim.execute("terrain_set_water", { x: 2, y: 8, w: 1, h: 1, level: 20 })).toEqual({
       ok: false,
-      error: "Cannot flood a path, a ride or the park entrance",
+      error: "Cannot flood a path, a ride, coaster track or the park entrance",
     });
     expect(sim.execute("terrain_set_water", { x: 0, y: 7, w: 1, h: 3, level: 20 }).ok).toBe(false);
     expect(sim.execute("terrain_set_water", { x: 2, y: 9, w: 3, h: 2, level: 20 }).ok).toBe(true);
@@ -62,7 +62,7 @@ describe("terrain commands keep paths and the entrance buildable", () => {
     expect(world.terrain.corners).toEqual(before);
     expect(sim.execute("terrain_set_water", { x: 10, y: 10, w: 1, h: 1, level: 20 })).toEqual({
       ok: false,
-      error: "Cannot flood a path, a ride or the park entrance",
+      error: "Cannot flood a path, a ride, coaster track or the park entrance",
     });
   });
 

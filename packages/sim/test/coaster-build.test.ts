@@ -20,6 +20,8 @@ import {
   STATION_LENGTH,
 } from "../src/commands/coaster.js";
 import { canPlaceRide } from "../src/rides/rides.js";
+import { trackRefund } from "../src/track/record.js";
+import { MAX_HEIGHT } from "../src/world/types.js";
 import { validateWorldInvariants } from "../src/save/invariants.js";
 import {
   STATION_NOT_CONTIGUOUS,
@@ -30,7 +32,9 @@ import {
   TRACK_LOW_OVER_PATH,
   TRACK_OUTSIDE,
   TRACK_OVER_WATER,
+  TRACK_CEILING,
   TRACK_RIDE_IN_WAY,
+  TRACK_TOO_HIGH,
   TRACK_UNDERGROUND,
 } from "../src/track/occupancy.js";
 import { typeById } from "@coasterworks/content";
@@ -459,7 +463,7 @@ describe("other systems respect track", () => {
       "A coaster's track stands here",
     );
     expect(refused(sim, "terrain_set_water", { x: 10, y: 11, w: 1, h: 1, level: 9 })).toBe(
-      "Cannot flood a path, a ride or the park entrance",
+      "Cannot flood a path, a ride, coaster track or the park entrance",
     );
     // Inside the oval the ground is free.
     ok(sim, "terrain_raise", { x: 10, y: 8, w: 1, h: 1, steps: 1 });
@@ -537,6 +541,53 @@ describe("removing, undoing and demolishing", () => {
   });
 });
 
+describe("refunds and the height ceiling", () => {
+  it("refunds on demolish exactly what removing the pieces one by one refunds", () => {
+    const pieces = ["station", ...OVAL];
+    const perPiece = pieces.reduce(
+      (sum, id) =>
+        sum + Math.floor(familyById("steel_coaster")!.pieceCost[pieceById(id)!.kind] / 2),
+      0,
+    );
+    const whole = oval();
+    const cash = whole.world.finance.cash;
+    ok(whole, "ride_demolish", { id: 1 });
+    expect(whole.world.finance.cash - cash).toBe(perPiece);
+    expect(trackRefund({ ...oval().world.tracks[0]! })).toBe(perPiece);
+
+    const bit = oval();
+    const start = bit.world.finance.cash;
+    ok(bit, "ride_close", { id: 1 });
+    for (let i = 0; i < OVAL.length; i++) ok(bit, "coaster_remove_piece", { id: 1 });
+    ok(bit, "ride_demolish", { id: 1 });
+    expect(bit.world.finance.cash - start).toBe(perPiece);
+  });
+
+  it("refuses track higher than the ceiling above the highest ground", () => {
+    const sim = makeSim();
+    ok(sim, "terrain_level", { x: 1, y: 12, w: 30, h: 9, height: MAX_HEIGHT });
+    begin(sim, { x: 4, y: 16, dir: 1 });
+    // Up 1, 3, 4 a tile, 3 and 1: 64 steps, ending level on the ceiling exactly.
+    add(sim, ["flat_to_gentle_up_lift", "gentle_to_steep_up_lift"]);
+    add(sim, Array<string>(14).fill("steep_up_lift"));
+    add(sim, ["steep_to_gentle_up_lift", "gentle_up_to_flat_lift"]);
+    const end = query<{ end: { z: number } }>(sim, "coaster_get", { id: 1 }).end;
+    expect(end.z).toBe(TRACK_CEILING * 256);
+    expect(TRACK_CEILING).toBe(MAX_HEIGHT + 64);
+    expect(refused(sim, "coaster_add_piece", { id: 1, piece: "flat_to_gentle_up_lift" })).toBe(
+      TRACK_TOO_HIGH,
+    );
+    const options = query<{ piece: string; reason: string | null }[]>(
+      sim,
+      "coaster_piece_options",
+      { id: 1 },
+    );
+    expect(options.find((o) => o.piece === "flat_to_gentle_up_lift")?.reason).toBe(TRACK_TOO_HIGH);
+    ok(sim, "coaster_add_piece", { id: 1, piece: "straight" });
+    expect(validateWorldInvariants(sim.world)).toBeNull();
+  });
+});
+
 describe("saving coasters", () => {
   it("saves and loads tracks, and rebuilds the same index", () => {
     const sim = oval();
@@ -561,6 +612,105 @@ describe("saving coasters", () => {
     expect(hashWorld(a.world)).toBe(hashWorld(b.world));
     b.world.tracks[0]!.complete = false;
     expect(hashWorld(b.world)).not.toBe(hashWorld(a.world));
+  });
+
+  it("refuses a save whose coasters break what coaster_begin and coaster_complete require", () => {
+    const corner = (w: World, x: number, y: number) => y * (w.terrain.width + 1) + x;
+    const cases: Array<[string, (w: World) => void, RegExp]> = [
+      [
+        "a complete circuit with a one-piece station",
+        (w) => (w.tracks[0]!.pieces[1] = "straight"),
+        /complete but not a circuit: A coaster needs one station of 2 to 8 pieces/,
+      ],
+      [
+        "a complete circuit that climbs with no lift",
+        (w) => {
+          w.tracks[0]!.pieces[2] = "flat_to_gentle_up";
+          w.tracks[0]!.pieces[3] = "gentle_up_to_flat";
+        },
+        /complete but not a circuit: A coaster with no lift hill/,
+      ],
+      [
+        "a station on sloping ground",
+        (w) => (w.terrain.corners[corner(w, 8, 6)] = 7),
+        /starts on tile \(8, 6\), which is not flat/,
+      ],
+      [
+        "a station above the ground",
+        (w) => {
+          for (const [x, y] of [
+            [8, 6],
+            [9, 6],
+            [9, 7],
+            [8, 7],
+          ] as const) {
+            w.terrain.corners[corner(w, x, y)] = 6;
+          }
+        },
+        /starts at height 8, not on the ground at 6/,
+      ],
+      [
+        "an entrance under water",
+        (w) => (w.terrain.water[tile(w, 8, 5)] = 9),
+        /coaster 1's entrance \(8, 5\) is under water/,
+      ],
+    ];
+    for (const [label, damage, message] of cases) {
+      const world = oval().world;
+      expect(validateWorldInvariants(world), label).toBeNull();
+      damage(world);
+      expect(validateWorldInvariants(world), label).toMatch(message);
+    }
+
+    // An exit on a stall: a snack stand built elsewhere, then moved onto the exit tile.
+    const stall = oval();
+    ok(stall, "stall_build", { type: "snack_stand", x: 20, y: 20, rot: 1 });
+    const w = stall.world;
+    const snack = w.rides[1]!;
+    const move = (t: { x: number; y: number } | null) =>
+      t === null ? null : { x: t.x - 12, y: t.y - 13 };
+    w.terrain.occupant[tile(w, 20, 20)] = 0;
+    w.terrain.occupant[tile(w, 8, 7)] = snack.id;
+    Object.assign(snack, {
+      x: 8,
+      y: 7,
+      entrance: move(snack.entrance),
+      exit: move(snack.exit),
+      service: move(snack.service),
+    });
+    expect(validateWorldInvariants(w)).toMatch(/coaster 1's exit \(8, 7\) is on a ride or stall/);
+
+    // An entrance on the map's outer ring: a coaster begun by the top edge, moved up one tile.
+    const edge = makeSim();
+    begin(edge, { x: 8, y: 2, dir: 1 });
+    expect(validateWorldInvariants(edge.world)).toBeNull();
+    const ride = edge.world.rides[0]!;
+    Object.assign(ride, { y: 1, entrance: { x: 8, y: 0 }, exit: { x: 8, y: 2 } });
+    edge.world.tracks[0]!.start.y -= 1024;
+    expect(validateWorldInvariants(edge.world)).toMatch(
+      /coaster 1's entrance \(8, 0\) is off the map or on its outer ring/,
+    );
+  });
+
+  it("replays a long track piece by piece, and names the piece that breaks the rules", () => {
+    const sim = new Sim(createWorld({ width: 64, height: 64, seed: 1, name: "Snake", cash: 1e12 }));
+    begin(sim, { x: 4, y: 4, dir: 1 });
+    const row = Array<string>(50).fill("straight");
+    for (let r = 0; r < 6; r++) {
+      const turn = r % 2 === 0 ? "right_small_curve" : "left_small_curve";
+      add(sim, [...row, turn, turn]);
+    }
+    const track = sim.world.tracks[0]!;
+    expect(track.pieces.length).toBe(1 + 6 * 52);
+    let started = performance.now();
+    expect(validateWorldInvariants(sim.world)).toBeNull();
+    const took = performance.now() - started;
+    expect(took, `${took.toFixed(1)} ms`).toBeLessThan(200);
+    track.pieces[250] = "station";
+    started = performance.now();
+    expect(validateWorldInvariants(sim.world)).toBe(
+      `track 1 piece 250 (station) does not fit: ${STATION_NOT_CONTIGUOUS}`,
+    );
   });
 
   it("refuses a save whose tracks break the rules", () => {

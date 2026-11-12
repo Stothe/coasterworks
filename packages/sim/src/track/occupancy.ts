@@ -8,14 +8,16 @@ import {
   type TrackPiece,
 } from "@coasterworks/content";
 import { tileCorners } from "../terrain/terrain.js";
-import type { World } from "../world/types.js";
+import { MAX_HEIGHT, type World } from "../world/types.js";
 import {
   applyPiece,
+  endPose,
   localToWorld,
   pieceRefusal,
   pieceTiles,
   posesEqual,
   type Dir,
+  type PieceTile,
   type Pose,
 } from "./pose.js";
 import type { TrackRecord } from "./record.js";
@@ -30,6 +32,10 @@ import type { TrackRecord } from "./record.js";
 export const PATH_CLEARANCE = 8;
 /** Clear height steps between two stretches of track on the same tile, so cars pass. */
 export const TRACK_CLEARANCE = 6;
+/** Height steps track may rise above the highest the ground can be (`MAX_HEIGHT`). */
+export const TRACK_CEILING_ABOVE = 64;
+/** The highest track may go, in whole height steps. */
+export const TRACK_CEILING = MAX_HEIGHT + TRACK_CEILING_ABOVE;
 /** Most station pieces in the one run a coaster starts with, and fewest it can complete with. */
 export const MAX_STATION_PIECES = 8;
 export const MIN_STATION_PIECES = 2;
@@ -45,6 +51,11 @@ export const TRACK_HITS_ITSELF = "The track would run into itself";
 export const TRACK_HITS_OTHER = "Another coaster's track is in the way";
 export const STATION_NOT_CONTIGUOUS = "Station pieces must form one run at the start";
 export const STATION_TOO_LONG = `A station is at most ${MAX_STATION_PIECES} pieces long`;
+export const TRACK_TOO_HIGH = `Track cannot go higher than ${TRACK_CEILING_ABOVE} steps above the highest ground`;
+export const NOT_CLOSED = "The track does not join back up with the start of the station";
+export const STATION_LENGTH = `A coaster needs one station of ${MIN_STATION_PIECES} to ${MAX_STATION_PIECES} pieces`;
+export const NO_LIFT =
+  "A coaster with no lift hill must never climb above its station: add a lift piece";
 export const BAD_POSE = "Track must start on the middle of a tile edge at a whole height step";
 
 /** One piece's stretch of track over one tile, between heights `zLo` and `zHi` (fixed point). */
@@ -184,21 +195,12 @@ export function isJoinPose(pose: Pose): boolean {
 }
 
 /** What placing a piece needs to know about the track it joins. */
-export interface PieceContext {
-  rideId: number;
+export interface PieceContext extends TileContext {
   family: CoasterFamily;
-  start: Pose;
   /** The pieces already laid, from the first station piece on. */
   pieces: readonly string[];
   /** Where they end, which is where the new piece starts. */
   pose: Pose;
-  /** Indexes of every ride's and stall's entrance, exit and service tiles. */
-  reserved: ReadonlySet<number>;
-  /**
-   * Bands of this track's own pieces that are not in the world's index yet, on a tile index: the
-   * pieces a fit has laid out but not built (see `track/fit.ts`). Checked exactly like indexed ones.
-   */
-  extra?: (tile: number) => Iterable<TrackBand>;
 }
 
 /** Indexes of every ride's and stall's access tiles: entrances, exits and service tiles. */
@@ -220,13 +222,14 @@ export function reservedTiles(world: World): Set<number> {
  *   1. the family has the piece, and the piece starts with the pitch and bank the track ends on;
  *   2. station pieces only in the one run at the start, at most `MAX_STATION_PIECES` of them;
  *   3. the piece starts where pieces join (`isJoinPose`);
- *   4. on each tile it covers: on the map and off its outer ring; no water; no ride or stall
- *      footprint, no ride's or stall's entrance, exit or service tile, not the park entrance; its
- *      lowest point at or above the ground's highest corner; at least `PATH_CLEARANCE` steps above
- *      the ground over a path; and at least `TRACK_CLEARANCE` steps clear of every other track
- *      band there, its own track's included, except the piece it joins (and, when it closes the
- *      circuit, the first piece). Its own pieces from `ctx.pieces.length` on are not counted, so
- *      a saved track replays piece by piece against the world without itself.
+ *   4. on each tile it covers (`tilesRefusal`): on the map and off its outer ring; no water; no
+ *      ride or stall footprint, no ride's or stall's entrance, exit or service tile, not the park
+ *      entrance; its lowest point at or above the ground's highest corner and its highest at or
+ *      below `TRACK_CEILING`; at least `PATH_CLEARANCE` steps above the ground over a path; and
+ *      at least `TRACK_CLEARANCE` steps clear of every other track band there, its own track's
+ *      included, except the piece it joins (and, when it closes the circuit, the first piece).
+ *      Its own pieces from `ctx.pieces.length` on are not counted, so a saved track replays piece
+ *      by piece against the world without itself.
  */
 export function placementRefusal(
   world: World,
@@ -240,27 +243,64 @@ export function placementRefusal(
     if (ctx.pieces.length >= MAX_STATION_PIECES) return STATION_TOO_LONG;
   }
   if (!isJoinPose(ctx.pose)) return BAD_POSE;
+  return tilesRefusal(
+    world,
+    ctx,
+    ctx.pieces.length,
+    pieceTiles(ctx.pose, piece),
+    applyPiece(ctx.pose, piece),
+  );
+}
 
+/** What rule 4 of `placementRefusal` needs about the track a piece joins. */
+export interface TileContext {
+  rideId: number;
+  /** The pose the first station piece starts from. */
+  start: Pose;
+  /** Indexes of every ride's and stall's entrance, exit and service tiles. */
+  reserved: ReadonlySet<number>;
+  /**
+   * Bands of this track's own pieces that are not in the world's index yet, on a tile index: the
+   * pieces a fit has laid out but not built (see `track/fit.ts`). Checked exactly like indexed ones.
+   */
+  extra?: (tile: number) => Iterable<TrackBand>;
+}
+
+/**
+ * Rule 4 of `placementRefusal` alone: why piece `n` of the track, covering `tiles` and ending at
+ * `exit`, cannot lie there. Only for a caller that has already made sure of rules 1 to 3 (the fit
+ * in `track/fit.ts`, which lays only pieces the family has, from the pose and pitch and bank the
+ * track ends on, and never station pieces); everything else uses `placementRefusal`.
+ */
+export function tilesRefusal(
+  world: World,
+  ctx: TileContext,
+  n: number,
+  tiles: readonly PieceTile[],
+  exit: Pose,
+): string | null {
   const t = world.terrain;
-  const n = ctx.pieces.length;
-  const closes = posesEqual(applyPiece(ctx.pose, piece), ctx.start);
+  const closes = posesEqual(exit, ctx.start);
   const index = trackIndex(world);
   const clearance = TRACK_CLEARANCE * STEP;
   const extra = ctx.extra;
-  for (const tile of pieceTiles(ctx.pose, piece)) {
+  for (const tile of tiles) {
     const { x, y } = tile;
-    const ground = tileRefusal(world, ctx.reserved, x, y, tile.zLo);
+    const ground = tileRefusal(world, ctx.reserved, x, y, tile.zLo, tile.zHi);
     if (ground !== null) return ground;
     const at = y * t.width + x;
-    const lo = tile.zLo * STEP;
-    const hi = tile.zHi * STEP;
-    for (const band of index.tiles.get(at) ?? []) {
-      const hit = bandClash(band, ctx.rideId, n, closes, lo - clearance, hi + clearance);
-      if (hit !== null) return hit;
+    const lo = tile.zLo * STEP - clearance;
+    const hi = tile.zHi * STEP + clearance;
+    const bands = index.tiles.get(at);
+    if (bands !== undefined) {
+      for (const band of bands) {
+        const hit = bandClash(band, ctx.rideId, n, closes, lo, hi);
+        if (hit !== null) return hit;
+      }
     }
     if (extra !== undefined) {
       for (const band of extra(at)) {
-        const hit = bandClash(band, ctx.rideId, n, closes, lo - clearance, hi + clearance);
+        const hit = bandClash(band, ctx.rideId, n, closes, lo, hi);
         if (hit !== null) return hit;
       }
     }
@@ -288,8 +328,9 @@ function bandClash(
 }
 
 /**
- * Why track whose lowest point over tile (x, y) is `zLo` (whole steps) cannot pass there, apart
- * from other track: rule 4 of `placementRefusal` for one tile. Null when it can.
+ * Why track passing over tile (x, y) between heights `zLo` and `zHi` (whole steps; `zHi` is
+ * `zLo` when left out) cannot pass there, apart from other track: rule 4 of `placementRefusal`
+ * for one tile. Null when it can.
  */
 export function tileRefusal(
   world: World,
@@ -297,6 +338,7 @@ export function tileRefusal(
   x: number,
   y: number,
   zLo: number,
+  zHi: number = zLo,
 ): string | null {
   const t = world.terrain;
   if (!Number.isInteger(x) || x < 1 || y < 1 || x > t.width - 2 || y > t.height - 2) {
@@ -310,6 +352,7 @@ export function tileRefusal(
   if (entrance !== null && entrance.x === x && entrance.y === y) return TRACK_PARK_ENTRANCE;
   const ground = Math.max(...tileCorners(t, x, y));
   if (zLo < ground) return TRACK_UNDERGROUND;
+  if (zHi > TRACK_CEILING) return TRACK_TOO_HIGH;
   if ((t.path[at] as number) !== 0 && zLo < ground + PATH_CLEARANCE) return TRACK_LOW_OVER_PATH;
   return null;
 }
@@ -335,4 +378,27 @@ export function stationAccess(
     entrance: { x: x - right.dx, y: y - right.dy },
     exit: { x: x + right.dx, y: y + right.dy },
   };
+}
+
+/**
+ * Why `pieces` laid from `start` are not a circuit `coaster_complete` would take, or null: see
+ * `completeRefusal` in `commands/coaster.ts`.
+ */
+export function circuitRefusal(start: Pose, ids: readonly string[]): string | null {
+  if (!posesEqual(endPose(start, ids), start)) return NOT_CLOSED;
+  const pieces = ids.map((p) => pieceById(p) as TrackPiece);
+  let run = 0;
+  while (run < pieces.length && pieces[run]!.flags.station) run++;
+  const stations = pieces.filter((p) => p.flags.station).length;
+  if (stations !== run || run < MIN_STATION_PIECES || run > MAX_STATION_PIECES) {
+    return STATION_LENGTH;
+  }
+  if (!pieces.some((p) => p.flags.lift)) {
+    let pose = start;
+    for (const piece of pieces) {
+      pose = applyPiece(pose, piece);
+      if (pose.z > start.z) return NO_LIFT;
+    }
+  }
+  return null;
 }

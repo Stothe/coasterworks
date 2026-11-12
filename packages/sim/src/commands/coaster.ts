@@ -1,4 +1,10 @@
-import { familyById, pieceById, type CoasterFamily, type TrackPiece } from "@coasterworks/content";
+import {
+  STEP,
+  familyById,
+  pieceById,
+  type CoasterFamily,
+  type TrackPiece,
+} from "@coasterworks/content";
 import { z } from "zod";
 import { MAX_PATH_SLOPE } from "../paths/paths.js";
 import { ejectGuests } from "../rides/operation.js";
@@ -18,6 +24,10 @@ import { tileCorners } from "../terrain/terrain.js";
 import {
   MAX_STATION_PIECES,
   MIN_STATION_PIECES,
+  NOT_CLOSED,
+  NO_LIFT,
+  STATION_LENGTH,
+  circuitRefusal,
   familyOf,
   indexAddPiece,
   indexAddTrack,
@@ -29,9 +39,18 @@ import {
   tileHasTrack,
   trackIndex,
   type PieceContext,
+  type TrackBand,
 } from "../track/occupancy.js";
-import { FIX_EARLIER, fitPoints, type FitPoint, type PointFit } from "../track/fit.js";
-import { applyPiece, endPose, poseAtTile, posesEqual, type Dir, type Pose } from "../track/pose.js";
+import {
+  ALREADY_REACHED,
+  FIX_EARLIER,
+  TOO_LONG,
+  fitPoints,
+  worldStamp,
+  type FitPoint,
+  type PointFit,
+} from "../track/fit.js";
+import { applyPiece, endPose, pieceTiles, poseAtTile, type Dir, type Pose } from "../track/pose.js";
 import {
   MAX_TRACK_PIECES,
   copyTrack,
@@ -39,7 +58,7 @@ import {
   insertTrack,
   pieceCost,
   takeTrack,
-  trackCost,
+  trackRefund,
   type TrackRecord,
 } from "../track/record.js";
 import { MAX_MAP, type World } from "../world/types.js";
@@ -50,16 +69,14 @@ import { checkCash } from "./execute.js";
 // family id) and a `TrackRecord` in `World.tracks` with the same id. Every piece is placed by
 // `placementRefusal` in `track/occupancy.ts`; the track index is updated with the pieces.
 
+export { NOT_CLOSED, NO_LIFT, STATION_LENGTH, circuitRefusal };
+
 export const NOT_A_COASTER = (id: number) => `Ride ${id} is not a coaster`;
 export const ALREADY_COMPLETE = "The circuit is already complete";
 export const KEEP_FIRST_STATION =
   "The first station piece stays: demolish the coaster to remove it";
 export const CLOSE_FIRST = "Close the coaster before changing its track";
 export const TOO_MANY_PIECES = `A coaster can have at most ${MAX_TRACK_PIECES} pieces`;
-export const NOT_CLOSED = "The track does not join back up with the start of the station";
-export const STATION_LENGTH = `A coaster needs one station of ${MIN_STATION_PIECES} to ${MAX_STATION_PIECES} pieces`;
-export const NO_LIFT =
-  "A coaster with no lift hill must never climb above its station: add a lift piece";
 export const RUN_A_TEST = "Run a test first";
 export const COMPLETE_FIRST = "Complete the circuit first";
 
@@ -124,29 +141,6 @@ export function completeRefusal(world: World, id: number): string | null {
   const { track } = found;
   if (track.complete) return ALREADY_COMPLETE;
   return circuitRefusal(track.start, track.pieces);
-}
-
-/**
- * Why `pieces` laid from `start` are not a circuit `coaster_complete` would take, or null: see
- * `completeRefusal`.
- */
-export function circuitRefusal(start: Pose, ids: readonly string[]): string | null {
-  if (!posesEqual(endPose(start, ids), start)) return NOT_CLOSED;
-  const pieces = ids.map((p) => pieceById(p) as TrackPiece);
-  let run = 0;
-  while (run < pieces.length && pieces[run]!.flags.station) run++;
-  const stations = pieces.filter((p) => p.flags.station).length;
-  if (stations !== run || run < MIN_STATION_PIECES || run > MAX_STATION_PIECES) {
-    return STATION_LENGTH;
-  }
-  if (!pieces.some((p) => p.flags.lift)) {
-    let pose = start;
-    for (const piece of pieces) {
-      pose = applyPiece(pose, piece);
-      if (pose.z > start.z) return NO_LIFT;
-    }
-  }
-  return null;
 }
 
 const beginSchema = z.object({
@@ -409,7 +403,7 @@ export function demolishTrack(world: World, id: number): CoasterDemolish {
   const index = trackIndex(world);
   const track = takeTrack(world, id);
   indexRemoveTrack(index, track);
-  return { track: copyTrack(track), refund: Math.floor(trackCost(track) / 2) };
+  return { track: copyTrack(track), refund: trackRefund(track) };
 }
 
 /** Puts a demolished coaster's track back, into the world and its index. */
@@ -426,7 +420,7 @@ export function restoreTrack(world: World, track: TrackRecord): void {
 /** Most points one `coaster_build_from_points` or `coaster_fit_preview` takes. */
 export const MAX_FIT_POINTS = 64;
 export const STATION_ON_GROUND = "The station sits on the ground: leave out this point's height";
-export const ALREADY_REACHED = "The track already reaches that point";
+export { ALREADY_REACHED };
 
 export const fitPointSchema = z.object({
   x: z.int().min(0).max(MAX_MAP),
@@ -622,6 +616,77 @@ export function planExtend(
   return plan;
 }
 
+/**
+ * Plans worked out by a command's `validate`, kept for its `cost` and `apply`: `executeCommand`
+ * and `redoLast` call the three with the same parsed input object, one after another, on a world
+ * nothing else touches in between, so fitting once serves all three. Keyed by that input object
+ * and used again only on the same world with the same `worldStamp`, which every logged command,
+ * undo and redo moves, and which these commands' own apply and revert move too (`rideVersion`),
+ * so a kept plan is never used after the world has changed.
+ */
+const planMemo = new WeakMap<object, { world: World; stamp: string; plan: unknown }>();
+
+function memoized<T>(world: World, input: object, make: () => T): T {
+  const stamp = worldStamp(world);
+  const kept = planMemo.get(input);
+  if (kept !== undefined && kept.world === world && kept.stamp === stamp) return kept.plan as T;
+  const plan = make();
+  planMemo.set(input, { world, stamp, plan });
+  return plan;
+}
+
+/**
+ * Checks a fitted plan once more before it is built: `pieces`, laid one by one after `before`
+ * (which is in the world's track index already, or empty for a new coaster) from `start`, each
+ * taken by `placementRefusal` exactly as `coaster_begin` and `coaster_add_piece` would take it.
+ * The fit only lays such pieces, so a refusal here is a bug in it: this throws rather than build
+ * track the piece commands would refuse.
+ */
+export function assertPlanned(
+  world: World,
+  rideId: number,
+  family: CoasterFamily,
+  start: Pose,
+  before: readonly string[],
+  reserved: ReadonlySet<number>,
+  pieces: readonly string[],
+): void {
+  const width = world.terrain.width;
+  const pending = new Map<number, TrackBand[]>();
+  const laid = [...before];
+  let pose = endPose(start, before);
+  const ctx: PieceContext = {
+    rideId,
+    family,
+    start,
+    pieces: laid,
+    pose,
+    reserved,
+    extra: (tile) => pending.get(tile) ?? [],
+  };
+  for (const id of pieces) {
+    const piece = pieceById(id);
+    const why =
+      piece === undefined
+        ? `unknown piece ${id}`
+        : placementRefusal(world, { ...ctx, pose }, piece);
+    if (why !== null) {
+      throw new Error(
+        `Internal error: the fit planned piece ${laid.length} (${id}), refused: ${why}`,
+      );
+    }
+    for (const t of pieceTiles(pose, id)) {
+      const tile = t.y * width + t.x;
+      const band: TrackBand = { rideId, piece: laid.length, zLo: t.zLo * STEP, zHi: t.zHi * STEP };
+      const list = pending.get(tile);
+      if (list === undefined) pending.set(tile, [band]);
+      else list.push(band);
+    }
+    laid.push(id);
+    pose = applyPiece(pose, id);
+  }
+}
+
 const buildFromPointsSchema = z.object({
   family: z.string(),
   points: z.array(fitPointSchema).min(1).max(MAX_FIT_POINTS),
@@ -630,14 +695,16 @@ const buildFromPointsSchema = z.object({
 type BuildFromPointsInput = z.infer<typeof buildFromPointsSchema>;
 
 function buildPlanFor(world: World, input: BuildFromPointsInput): PointsPlan | string {
-  const family = familyFor(input.family);
-  if (typeof family === "string") return family;
-  return planFromPoints(world, family.id, input.points, input.close === true);
+  return memoized(world, input, () => {
+    const family = familyFor(input.family);
+    if (typeof family === "string") return family;
+    return planFromPoints(world, family.id, input.points, input.close === true);
+  });
 }
 
 export const coasterBuildFromPoints = defineCommand({
   name: "coaster_build_from_points",
-  description: `Builds a whole coaster of a family (such as \`steel_coaster\`) through a list of points, in one undoable step. Each point is { x, y, height? }: a tile and a height in whole height steps (the tile's ground height when left out). points[0] is where the station goes: ${MIN_STATION_PIECES} station pieces on the ground there, facing toward points[1] along whichever axis it is farther on (east on a tie or with one point); its entrance and exit are beside the first station piece, as with \`coaster_begin\`. Track is then fitted through every later point in order: a point is reached when a piece passes over its tile with the height inside that piece's span there, preferring fewer and gentler pieces (straight before slopes, gentle before steep, large curves before small), never banking, and using lift pieces for every climb before the track's first drop. With \`close\` it then fits back onto the start of the station and completes the circuit, as \`coaster_complete\` would. Costs the sum of the pieces. All or nothing: if any point cannot be reached nothing is built, and the error names the first failing point (0-based) and why, such as "Point 2: Too steep to reach", "Too tight a turn" (behind the track, nearer its line than a U-turn is wide) or the placement reason that blocked it. \`coaster_fit_preview\` shows the same fit without building it.`,
+  description: `Builds a whole coaster of a family (such as \`steel_coaster\`) through a list of points, in one undoable step. Each point is { x, y, height? }: a tile and a height in whole height steps (the tile's ground height when left out). points[0] is where the station goes: ${MIN_STATION_PIECES} station pieces on the ground there, facing toward points[1] along whichever axis it is farther on (east on a tie or with one point); its entrance and exit are beside the first station piece, as with \`coaster_begin\`. Track is then fitted through every later point in order: a point is reached when a piece passes over its tile with the height inside that piece's span there, preferring fewer and gentler pieces (straight before slopes, gentle before steep, large curves before small), never banking, and using lift pieces for every climb before the track's first drop. With \`close\` it then fits back onto the start of the station and completes the circuit, as \`coaster_complete\` would. Costs the sum of the pieces. All or nothing: if any point cannot be reached nothing is built, and the error names the first failing point (0-based) and why, such as "Point 2: Too steep to reach" (more height to climb or drop than the direct way to the point has room for: add a point to give a climb a longer way round), "Too tight a turn" (behind the track, nearer its line than a U-turn is wide, and no way round to it was found), the placement reason that blocked it, or "${TOO_LONG}" (fitting the whole course would take too long). A point the track already passes over adds no pieces. \`coaster_fit_preview\` shows the same fit without building it.`,
   category: "ride",
   input: buildFromPointsSchema,
   undoable: true,
@@ -656,6 +723,11 @@ export const coasterBuildFromPoints = defineCommand({
     }
     const family = familyFor(input.family) as CoasterFamily;
     const { x, y, dir } = plan.begin;
+    const { start, entrance, exit } = beginPlan(world, { family: family.id, x, y, dir });
+    const reserved = reservedTiles(world);
+    reserved.add(entrance.y * world.terrain.width + entrance.x);
+    reserved.add(exit.y * world.terrain.width + exit.x);
+    assertPlanned(world, world.nextRideId, family, start, [], reserved, plan.pieces);
     return { id: beginCoaster(world, family, x, y, dir, plan.pieces, input.close === true) };
   },
   revert: (world, _input, undo: { id: number }) => unbeginCoaster(world, undo.id),
@@ -666,18 +738,19 @@ type ExtendInput = z.infer<typeof extendSchema>;
 
 /** The pieces `coaster_extend_to` would add, or why it refuses. */
 function extendPlan(world: World, input: ExtendInput): string[] | string {
-  const found = coasterOf(world, input.id);
-  if (typeof found === "string") return found;
-  const plan = planExtend(world, input.id, [input.point], false);
-  if (plan.error !== null) return plan.error;
-  if (plan.pieces.length === 0) return ALREADY_REACHED;
-  return plan.pieces;
+  return memoized(world, input, () => {
+    const found = coasterOf(world, input.id);
+    if (typeof found === "string") return found;
+    const plan = planExtend(world, input.id, [input.point], false);
+    if (plan.error !== null) return plan.error;
+    if (plan.pieces.length === 0) return ALREADY_REACHED;
+    return plan.pieces;
+  });
 }
 
 export const coasterExtendTo = defineCommand({
   name: "coaster_extend_to",
-  description:
-    'Extends a coaster\'s track, by its ride id, from where it ends to one point { x, y, height? } (a tile and a height in whole height steps, the ground\'s when left out), fitting pieces the way `coaster_build_from_points` does and adding them in one undoable step. Costs the sum of the pieces. Refused, with nothing built, when the point cannot be reached ("Point 0: Too steep to reach", "Point 0: Too tight a turn" or the placement reason that blocked it), when the track already passes over it, or when the coaster is open or complete.',
+  description: `Extends a coaster's track, by its ride id, from where it ends to one point { x, y, height? } (a tile and a height in whole height steps, the ground's when left out), fitting pieces the way \`coaster_build_from_points\` does and adding them in one undoable step. Costs the sum of the pieces. It lays exactly what \`coaster_fit_preview\` with this id and this one point shows. Refused, with nothing built, when the point cannot be reached ("Point 0: Too steep to reach", "Point 0: Too tight a turn" or the placement reason that blocked it), when the track already passes over it with its last piece ("${ALREADY_REACHED}", which the preview reports as ok with that reason), or when the coaster is open or complete.`,
   category: "ride",
   input: extendSchema,
   undoable: true,
@@ -695,6 +768,15 @@ export const coasterExtendTo = defineCommand({
     const plan = extendPlan(world, input);
     if (typeof plan === "string") throw new RangeError(plan);
     const { track } = coaster(world, input.id);
+    assertPlanned(
+      world,
+      track.id,
+      familyOf(track),
+      track.start,
+      track.pieces,
+      reservedTiles(world),
+      plan,
+    );
     const index = trackIndex(world);
     let pose = endPose(track.start, track.pieces);
     for (const piece of plan) {
