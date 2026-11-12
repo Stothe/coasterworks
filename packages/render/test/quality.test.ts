@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Quality } from "../src/context.js";
 import {
   SETTLE_MS,
+  SOFTWARE,
   SLOW_FRAME_MS,
   SLOW_HOLD_MS,
   STEP_UP_MS,
@@ -9,7 +10,9 @@ import {
   createGovernor,
   detectQuality,
   higherQuality,
+  isSoftwareRenderer,
   lowerQuality,
+  softwareFrameDue,
   stepGovernor,
   type GovernorState,
 } from "../src/quality.js";
@@ -272,5 +275,67 @@ describe("createFrameMeter", () => {
     expect(meter.pausedMs).toBe(5000);
     meter.sample(5132);
     expect(meter.pausedMs).toBe(0);
+  });
+});
+
+describe("createFrameMeter with a page visibility probe", () => {
+  it("counts a long frame on a visible page as slow, held to a second", () => {
+    const meter = createFrameMeter({ wasHidden: () => false });
+    meter.sample(0);
+    meter.sample(400);
+    expect(meter.pausedMs).toBe(0);
+    expect(meter.frameMs).toBe(400);
+    meter.sample(5400);
+    expect(meter.pausedMs).toBe(0);
+    expect(meter.frameMs).toBeCloseTo(400 + (1000 - 400) * 0.1, 6);
+  });
+
+  it("takes a gap the page was hidden for as a pause", () => {
+    let hidden = false;
+    const meter = createFrameMeter({ wasHidden: () => hidden });
+    meter.sample(0);
+    meter.sample(16);
+    hidden = true;
+    meter.sample(5016);
+    expect(meter.pausedMs).toBe(5000);
+    expect(meter.frameMs).toBe(16);
+  });
+
+  it("lets the governor step down on a software-slow machine", () => {
+    const meter = createFrameMeter({ wasHidden: () => false });
+    let state = createGovernor("high", 0);
+    let now = 0;
+    meter.sample(now);
+    for (let i = 0; i < 40; i++) {
+      now += 400;
+      const frameMs = meter.sample(now);
+      state = stepGovernor(state, frameMs, now, meter.pausedMs);
+    }
+    expect(state.quality).not.toBe("high");
+  });
+});
+
+describe("softwareFrameDue", () => {
+  it("draws the first frame, then rests in proportion to what a frame cost", () => {
+    expect(softwareFrameDue(0, null, 0)).toBe(true);
+    expect(softwareFrameDue(40, 0, 0)).toBe(false);
+    expect(softwareFrameDue(SOFTWARE.frameIntervalMs, 0, 0)).toBe(true);
+    // A frame that took 200 ms is followed by a rest of three times that.
+    expect(softwareFrameDue(500, 0, 200)).toBe(false);
+    expect(softwareFrameDue(600, 0, 200)).toBe(true);
+    // But never longer than the longest interval.
+    expect(softwareFrameDue(SOFTWARE.maxIntervalMs, 0, 5000)).toBe(true);
+  });
+});
+
+describe("isSoftwareRenderer", () => {
+  it("knows SwiftShader and llvmpipe, and not a real GPU", () => {
+    expect(
+      isSoftwareRenderer(
+        "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (LLVM 10.0.0) (0x0000C0DE)), SwiftShader driver)",
+      ),
+    ).toBe(true);
+    expect(isSoftwareRenderer("llvmpipe (LLVM 15.0.7, 256 bits)")).toBe(true);
+    expect(isSoftwareRenderer("ANGLE (Apple, ANGLE Metal Renderer: Apple M4 Max)")).toBe(false);
   });
 });

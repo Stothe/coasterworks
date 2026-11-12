@@ -26,10 +26,61 @@ export function higherQuality(q: Quality): Quality {
  * hardware starts at `high` and the governor takes it from there.
  */
 export function detectQuality(glRenderer: string): Quality {
-  const name = glRenderer.toLowerCase();
-  if (name.trim() === "") return "low";
-  if (/swiftshader|llvmpipe|softpipe|software|basic render/.test(name)) return "low";
+  if (glRenderer.trim() === "") return "low";
+  if (isSoftwareRenderer(glRenderer)) return "low";
   return "high";
+}
+
+/**
+ * Whether the renderer string names a software renderer, which runs every vertex and pixel on the
+ * CPU: SwiftShader (what CI and a GPU-less browser get), llvmpipe, softpipe, Microsoft's Basic
+ * Render Driver. On one, `low` goes further still (see `SOFTWARE`).
+ */
+export function isSoftwareRenderer(glRenderer: string): boolean {
+  return /swiftshader|llvmpipe|softpipe|software|basic render/.test(glRenderer.toLowerCase());
+}
+
+/**
+ * What `low` gives up on a software renderer, on top of what it gives up anywhere. Measured on
+ * SwiftShader (2026-11-12): a frame of the sample park cost about 400 ms on an M4 Max and over
+ * 2 s on a 4-core CI runner, nearly all of it inside SwiftShader, which then starved the page of
+ * CPU. The ground mesh is most of the vertices, the pixels most of the rest.
+ */
+export const SOFTWARE = {
+  /** Cells per tile edge of the park's ground mesh (`SUBDIV` elsewhere). */
+  subdiv: 1,
+  /** The most pixels drawn per CSS pixel: the canvas is drawn smaller and scaled up. */
+  pixelRatio: 0.5,
+  /**
+   * The least time between drawn frames, in milliseconds. Frames asked for sooner are skipped, so
+   * the renderer leaves most of the CPU to the page, the sim and whatever else is running.
+   */
+  frameIntervalMs: 50,
+  /**
+   * And the time between drawn frames is at least this many times what the last one took to
+   * draw (measured to the next frame the browser offers), so drawing has at most a third of the
+   * time however slow the machine.
+   */
+  restFactor: 3,
+  /** But a frame is drawn at least this often, in milliseconds, so the park still moves. */
+  maxIntervalMs: 1500,
+} as const;
+
+/**
+ * Whether a software renderer should draw the frame offered at `nowMs`, given when it last drew
+ * one and what that one cost (0 while unknown). See `SOFTWARE`.
+ */
+export function softwareFrameDue(
+  nowMs: number,
+  lastDrawnMs: number | null,
+  costMs: number,
+): boolean {
+  if (lastDrawnMs === null) return true;
+  const wait = Math.min(
+    SOFTWARE.maxIntervalMs,
+    Math.max(SOFTWARE.frameIntervalMs, costMs * SOFTWARE.restFactor),
+  );
+  return nowMs - lastDrawnMs >= wait;
 }
 
 /** A frame slower than this, in milliseconds, is a slow frame: under about 45 a second. */
@@ -148,6 +199,37 @@ export function stepGovernor(
 const METER_BLEND = 0.1;
 /** A gap this long between frames, in milliseconds, is a pause (a hidden tab), not a frame. */
 const METER_PAUSE_MS = 250;
+/** The longest a single frame counts for in the average, in milliseconds. */
+const METER_LONGEST_MS = 1000;
+
+export interface FrameMeterOptions {
+  /**
+   * Says whether the page has been hidden since it was last asked (and forgets it): then only a
+   * gap the page was hidden for is a pause. Without it any gap of a quarter second or more is.
+   */
+  wasHidden?: () => boolean;
+}
+
+/**
+ * A `wasHidden` for `createFrameMeter` from the document's visibility, and the way to stop
+ * listening. Without a document it never reports a hidden page.
+ */
+export function documentVisibility(): { wasHidden: () => boolean; dispose: () => void } {
+  if (typeof document === "undefined") return { wasHidden: () => false, dispose: () => {} };
+  let hidden = document.visibilityState === "hidden";
+  const onChange = () => {
+    if (document.visibilityState === "hidden") hidden = true;
+  };
+  document.addEventListener("visibilitychange", onChange);
+  return {
+    wasHidden: () => {
+      const was = hidden || document.visibilityState === "hidden";
+      hidden = false;
+      return was;
+    },
+    dispose: () => document.removeEventListener("visibilitychange", onChange),
+  };
+}
 
 /** A running average of the time between frames. */
 export interface FrameMeter {
@@ -168,7 +250,7 @@ export interface FrameMeter {
  * quarter of a second) is skipped, so coming back to a hidden tab is not counted as a slow frame;
  * `pausedMs` says how long it was.
  */
-export function createFrameMeter(): FrameMeter {
+export function createFrameMeter(options: FrameMeterOptions = {}): FrameMeter {
   let last: number | null = null;
   let average = 0;
   let paused = 0;
@@ -177,10 +259,15 @@ export function createFrameMeter(): FrameMeter {
       paused = 0;
       if (last !== null) {
         const gap = nowMs - last;
-        if (gap >= METER_PAUSE_MS) {
+        // With a way to know, only a page that was hidden has paused: a long gap on a visible
+        // page is a slow frame, which is just what the governor needs to hear of (held to
+        // `METER_LONGEST_MS`, so that one stall does not swamp the average).
+        const pause = options.wasHidden ? options.wasHidden() : gap >= METER_PAUSE_MS;
+        if (pause && gap >= METER_PAUSE_MS) {
           paused = gap;
         } else if (gap > 0) {
-          average = average === 0 ? gap : average + (gap - average) * METER_BLEND;
+          const counted = Math.min(gap, METER_LONGEST_MS);
+          average = average === 0 ? counted : average + (counted - average) * METER_BLEND;
         }
       }
       last = nowMs;
