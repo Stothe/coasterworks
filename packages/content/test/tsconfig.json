@@ -6,6 +6,6 @@
     "rootDir": "..",
     "types": ["node"]
   },
-  "include": ["."],
+  "include": [".", "../scripts"],
   "references": [{ "path": ".." }]
 }

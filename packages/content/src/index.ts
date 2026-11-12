@@ -4,6 +4,9 @@ import { STALL_TYPES } from "./stalls.js";
 
 export * from "./schema.js";
 export * from "./rotate.js";
+export * from "./fixed.js";
+export { BANK_ROLL, TRACK_PIECES, bankRoll, pieceById, pitchAngle } from "./track-pieces.js";
+export { COASTER_FAMILIES, familyById, familyRefusesPiece } from "./coasters.js";
 export { RIDE_TYPES } from "./rides.js";
 export { STALL_TYPES } from "./stalls.js";
 

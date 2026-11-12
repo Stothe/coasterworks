@@ -56,6 +56,22 @@ export { MIGRATIONS, migrate } from "./save/migrate.js";
 export type { Migration } from "./save/migrate.js";
 export { SAMPLE_SIZE, createSamplePark } from "./sample-park.js";
 export { Sim } from "./sim.js";
+export {
+  SEG_BRAKE,
+  SEG_LIFT,
+  SEG_STATION,
+  applyPiece,
+  circuitCloses,
+  endPose,
+  localToWorld,
+  pieceRefusal,
+  pieceTiles,
+  poseAtTile,
+  posesEqual,
+  samplePiece,
+  sampleTrack,
+} from "./track/pose.js";
+export type { Dir, PieceTile, Pose, Segment } from "./track/pose.js";
 export { LOAN_MAX, financeSystem } from "./systems/finance.js";
 export { guestSystem } from "./systems/guests.js";
 export { rideSystem } from "./systems/rides.js";
