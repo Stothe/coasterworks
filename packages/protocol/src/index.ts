@@ -29,6 +29,13 @@ export type {
   WelcomeMessage,
 } from "./messages.js";
 export { decodeSnapshot, encodeSnapshot } from "./snapshot.js";
-export type { DecodedSnapshot, SnapshotHeader, SnapshotTerrain } from "./snapshot.js";
+export type {
+  DecodedSnapshot,
+  GuestSection,
+  ParkPublic,
+  SnapshotHeader,
+  SnapshotParts,
+  SnapshotTerrain,
+} from "./snapshot.js";
 export { createLinkedTransports } from "./transport.js";
 export type { Frame, MessageTransport } from "./transport.js";

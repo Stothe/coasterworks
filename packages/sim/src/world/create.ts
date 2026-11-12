@@ -1,3 +1,5 @@
+import { createGuestStore } from "../guests/guests.js";
+import { createParkState } from "../park/types.js";
 import { Rng } from "../rng.js";
 import { MAX_MAP, SCHEMA_VERSION, type World } from "./types.js";
 
@@ -24,7 +26,10 @@ function checkDimension(label: string, value: number): void {
   }
 }
 
-/** Creates an empty park: flat grass at corner height 8, no water, nothing logged. */
+/**
+ * Creates an empty park: flat grass at corner height 8, no water, no paths, a closed park with no
+ * entrance, no guests, nothing logged.
+ */
 export function createWorld(opts: CreateWorldOptions): World {
   checkDimension("width", opts.width);
   checkDimension("height", opts.height);
@@ -37,6 +42,7 @@ export function createWorld(opts: CreateWorldOptions): World {
   }
 
   const { width, height } = opts;
+  const rng = new Rng(opts.seed);
   return {
     meta: {
       schemaVersion: SCHEMA_VERSION,
@@ -51,9 +57,15 @@ export function createWorld(opts: CreateWorldOptions): World {
       corners: new Int16Array((width + 1) * (height + 1)).fill(FLAT_HEIGHT),
       surface: new Uint8Array(width * height),
       water: new Uint8Array(width * height),
+      path: new Uint8Array(width * height),
     },
     finance: { cash, loan: 0, monthStart: { cash } },
-    rng: new Rng(opts.seed),
+    park: createParkState(opts.name),
+    guests: createGuestStore(),
+    pathVersion: 0,
+    rng,
+    // Forked straight after seeding, while the root generator is still untouched.
+    rngStreams: { guests: rng.fork("guests") },
     log: [],
     undoStack: [],
     redoStack: [],

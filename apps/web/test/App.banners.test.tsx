@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { uiStore } from "../src/state/uiStore";
 import { useHost, type HostState } from "../src/state/useHost";
+import { snapshotOf } from "./snapshotSource";
 
 vi.mock("../src/state/useHost", () => ({ useHost: vi.fn() }));
 // No WebGL in jsdom, and these tests are about what the page says.
@@ -14,22 +15,11 @@ const setSpeed = vi.fn<(speed: Speed) => Promise<void>>();
 function host(over: Partial<HostState> = {}): HostState {
   return {
     status: "ready",
-    snapshot: {
-      header: {
-        tick: 0,
-        speed: 1,
-        halted: false,
-        cash: 1_000_000,
-        loan: 0,
-        monthStartCash: 1_000_000,
-        date: "March 1, Year 1",
-        terrainVersion: 0,
-        hasTerrain: false,
-        width: 16,
-        height: 16,
-      },
-    },
+    snapshot: snapshotOf(),
     terrain: null,
+    paths: null,
+    guests: null,
+    park: null,
     events: [],
     client: { setSpeed } as unknown as SimClient,
     halted: false,

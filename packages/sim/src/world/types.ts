@@ -1,7 +1,10 @@
+import type { GuestStore, Waypoints } from "../guests/types.js";
+import type { ParkState } from "../park/types.js";
+import type { RouteCache } from "../paths/routing.js";
 import type { Rng } from "../rng.js";
 
 /** Version of the save-file schema. Bump when the serialized world shape changes. */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 4;
 
 /** Highest corner height. Heights are integers in half-unit steps, 0..MAX_HEIGHT. */
 export const MAX_HEIGHT = 63;
@@ -26,6 +29,8 @@ export interface Terrain {
   surface: Uint8Array;
   /** Water level per tile, row-major over width by height. 0 means no water. */
   water: Uint8Array;
+  /** Path per tile, row-major over width by height: 0 none, 1 footpath, 2 queue. */
+  path: Uint8Array;
 }
 
 export interface Finance {
@@ -62,8 +67,30 @@ export interface World {
   tick: number;
   terrain: Terrain;
   finance: Finance;
+  /** The park as a business: name, entrance, open or closed, fee, rating, and the takings. */
+  park: ParkState;
+  /** Everyone in the park, as parallel arrays. See `GuestStore`. */
+  guests: GuestStore;
+  /**
+   * Counts changes to the path layer and the entrance, so a cache built from them knows when it is
+   * stale. Runtime only: it is not saved or hashed, and starts at 0 when a world is created or
+   * loaded.
+   */
+  pathVersion: number;
+  /**
+   * The route cache the guests walk by, made by the guest system the first time it runs. Runtime
+   * only: it is not saved or hashed, and a loaded world starts without one.
+   */
+  routes?: RouteCache | undefined;
+  /** The path tiles guests choose walks from. Runtime only, like `routes`. */
+  waypoints?: Waypoints | undefined;
   /** Root generator, seeded from `meta.seed`. Systems fork their own streams from it. */
   rng: Rng;
+  /**
+   * One stream for each system that needs randomness, forked from the root generator when the
+   * world is created and saved with the world, so a system's draws never depend on another's.
+   */
+  rngStreams: { guests: Rng };
   log: LogEntry[];
   undoStack: number[];
   redoStack: number[];

@@ -19,9 +19,12 @@ describe("createWorld", () => {
     expect(w.terrain.corners.length).toBe(81);
     expect(w.terrain.surface.length).toBe(64);
     expect(w.terrain.water.length).toBe(64);
+    expect(w.terrain.path.length).toBe(64);
     expect(w.terrain.corners.every((c) => c === 8)).toBe(true);
     expect(w.terrain.surface.every((s) => s === 0)).toBe(true);
     expect(w.terrain.water.every((v) => v === 0)).toBe(true);
+    expect(w.terrain.path.every((v) => v === 0)).toBe(true);
+    expect(w.pathVersion).toBe(0);
     expect(w.finance).toEqual({ cash: 1_000_000, loan: 0, monthStart: { cash: 1_000_000 } });
     expect(w.tick).toBe(0);
     expect(w.log).toEqual([]);
@@ -105,10 +108,45 @@ describe("hashWorld", () => {
       ["a corner height", (w) => void (w.terrain.corners[40] = 9)],
       ["a surface tile", (w) => void (w.terrain.surface[10] = 2)],
       ["a water tile", (w) => void (w.terrain.water[63] = 3)],
+      ["a path tile", (w) => void (w.terrain.path[20] = 1)],
+      ["the park name", (w) => void (w.park.name = "Other")],
+      ["the park open flag", (w) => void (w.park.open = true)],
+      ["the entry fee", (w) => void (w.park.entryFee += 1)],
+      ["the entrance", (w) => void (w.park.entrance = { x: 0, y: 3, side: 3 })],
+      ["the entrance side", (w) => void (w.park.entrance = { x: 0, y: 0, side: 3 })],
+      ["the rating", (w) => void (w.park.rating += 1)],
+      ["guests in the park", (w) => void (w.park.guestsInPark = 1)],
+      ["total admissions", (w) => void (w.park.totalAdmissions = 1)],
+      ["entry income", (w) => void (w.park.income.entry = 1)],
+      ["ride income", (w) => void (w.park.income.rides = 1)],
+      ["shop income", (w) => void (w.park.income.shops = 1)],
+      ["running expenses", (w) => void (w.park.expenses.running = 1)],
+      ["wage expenses", (w) => void (w.park.expenses.wages = 1)],
+      ["monthly entry income", (w) => void (w.park.monthly.entry = 1)],
+      ["monthly ride income", (w) => void (w.park.monthly.rides = 1)],
+      ["monthly shop income", (w) => void (w.park.monthly.shops = 1)],
+      ["monthly running costs", (w) => void (w.park.monthly.running = 1)],
+      ["monthly wages", (w) => void (w.park.monthly.wages = 1)],
+      [
+        "a month of history",
+        (w) =>
+          void w.park.history.push({
+            year: 1,
+            month: 0,
+            entry: 0,
+            rides: 0,
+            shops: 0,
+            running: 0,
+            wages: 0,
+            net: 0,
+          }),
+      ],
       ["cash", (w) => void (w.finance.cash += 1)],
       ["loan", (w) => void (w.finance.loan = 100)],
       ["month-start cash", (w) => void (w.finance.monthStart.cash = 0)],
       ["rng state", (w) => void w.rng.next()],
+      ["the guest rng stream", (w) => void w.rngStreams.guests.next()],
+      ["the guest id counter", (w) => void (w.guests.nextGuestId = 2)],
       [
         "log length",
         (w) =>
@@ -126,6 +164,32 @@ describe("hashWorld", () => {
         expect(hashWorld(w)).not.toBe(reference);
       });
     }
+  });
+
+  it("tells a footpath from a queue, and a path on one tile from the same path on the next", () => {
+    const foot = createWorld(base);
+    const queue = createWorld(base);
+    const moved = createWorld(base);
+    foot.terrain.path[20] = 1;
+    queue.terrain.path[20] = 2;
+    moved.terrain.path[21] = 1;
+    expect(hashWorld(foot)).not.toBe(hashWorld(queue));
+    expect(hashWorld(foot)).not.toBe(hashWorld(moved));
+  });
+
+  it("tells the same park apart before and after the entrance moves", () => {
+    const a = createWorld(base);
+    const b = createWorld(base);
+    a.park.entrance = { x: 0, y: 3, side: 3 };
+    b.park.entrance = { x: 3, y: 0, side: 0 };
+    expect(hashWorld(a)).not.toBe(hashWorld(b));
+  });
+
+  it("ignores pathVersion, which is a cache key and restarts at 0 on load", () => {
+    const w = createWorld(base);
+    const reference = hashWorld(w);
+    w.pathVersion = 41;
+    expect(hashWorld(w)).toBe(reference);
   });
 
   it("tells undo from redo contents apart", () => {

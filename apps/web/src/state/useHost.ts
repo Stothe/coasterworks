@@ -2,6 +2,8 @@ import {
   LogEntryPublicSchema,
   type DecodedSnapshot,
   type EventMessage,
+  type GuestSection,
+  type ParkPublic,
   type SimClient,
 } from "@coasterworks/protocol";
 import type { TerrainData } from "@coasterworks/render";
@@ -21,6 +23,22 @@ export interface HostState extends SnapshotSource {
   name?: string;
   /** The latest terrain. A snapshot without terrain leaves it as it was. */
   terrain: TerrainData | null;
+  /**
+   * The latest path layer: one byte per tile, row-major over the map's `width * height`, 0 for no
+   * path, 1 for a footpath and 2 for a queue. A snapshot without paths leaves it as it was.
+   */
+  paths: Uint8Array | null;
+  /**
+   * The guests of the latest snapshot, or null before the first. Like `snapshot` this is read when
+   * asked for and is always the latest: guests move in every snapshot, so a render does not
+   * follow them. A component that shows them follows the feed with `useSnapshot`.
+   */
+  readonly guests: GuestSection | null;
+  /**
+   * The park as the latest snapshot describes it, or null before the first. Read when asked for,
+   * like `guests`.
+   */
+  readonly park: ParkPublic | null;
   /**
    * The last 200 log events, oldest first and in id order: the park's history as of the connection,
    * then what has happened since. An event whose id is already here replaces that entry, so no id
@@ -55,12 +73,16 @@ const HISTORY_LIMIT = 200;
 /** What the host's error starts with when it has stopped the simulation. */
 const HALT_PREFIX = "Simulation halted";
 
-/** What the hook keeps in React state: all of `HostState` but the snapshot, which has its own feed. */
-type Core = Omit<HostState, keyof SnapshotSource>;
+/**
+ * What the hook keeps in React state: all of `HostState` but what is read from the snapshot feed,
+ * which changes with every snapshot and has its own way of telling those who want to know.
+ */
+type Core = Omit<HostState, keyof SnapshotSource | "guests" | "park">;
 
 const INITIAL: Core = {
   status: "connecting",
   terrain: null,
+  paths: null,
   events: [],
   client: null,
   halted: false,
@@ -99,14 +121,15 @@ interface Session {
  * then `state` itself is returned, so React does not render.
  */
 function withSnapshot(state: Core, snapshot: DecodedSnapshot): Core {
-  const { header, terrain } = snapshot;
+  const { header, terrain, paths } = snapshot;
   // Running again: the halt, and the error that announced it, are over.
   const clearsHalt =
     !header.halted && (state.haltMessage !== undefined || !!state.error?.startsWith(HALT_PREFIX));
-  if (!terrain && state.halted === header.halted && !clearsHalt) return state;
+  if (!terrain && !paths && state.halted === header.halted && !clearsHalt) return state;
   const next: Core = {
     ...state,
     terrain: terrain ? { width: header.width, height: header.height, ...terrain } : state.terrain,
+    paths: paths ?? state.paths,
     halted: header.halted,
   };
   if (clearsHalt) {
@@ -249,8 +272,10 @@ function open(
  * closed when it unmounts. `connect` is read when the connection is opened and not again.
  *
  * The component renders when anything but the snapshot changes. The snapshot is read from the
- * returned state when needed (`state.snapshot`), and a component that shows part of it follows it
- * with `useSnapshot`, so a snapshot every 50 ms renders only what shows it.
+ * returned state when needed (`state.snapshot`, and `state.guests` and `state.park`, which are
+ * parts of it), and a component that shows part of it follows it with `useSnapshot`, so a
+ * snapshot every 50 ms renders only what shows it. The terrain and the paths are state, because
+ * they change only when someone builds.
  *
  * React strict mode mounts, unmounts and mounts a component again at once. The close is therefore
  * put off until the next turn of the event loop, and a mount in that gap keeps the connection, so
@@ -280,6 +305,12 @@ export function useHost(connect: ConnectFn = connectHost): HostState {
       ...core,
       get snapshot() {
         return feed.latest;
+      },
+      get guests() {
+        return feed.latest?.guests ?? null;
+      },
+      get park() {
+        return feed.latest?.header.park ?? null;
       },
       subscribeSnapshot: feed.subscribe,
     }),

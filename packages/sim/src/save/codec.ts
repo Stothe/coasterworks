@@ -1,5 +1,8 @@
 import { gunzipSync, gzipSync, strFromU8, strToU8 } from "fflate";
 import { z } from "zod";
+import { createGuestStore } from "../guests/guests.js";
+import { GUEST_ARRAYS, GUEST_CAP, type GuestArray, type GuestStore } from "../guests/types.js";
+import { copyParkState } from "../park/types.js";
 import { Rng } from "../rng.js";
 import { hashWorld } from "../world/hash.js";
 import { MAX_MAP, SCHEMA_VERSION, type LogEntry, type World } from "../world/types.js";
@@ -13,13 +16,23 @@ import { migrate, schemaVersionOf } from "./migrate.js";
  * Save format: gzip of one JSON document.
  *
  *   { schemaVersion, meta: { name, seed, created }, tick,
- *     terrain: { width, height, corners, surface, water },
- *     finance, rng: [w0, w1, w2, w3], log, undoStack, redoStack, nextId, hash }
+ *     terrain: { width, height, corners, surface, water, path },
+ *     finance, park,
+ *     guests: { count, nextGuestId, id, x, y, tx, ty, dest, state, happiness, energy, hunger,
+ *               thirst, bathroom, nausea, cash, color, name, thought, thoughtTick, sinceAction,
+ *               lostTicks },
+ *     rng: [w0, w1, w2, w3], rngStreams: { guests: [w0, w1, w2, w3] },
+ *     log, undoStack, redoStack, nextId, hash }
  *
- * Each terrain array is `{ "$t": "Int16Array" | "Uint8Array", "$b64": "<base64>" }`, holding the
- * array's values as little-endian bytes. `fflate` does the gzip so the same code runs in Node and
- * in browsers. Keys are written in a fixed order and the gzip header carries no timestamp, so
- * saving the same world twice gives the same bytes.
+ * Each array is `{ "$t": "Int16Array" | "Int32Array" | "Uint16Array" | "Uint8Array", "$b64":
+ * "<base64>" }`, holding the array's values as little-endian bytes. `park` is plain JSON
+ * (`ParkState`, no typed arrays; its `history` is an array of month records). The guest arrays
+ * hold only the `count` live guests, in slot order, with the gaps squeezed out; loading puts them
+ * in slots `0..count-1`. The sim packs the store the same way every tick, so a loaded park carries
+ * on exactly as the saved one would have.
+ * `fflate` does the gzip so the same code runs in Node and in browsers. Keys are written in a
+ * fixed order and the gzip header carries no timestamp, so saving the same world twice gives the
+ * same bytes.
  *
  * `hash` is `hashWorld` of the saved world and is the last key. Loading guards against damage in
  * three ways.
@@ -40,7 +53,7 @@ import { migrate, schemaVersionOf } from "./migrate.js";
  *    that name log entries. They are checked on every load, migrated or not.
  */
 
-type TypedArrayName = "Int16Array" | "Uint8Array";
+type TypedArrayName = "Int16Array" | "Int32Array" | "Uint16Array" | "Uint8Array";
 
 interface EncodedArray {
   $t: TypedArrayName;
@@ -61,6 +74,28 @@ function encodeUint8(array: Uint8Array): EncodedArray {
   return { $t: "Uint8Array", $b64: toBase64(array) };
 }
 
+function encodeUint16(array: Uint16Array): EncodedArray {
+  const bytes = new Uint8Array(array.length * 2);
+  for (let i = 0; i < array.length; i++) {
+    const value = array[i] as number;
+    bytes[2 * i] = value & 0xff;
+    bytes[2 * i + 1] = (value >> 8) & 0xff;
+  }
+  return { $t: "Uint16Array", $b64: toBase64(bytes) };
+}
+
+function encodeInt32(array: Int32Array): EncodedArray {
+  const bytes = new Uint8Array(array.length * 4);
+  for (let i = 0; i < array.length; i++) {
+    const value = array[i] as number;
+    bytes[4 * i] = value & 0xff;
+    bytes[4 * i + 1] = (value >> 8) & 0xff;
+    bytes[4 * i + 2] = (value >> 16) & 0xff;
+    bytes[4 * i + 3] = (value >> 24) & 0xff;
+  }
+  return { $t: "Int32Array", $b64: toBase64(bytes) };
+}
+
 /** Decodes to exactly `length` values or throws, so a short or long array is caught here. */
 function decodeInt16(encoded: EncodedArray, length: number): Int16Array {
   const bytes = fromBase64(encoded.$b64);
@@ -77,6 +112,63 @@ function decodeUint8(encoded: EncodedArray, length: number): Uint8Array {
   const bytes = fromBase64(encoded.$b64);
   if (bytes.length !== length) throw new SaveError(CORRUPT_MESSAGE);
   return bytes;
+}
+
+function decodeUint16(encoded: EncodedArray, length: number): Uint16Array {
+  const bytes = fromBase64(encoded.$b64);
+  if (bytes.length !== length * 2) throw new SaveError(CORRUPT_MESSAGE);
+  const out = new Uint16Array(length);
+  for (let i = 0; i < length; i++) {
+    out[i] = ((bytes[2 * i + 1] as number) << 8) | (bytes[2 * i] as number);
+  }
+  return out;
+}
+
+function decodeInt32(encoded: EncodedArray, length: number): Int32Array {
+  const bytes = fromBase64(encoded.$b64);
+  if (bytes.length !== length * 4) throw new SaveError(CORRUPT_MESSAGE);
+  const out = new Int32Array(length);
+  for (let i = 0; i < length; i++) {
+    // The shifts work on signed 32-bit values, which restores the sign.
+    out[i] =
+      ((bytes[4 * i + 3] as number) << 24) |
+      ((bytes[4 * i + 2] as number) << 16) |
+      ((bytes[4 * i + 1] as number) << 8) |
+      (bytes[4 * i] as number);
+  }
+  return out;
+}
+
+/** Encodes `array[slot]` for each live slot in slot order, packing out the gaps. */
+function encodeLiveGuests(g: GuestStore, array: GuestArray, kind: TypedArrayName): EncodedArray {
+  const packed = new (array.constructor as new (length: number) => GuestArray)(g.count);
+  let n = 0;
+  for (let slot = 0; slot < GUEST_CAP; slot++) {
+    if (g.live[slot] === 1) packed[n++] = array[slot] as number;
+  }
+  return kind === "Int32Array"
+    ? encodeInt32(packed as Int32Array)
+    : kind === "Uint16Array"
+      ? encodeUint16(packed as Uint16Array)
+      : encodeUint8(packed as Uint8Array);
+}
+
+/** Decodes the guest section into a store with the guests in slots `0..count-1`. */
+function decodeGuests(doc: z.infer<typeof guestsSchema>): GuestStore {
+  const g = createGuestStore();
+  const { count } = doc;
+  for (const [name, kind] of GUEST_ARRAYS) {
+    const encoded = doc[name];
+    if (kind === "Int32Array") g[name].set(decodeInt32(encoded, count));
+    else if (kind === "Uint16Array") g[name].set(decodeUint16(encoded, count));
+    else g[name].set(decodeUint8(encoded, count));
+  }
+  g.count = count;
+  g.nextGuestId = doc.nextGuestId;
+  g.live.fill(1, 0, count);
+  g.freeCount = GUEST_CAP - count;
+  for (let i = 0; i < g.freeCount; i++) g.free[i] = GUEST_CAP - 1 - i;
+  return g;
 }
 
 const int = z.number().int();
@@ -98,6 +190,67 @@ const logEntrySchema = z.object({
   undoneBy: int.optional(),
 });
 
+const edgeSide = z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]);
+
+const rngWords = z.tuple([uint32, uint32, uint32, uint32]);
+
+// Ranges (a fee of at most $100, a rating of at most 999, counters that are not negative, at most
+// 12 months of history) are the invariants' business, so a bad value gets the same message from
+// any source.
+const parkSchema = z.object({
+  name: z.string(),
+  open: z.boolean(),
+  entryFee: int,
+  entrance: z.object({ x: int, y: int, side: edgeSide }).nullable(),
+  rating: int,
+  guestsInPark: int,
+  totalAdmissions: int,
+  income: z.object({ entry: int, rides: int, shops: int }),
+  expenses: z.object({ running: int, wages: int }),
+  monthly: z.object({ entry: int, rides: int, shops: int, running: int, wages: int }),
+  history: z.array(
+    z.object({
+      year: int,
+      month: int,
+      entry: int,
+      rides: int,
+      shops: int,
+      running: int,
+      wages: int,
+      net: int,
+    }),
+  ),
+});
+
+// Each array's length, and the values in it, are checked against `count` when it is decoded and by
+// the invariants.
+const int32s = encodedArray("Int32Array");
+const uint8s = encodedArray("Uint8Array");
+const guestsSchema = z.object({
+  count: int.min(0).max(GUEST_CAP),
+  nextGuestId: int.min(1),
+  id: int32s,
+  x: int32s,
+  y: int32s,
+  tx: int32s,
+  ty: int32s,
+  dest: int32s,
+  state: uint8s,
+  happiness: uint8s,
+  energy: uint8s,
+  hunger: uint8s,
+  thirst: uint8s,
+  bathroom: uint8s,
+  nausea: uint8s,
+  cash: int32s,
+  color: uint8s,
+  name: encodedArray("Uint16Array"),
+  thought: uint8s,
+  thoughtTick: int32s,
+  sinceAction: int32s,
+  lostTicks: int32s,
+});
+
 const saveSchema = z.object({
   schemaVersion: int,
   meta: z.object({ name: z.string(), seed: int, created: z.string() }),
@@ -108,9 +261,13 @@ const saveSchema = z.object({
     corners: encodedArray("Int16Array"),
     surface: encodedArray("Uint8Array"),
     water: encodedArray("Uint8Array"),
+    path: encodedArray("Uint8Array"),
   }),
   finance: z.object({ cash: int, loan: int, monthStart: z.object({ cash: int }) }),
-  rng: z.tuple([uint32, uint32, uint32, uint32]),
+  park: parkSchema,
+  guests: guestsSchema,
+  rng: rngWords,
+  rngStreams: z.object({ guests: rngWords }),
   log: z.array(logEntrySchema),
   undoStack: z.array(int),
   redoStack: z.array(int),
@@ -133,9 +290,16 @@ function encodeLogEntry(entry: LogEntry): Record<string, unknown> {
   return out;
 }
 
+/** The guest section: the counters, then each array packed to the live guests, in save order. */
+function encodeGuests(g: GuestStore): Record<string, unknown> {
+  const out: Record<string, unknown> = { count: g.count, nextGuestId: g.nextGuestId };
+  for (const [name, kind] of GUEST_ARRAYS) out[name] = encodeLiveGuests(g, g[name], kind);
+  return out;
+}
+
 /**
- * Writes a world as a save: gzip of a JSON document, with typed arrays as base64 and the rng as its
- * four-word state. The log is included with its undo data, so a loaded park can still undo.
+ * Writes a world as a save: gzip of a JSON document, with typed arrays as base64 and the rngs as
+ * their four-word states. The log is included with its undo data, so a loaded park can still undo.
  */
 export function serializeWorld(world: World): Uint8Array {
   const { meta, terrain, finance } = world;
@@ -149,13 +313,17 @@ export function serializeWorld(world: World): Uint8Array {
       corners: encodeInt16(terrain.corners),
       surface: encodeUint8(terrain.surface),
       water: encodeUint8(terrain.water),
+      path: encodeUint8(terrain.path),
     },
     finance: {
       cash: finance.cash,
       loan: finance.loan,
       monthStart: { cash: finance.monthStart.cash },
     },
+    park: copyParkState(world.park),
+    guests: encodeGuests(world.guests),
     rng: [...world.rng.state],
+    rngStreams: { guests: [...world.rngStreams.guests.state] },
     log: world.log.map(encodeLogEntry),
     undoStack: world.undoStack,
     redoStack: world.redoStack,
@@ -239,13 +407,17 @@ export function deserializeWorld(bytes: Uint8Array): World {
   const corners = decodeInt16(doc.terrain.corners, (width + 1) * (height + 1));
   const surface = decodeUint8(doc.terrain.surface, width * height);
   const water = decodeUint8(doc.terrain.water, width * height);
+  const path = decodeUint8(doc.terrain.path, width * height);
 
   let rng: Rng;
+  let guestRng: Rng;
   try {
     rng = Rng.fromState(doc.rng);
+    guestRng = Rng.fromState(doc.rngStreams.guests);
   } catch (error) {
     throw new SaveError(CORRUPT_MESSAGE, { cause: error });
   }
+  const guests = decodeGuests(doc.guests);
 
   const log = doc.log.map((e): LogEntry => {
     const entry: LogEntry = {
@@ -269,13 +441,17 @@ export function deserializeWorld(bytes: Uint8Array): World {
       created: doc.meta.created,
     },
     tick: doc.tick,
-    terrain: { width, height, corners, surface, water },
+    terrain: { width, height, corners, surface, water, path },
     finance: {
       cash: doc.finance.cash,
       loan: doc.finance.loan,
       monthStart: { cash: doc.finance.monthStart.cash },
     },
+    park: copyParkState(doc.park),
+    guests,
+    pathVersion: 0,
     rng,
+    rngStreams: { guests: guestRng },
     log,
     undoStack: doc.undoStack,
     redoStack: doc.redoStack,

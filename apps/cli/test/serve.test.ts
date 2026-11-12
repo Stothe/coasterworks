@@ -256,6 +256,26 @@ describe("serve", () => {
     expect(stopped.stdout).toBe(`${JSON.stringify(info)}\n`);
   });
 
+  it("names the park in /health by its current name, after a rename", async () => {
+    const file = await makePark();
+    const renamed = await cli(
+      "exec",
+      "--save",
+      file,
+      "--command",
+      "park_rename",
+      "--out",
+      file,
+      "--input",
+      JSON.stringify({ name: "Hilltop" }),
+    );
+    expect(renamed.code).toBe(0);
+    const server = await startServe("--save", file, "--port", "0", "--token", "t");
+    const health = await fetch(`${server.http}/health`);
+    expect(await health.json()).toEqual({ ok: true, name: "Hilltop", tick: expect.any(Number) });
+    expect((await server.stop()).code).toBe(0);
+  });
+
   it("refuses a socket without the token, with the wrong one, or on another path", async () => {
     const file = await makePark();
     const server = await startServe("--save", file, "--token", "t");

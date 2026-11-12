@@ -1,4 +1,4 @@
-import type { EventMessage, LogEntryPublic, SimClient, Speed } from "@coasterworks/protocol";
+import type { EventMessage, LogEntryPublic, SimClient } from "@coasterworks/protocol";
 import { createDefaultRegistry } from "@coasterworks/sim";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { useImperativeHandle, type Ref } from "react";
@@ -7,6 +7,7 @@ import { App } from "../src/App";
 import { settingsStore } from "../src/state/settings";
 import { uiStore } from "../src/state/uiStore";
 import { useHost, type HostState } from "../src/state/useHost";
+import { snapshotOf } from "./snapshotSource";
 import type { ViewportHandle } from "../src/viewport/Viewport";
 
 vi.mock("../src/state/useHost", () => ({ useHost: vi.fn() }));
@@ -41,22 +42,11 @@ function event(id: number, over: Partial<LogEntryPublic> = {}): EventMessage {
 function host(over: Partial<HostState> = {}): HostState {
   return {
     status: "ready",
-    snapshot: {
-      header: {
-        tick: 0,
-        speed: 1 as Speed,
-        halted: false,
-        cash: 1_000_000,
-        loan: 0,
-        monthStartCash: 1_000_000,
-        date: "March 1, Year 1",
-        terrainVersion: 0,
-        hasTerrain: false,
-        width: 16,
-        height: 16,
-      },
-    },
+    snapshot: snapshotOf(),
     terrain: null,
+    paths: null,
+    guests: null,
+    park: null,
     events: [],
     client: { query, setSpeed: vi.fn(), command: vi.fn() } as unknown as SimClient,
     halted: false,

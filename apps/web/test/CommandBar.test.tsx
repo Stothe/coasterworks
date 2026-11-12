@@ -130,7 +130,14 @@ describe("CommandBar: the list", () => {
     expect(inGroup("Terrain")).toContain("terrain_raise");
     expect(inGroup("Terrain")).toContain("terrain_set_water");
     expect(inGroup("Finance")).toEqual(["finance_take_loan", "finance_repay_loan"]);
-    expect(inGroup("Park")).toEqual(["park_close_gates"]);
+    expect(inGroup("Park")).toEqual([
+      "park_set_entrance",
+      "park_set_entry_fee",
+      "park_open",
+      "park_close",
+      "park_rename",
+      "park_close_gates",
+    ]);
     expect(inGroup("View")).toContain("ui.classicView");
     expect(inGroup("View")).toContain("ui.tool.terrain");
     expect(inGroup("Speed")).toEqual([
@@ -144,27 +151,28 @@ describe("CommandBar: the list", () => {
     ]);
     expect(inGroup("History")).toEqual(["ui.undo", "ui.redo"]);
     expect(inGroup("Time")).toEqual(["sim_advance"]);
-    expect(inGroup("Other")).toEqual(["ui.help"]);
+    // The path commands have no group of their own until the Paths tray arrives.
+    expect(inGroup("Other")).toEqual(["path_build", "path_remove", "ui.help"]);
   });
 
   it("shows the title, the description dimmed, and the shortcut as a key cap", () => {
     vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
     setup();
     open();
-    const undo = option(/Undo/);
+    const undo = option(/^Undo/);
     expect(within(undo).getByText("Undo")).toBeTruthy();
     expect(within(undo).getByText("Undo the last command.").className).toContain("text-muted");
     expect(within(undo).getByText("⌘Z").tagName).toBe("KBD");
-    expect(within(option(/Raise terrain/)).queryByText(/^⌘/)).toBeNull();
+    expect(within(option(/^Raise terrain/)).queryByText(/^⌘/)).toBeNull();
   });
 
   it("writes the shortcuts for the keyboard in use: Ctrl+Z on a PC", () => {
     vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
     setup();
     open();
-    expect(within(option(/Undo/)).getByText("Ctrl+Z").tagName).toBe("KBD");
-    expect(within(option(/Redo/)).getByText("Ctrl+Shift+Z").tagName).toBe("KBD");
-    expect(within(option(/Pause/)).getByText("Space").tagName).toBe("KBD");
+    expect(within(option(/^Undo/)).getByText("Ctrl+Z").tagName).toBe("KBD");
+    expect(within(option(/^Redo/)).getByText("Ctrl+Shift+Z").tagName).toBe("KBD");
+    expect(within(option(/^Pause/)).getByText("Space").tagName).toBe("KBD");
     expect(screen.queryByText("⌘Z")).toBeNull();
   });
 
@@ -189,7 +197,7 @@ describe("CommandBar: the list", () => {
   it("leaves out the actions that exist only for a key", () => {
     setup();
     open();
-    expect(queryOption(/Command bar/)).toBeNull();
+    expect(queryOption(/^Command bar/)).toBeNull();
     expect(queryOption(/^Cancel/)).toBeNull();
   });
 
@@ -197,16 +205,16 @@ describe("CommandBar: the list", () => {
     setup();
     open();
     search("loan");
-    expect(option(/Take loan/)).toBeTruthy();
-    expect(option(/Repay loan/)).toBeTruthy();
-    expect(queryOption(/Raise terrain/)).toBeNull();
+    expect(option(/^Take loan/)).toBeTruthy();
+    expect(option(/^Repay loan/)).toBeTruthy();
+    expect(queryOption(/^Raise terrain/)).toBeNull();
     search("borrow");
-    expect(queryOption(/Take loan/)).toBeNull();
+    expect(queryOption(/^Take loan/)).toBeNull();
     // Letters in order are enough.
     search("lwr");
-    expect(option(/Lower terrain/)).toBeTruthy();
+    expect(option(/^Lower terrain/)).toBeTruthy();
     search("faster");
-    expect(option(/Speed up/)).toBeTruthy();
+    expect(option(/^Speed up/)).toBeTruthy();
   });
 
   it("ranks a search that starts a word of the title above letters found in order", () => {
@@ -220,7 +228,7 @@ describe("CommandBar: the list", () => {
       "Repay loan",
     ]);
     expect(options[0]?.getAttribute("aria-selected")).toBe("true");
-    expect(queryOption(/Lower terrain/)).toBeNull();
+    expect(queryOption(/^Lower terrain/)).toBeNull();
     // Only the group of what matched is listed.
     expect(screen.getByText("Finance")).toBeTruthy();
     expect(screen.queryByText("Terrain")).toBeNull();
@@ -263,12 +271,12 @@ describe("CommandBar: the list", () => {
       ),
     );
     open();
-    const undo = option(/Undo/);
+    const undo = option(/^Undo/);
     expect(undo.getAttribute("aria-disabled")).toBe("true");
     fireEvent.click(undo);
     expect(ui.undo).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog")).toBeTruthy();
-    expect(option(/Redo/).getAttribute("aria-disabled")).toBe("false");
+    expect(option(/^Redo/).getAttribute("aria-disabled")).toBe("false");
   });
 
   it("dims Pause and the speeds while the sim is halted, and leaves the rest as they are", () => {
@@ -304,16 +312,16 @@ describe("CommandBar: the list", () => {
     );
     open();
     const dimmed = (name: RegExp) => option(name).getAttribute("aria-disabled");
-    for (const name of [/Pause/, /Speed 1x/, /Speed 8x/, /Speed up/, /Slow down/]) {
+    for (const name of [/^Pause/, /^Speed 1x/, /^Speed 8x/, /^Speed up/, /^Slow down/]) {
       expect(dimmed(name), String(name)).toBe("true");
     }
-    expect(dimmed(/Undo/)).toBe("false");
-    expect(dimmed(/Raise terrain/)).toBe("false");
+    expect(dimmed(/^Undo/)).toBe("false");
+    expect(dimmed(/^Raise terrain/)).toBe("false");
 
     // Running again turns them back on.
     view.rerender(<CommandBar actions={actions} ctx={ctx} execute={vi.fn()} notify={vi.fn()} />);
-    expect(dimmed(/Pause/)).toBe("false");
-    expect(dimmed(/Speed 4x/)).toBe("false");
+    expect(dimmed(/^Pause/)).toBe("false");
+    expect(dimmed(/^Speed 4x/)).toBe("false");
   });
 
   it("dims everything while there is no connection, which is a context of none", () => {
@@ -328,7 +336,7 @@ describe("CommandBar: the list", () => {
     });
     render(<CommandBar actions={actions} ctx={null} execute={vi.fn()} notify={vi.fn()} />);
     open();
-    for (const name of [/Pause/, /Undo/, /Raise terrain/]) {
+    for (const name of [/^Pause/, /^Undo/, /^Raise terrain/]) {
       expect(option(name).getAttribute("aria-disabled"), String(name)).toBe("true");
     }
   });
@@ -368,7 +376,7 @@ describe("CommandBar: running an action", () => {
   it("runs an interface action on a click", () => {
     const { ui } = setup();
     open();
-    fireEvent.click(option(/Speed 4x/));
+    fireEvent.click(option(/^Speed 4x/));
     expect(ui.setSpeed).toHaveBeenCalledWith(4);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
@@ -376,7 +384,7 @@ describe("CommandBar: running an action", () => {
   it("runs a command with no input at once, and closes the bar", () => {
     const { execute } = setup([entry("park_close_gates", {})]);
     open();
-    fireEvent.click(option(/Park close gates/));
+    fireEvent.click(option(/^Park close gates/));
     expect(execute).toHaveBeenCalledWith("park_close_gates", {});
     expect(screen.queryByRole("dialog")).toBeNull();
   });
@@ -385,7 +393,7 @@ describe("CommandBar: running an action", () => {
     const { notify } = setup();
     open();
     search("raise terrain");
-    fireEvent.click(option(/Raise terrain/));
+    fireEvent.click(option(/^Raise terrain/));
     expect(uiStore.getState().placement?.command).toBe("terrain_raise");
     expect(uiStore.getState().tool).toBe("terrain");
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -403,7 +411,7 @@ describe("CommandBar: running an action", () => {
   it("does not hint for anything but a placement", () => {
     const { notify } = setup();
     open();
-    fireEvent.click(option(/Undo/));
+    fireEvent.click(option(/^Undo/));
     expect(notify).not.toHaveBeenCalled();
   });
 });
@@ -424,14 +432,14 @@ describe("CommandBar: forms", () => {
   it("puts the player's focus in the first field", () => {
     setup();
     open();
-    fireEvent.click(option(/Take loan/));
+    fireEvent.click(option(/^Take loan/));
     expect(document.activeElement).toBe(screen.getByRole("spinbutton", { name: "Amount" }));
   });
 
   it("sends the loan in cents, closes the bar, and says it is done", async () => {
     const { execute, notify } = setup();
     open();
-    fireEvent.click(option(/Take loan/));
+    fireEvent.click(option(/^Take loan/));
     fireEvent.change(screen.getByLabelText("Amount"), { target: { value: "500" } });
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Take loan" }));
@@ -447,7 +455,7 @@ describe("CommandBar: forms", () => {
     ]);
     execute.mockResolvedValue({ ok: true, id: 2, cost: 123_456 });
     open();
-    fireEvent.click(option(/Park resurface/));
+    fireEvent.click(option(/^Park resurface/));
     fireEvent.change(screen.getByLabelText("N"), { target: { value: "1" } });
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Park resurface" }));
@@ -459,7 +467,7 @@ describe("CommandBar: forms", () => {
     const { execute, notify } = setup();
     execute.mockResolvedValue({ ok: false, error: "Loan limit is $50000.00" });
     open();
-    fireEvent.click(option(/Take loan/));
+    fireEvent.click(option(/^Take loan/));
     fireEvent.change(screen.getByLabelText("Amount"), { target: { value: "500" } });
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Take loan" }));
@@ -472,14 +480,14 @@ describe("CommandBar: forms", () => {
   it("goes back to the list from Back, and from Escape; Escape again closes the bar", () => {
     setup();
     open();
-    fireEvent.click(option(/Take loan/));
+    fireEvent.click(option(/^Take loan/));
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(uiStore.getState().formAction).toBeNull();
     expect(input()).toBeTruthy();
     // The search field has the focus again, so the player can type at once.
     expect(document.activeElement).toBe(input());
 
-    fireEvent.click(option(/Take loan/));
+    fireEvent.click(option(/^Take loan/));
     fireEvent.keyDown(screen.getByLabelText("Amount"), { key: "Escape" });
     expect(uiStore.getState().formAction).toBeNull();
     expect(input()).toBeTruthy();
@@ -495,7 +503,7 @@ describe("CommandBar: forms", () => {
       entry("park_build_ride", { type: "object", properties: { layout: { type: "object" } } }),
     ]);
     open();
-    fireEvent.click(option(/Park build ride/));
+    fireEvent.click(option(/^Park build ride/));
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(document.activeElement).toBe(input());
   });
@@ -513,13 +521,13 @@ describe("CommandBar: forms", () => {
       }),
     ]);
     open();
-    fireEvent.click(option(/Park build ride/));
+    fireEvent.click(option(/^Park build ride/));
     expect(screen.getByText("This action needs the full UI")).toBeTruthy();
     expect(screen.queryByRole("form")).toBeNull();
     // The bar still works: Back returns to the list.
     fireEvent.click(screen.getByRole("button", { name: "Back" }));
     expect(input()).toBeTruthy();
-    expect(option(/Take loan/)).toBeTruthy();
+    expect(option(/^Take loan/)).toBeTruthy();
   });
 });
 

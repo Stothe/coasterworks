@@ -1,8 +1,11 @@
 import { z } from "zod";
 import type { ExecResult } from "@coasterworks/sim";
 
-/** Version of the wire protocol. The host refuses a `hello` that names any other. */
-export const PROTOCOL_VERSION = 1;
+/**
+ * Version of the wire protocol. The host refuses a `hello` that names any other. Version 2 added
+ * paths, the entrance and guests to the snapshot (`CWS2`).
+ */
+export const PROTOCOL_VERSION = 2;
 
 /** Thrown for anything wrong on the wire: a bad frame, a refused request, a closed connection. */
 export class ProtocolError extends Error {

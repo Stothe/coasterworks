@@ -483,19 +483,44 @@ describe("SimClient", () => {
     server.send(JSON.stringify({ t: "event", kind: "log", entry }));
     server.send(JSON.stringify({ t: "error", message: "oops" }));
     server.send(
-      encodeSnapshot({
-        tick: 7,
-        speed: 1,
-        halted: false,
-        cash: 0,
-        loan: 0,
-        monthStartCash: 0,
-        date: "March 1, Year 1",
-        terrainVersion: 0,
-        hasTerrain: false,
-        width: 1,
-        height: 1,
-      }),
+      encodeSnapshot(
+        {
+          tick: 7,
+          speed: 1,
+          halted: false,
+          cash: 0,
+          loan: 0,
+          monthStartCash: 0,
+          date: "March 1, Year 1",
+          terrainVersion: 0,
+          hasTerrain: false,
+          pathVersion: 0,
+          hasPaths: false,
+          guestCount: 0,
+          width: 1,
+          height: 1,
+          park: {
+            name: "Park",
+            open: false,
+            entryFee: 1_000,
+            entrance: null,
+            rating: 500,
+            guestsInPark: 0,
+            totalAdmissions: 0,
+          },
+        },
+        {
+          guests: {
+            count: 0,
+            id: new Int32Array(0),
+            x: new Int32Array(0),
+            y: new Int32Array(0),
+            state: new Uint8Array(0),
+            color: new Uint8Array(0),
+            happiness: new Uint8Array(0),
+          },
+        },
+      ),
     );
     expect(heard).toEqual(["event 3", "error oops", "snapshot 7"]);
   });

@@ -22,16 +22,20 @@ function setup(opts: { width?: number; height?: number } = {}) {
 }
 
 describe("default registry", () => {
-  it("registers the six queries, after the commands, with their categories", () => {
+  it("registers the ten queries, after the commands, with their categories", () => {
     const queries = createDefaultRegistry()
       .catalog()
       .filter((e) => e.kind === "query");
     expect(queries.map((e) => [e.name, e.category, e.undoable])).toEqual([
       ["park_status", "park", false],
       ["park_bounds", "park", false],
+      ["finance_summary", "finance", false],
       ["terrain_get", "terrain", false],
       ["log_recent", "sim", false],
       ["undo_state", "sim", false],
+      ["guest_list", "park", false],
+      ["guest_get", "park", false],
+      ["guest_thoughts", "park", false],
       ["catalog_list", "sim", false],
     ]);
   });
@@ -104,9 +108,17 @@ describe("park_status", () => {
         monthStartCash: 1_000_000,
         loan: 0,
         guests: 0,
-        rating: 0,
+        rating: 500,
         width: 16,
         height: 16,
+        open: false,
+        entryFee: 10_00,
+        entrance: null,
+        guestsInPark: 0,
+        totalAdmissions: 0,
+        income: { entry: 0, rides: 0, shops: 0 },
+        expenses: { running: 0, wages: 0 },
+        monthly: { entry: 0, rides: 0, shops: 0, running: 0, wages: 0 },
       },
     });
   });
@@ -130,9 +142,17 @@ describe("park_status", () => {
         monthStartCash: 1_000_000 + 5_000_00 - 62_50,
         loan: 5_000_00,
         guests: 0,
-        rating: 0,
+        rating: 500,
         width: 8,
         height: 4,
+        open: false,
+        entryFee: 10_00,
+        entrance: null,
+        guestsInPark: 0,
+        totalAdmissions: 0,
+        income: { entry: 0, rides: 0, shops: 0 },
+        expenses: { running: 0, wages: 0 },
+        monthly: { entry: 0, rides: 0, shops: 0, running: 0, wages: 0 },
       },
     });
   });

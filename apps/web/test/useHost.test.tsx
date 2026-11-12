@@ -230,6 +230,143 @@ describe("useHost", () => {
     expect(result.current.name).toBe("Hook Test");
   });
 
+  describe("the paths, the guests and the park", () => {
+    it("have nothing before the first snapshot, then the layer, the section and the park", async () => {
+      const rig = makeRig();
+      const { result } = renderHook(() => useHost(rig.connect));
+      expect(result.current.paths).toBeNull();
+      expect(result.current.guests).toBeNull();
+      expect(result.current.park).toBeNull();
+
+      await waitFor(() => expect(result.current.status).toBe("ready"));
+      expect(result.current.paths).toBeInstanceOf(Uint8Array);
+      expect(result.current.paths).toHaveLength(64);
+      expect(result.current.paths?.every((tile) => tile === 0)).toBe(true);
+      expect(result.current.guests).toMatchObject({ count: 0 });
+      expect(result.current.park).toMatchObject({
+        name: "Hook Test",
+        open: false,
+        entrance: null,
+        guestsInPark: 0,
+      });
+      expect(result.current.snapshot?.header.hasPaths).toBe(true);
+    });
+
+    it("keep the old path layer when a snapshot comes without paths, and replace it when one comes with", async () => {
+      const rig = makeRig();
+      const { result } = renderHook(() => useHost(rig.connect));
+      await waitFor(() => expect(result.current.paths).not.toBeNull());
+      const first = result.current.paths;
+
+      // Time passing, and a loan: neither touches the paths, so neither sends them.
+      act(() => {
+        rig.advance(1000);
+        rig.runLoop();
+      });
+      await act(async () => {
+        await result.current.client?.command("finance_take_loan", { amount: 100_000 });
+      });
+      await waitFor(() => expect(result.current.snapshot?.header.loan).toBe(100_000));
+      expect(result.current.snapshot?.header.hasPaths).toBe(false);
+      expect(result.current.snapshot?.paths).toBeUndefined();
+      expect(result.current.paths).toBe(first);
+
+      await act(async () => {
+        await result.current.client?.command("path_build", {
+          x: 2,
+          y: 3,
+          w: 2,
+          h: 1,
+          kind: "foot",
+        });
+      });
+      await waitFor(() => expect(result.current.paths).not.toBe(first));
+      expect(result.current.paths?.[3 * 8 + 2]).toBe(1);
+      expect(result.current.paths?.[3 * 8 + 3]).toBe(1);
+      expect(result.current.paths?.[3 * 8 + 4]).toBe(0);
+    });
+
+    it("keep the terrain when only the paths change, and the paths when only the terrain does", async () => {
+      const rig = makeRig();
+      const { result } = renderHook(() => useHost(rig.connect));
+      await waitFor(() => expect(result.current.paths).not.toBeNull());
+      const terrain = result.current.terrain;
+      const paths = result.current.paths;
+
+      await act(async () => {
+        await result.current.client?.command("path_build", {
+          x: 2,
+          y: 3,
+          w: 1,
+          h: 1,
+          kind: "queue",
+        });
+      });
+      await waitFor(() => expect(result.current.paths).not.toBe(paths));
+      expect(result.current.terrain).toBe(terrain);
+      const built = result.current.paths;
+
+      await act(async () => {
+        await result.current.client?.command("terrain_raise", { x: 1, y: 1, w: 1, h: 1 });
+      });
+      await waitFor(() => expect(result.current.terrain).not.toBe(terrain));
+      expect(result.current.paths).toBe(built);
+    });
+
+    it("follow the latest snapshot without committing a render of their own", async () => {
+      const rig = makeRig();
+      let commits = 0;
+      const { result } = renderHook(() => useHost(rig.connect), {
+        wrapper: ({ children }) => (
+          <Profiler id="host" onRender={() => commits++}>
+            {children}
+          </Profiler>
+        ),
+      });
+      await waitFor(() => expect(result.current.status).toBe("ready"));
+      // An entrance, an open park and some ticks: guests arrive, and each snapshot moves them.
+      expect(rig.sim.execute("park_set_entrance", { x: 0, y: 3 }, "agent").ok).toBe(true);
+      expect(rig.sim.execute("park_open", {}, "agent").ok).toBe(true);
+      for (let i = 0; i < 4000 && rig.sim.world.guests.count === 0; i++) rig.sim.step(1);
+      expect(rig.sim.world.guests.count).toBeGreaterThan(0);
+      act(() => rig.host.notifyExternalMutation());
+      await waitFor(() => expect(result.current.park?.open).toBe(true));
+      const state = result.current;
+      expect(state.guests?.count).toBe(rig.sim.world.guests.count);
+      expect(state.park?.entrance).toEqual({ x: 0, y: 3, side: 3 });
+      // Let the render for the mutation's paths and events settle; time alone adds none.
+      act(() => {
+        rig.advance(1000);
+        rig.runLoop();
+      });
+      const settled = commits;
+      const before = state.guests;
+
+      for (let again = 0; again < 3; again++) {
+        act(() => {
+          rig.advance(1000);
+          rig.runLoop();
+        });
+      }
+      // Each snapshot brings a section of its own, and the same state reads the newest.
+      await waitFor(() => expect(state.guests).not.toBe(before));
+      expect(result.current).toBe(state);
+      expect(commits).toBe(settled);
+      expect(state.guests?.count).toBe(rig.sim.world.guests.count);
+      expect(state.park?.guestsInPark).toBe(rig.sim.world.park.guestsInPark);
+    });
+
+    it("show the park's new name after the park is renamed", async () => {
+      const rig = makeRig();
+      const { result } = renderHook(() => useHost(rig.connect));
+      await waitFor(() => expect(result.current.park?.name).toBe("Hook Test"));
+      await act(async () => {
+        await result.current.client?.command("park_rename", { name: "Fresh Name" });
+      });
+      await waitFor(() => expect(result.current.park?.name).toBe("Fresh Name"));
+    });
+  });
+
   describe("the snapshots", () => {
     it("are read from the state as the latest, and a snapshot that only moves time on commits nothing", async () => {
       const rig = makeRig();

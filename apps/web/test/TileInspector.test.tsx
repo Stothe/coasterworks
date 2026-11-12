@@ -208,13 +208,15 @@ describe("TileInspector: the actions", () => {
       "Set water",
       "Drain",
       "Set surface",
+      "Path build",
+      "Path remove",
     ]);
   });
 
   it("lists what the actions give it: one the sim adds appears, after the known ones", () => {
     setup(terrain(), OK, 3, 3, registryActions([FAKE_RECT]));
     expect(buttons().at(-1)).toBe("Terrain flatten fake");
-    expect(buttons()).toHaveLength(8);
+    expect(buttons()).toHaveLength(10);
   });
 
   it("lists in a fixed order whatever order the actions come in, and only placement actions", () => {
@@ -228,6 +230,8 @@ describe("TileInspector: the actions", () => {
       "Drain",
       "Set surface",
       "Terrain flatten fake",
+      "Path remove",
+      "Path build",
     ]);
   });
 

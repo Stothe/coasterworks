@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { uiStore } from "../src/state/uiStore";
 import { useHost, type HostState } from "../src/state/useHost";
+import { snapshotOf } from "./snapshotSource";
 import { CLASSIC_VIEW_REQUEST } from "../src/viewport/classicView";
 
 vi.mock("../src/state/useHost", () => ({ useHost: vi.fn() }));
@@ -36,22 +37,11 @@ const query = vi.fn(async (name: string) =>
 function host(speed: Speed = 1): HostState {
   return {
     status: "ready",
-    snapshot: {
-      header: {
-        tick: 0,
-        speed,
-        halted: false,
-        cash: 1_000_000,
-        loan: 0,
-        monthStartCash: 1_000_000,
-        date: "March 1, Year 1",
-        terrainVersion: 0,
-        hasTerrain: false,
-        width: 16,
-        height: 16,
-      },
-    },
+    snapshot: snapshotOf({ speed }),
     terrain: null,
+    paths: null,
+    guests: null,
+    park: null,
     events: [],
     client: { setSpeed, command, undo, redo, query } as unknown as SimClient,
     halted: false,

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_PATH_SLOPE, PATH_NONE } from "../paths/paths.js";
 import { forEachCornerInRect, inBounds, tileBase } from "../terrain/terrain.js";
 import { MAX_HEIGHT, type Rect, type World } from "../world/types.js";
 import { defineCommand } from "./define.js";
@@ -20,9 +21,9 @@ export const rectSchema = z.object({
 
 const heightSchema = z.int().min(0).max(MAX_HEIGHT);
 
-const OUTSIDE_PARK = "Area is outside the park";
+export const OUTSIDE_PARK = "Area is outside the park";
 
-function checkRect(world: World, rect: Rect): string | null {
+export function checkRect(world: World, rect: Rect): string | null {
   return inBounds(world.terrain, rect.x, rect.y, rect.w, rect.h) ? null : OUTSIDE_PARK;
 }
 
@@ -71,6 +72,48 @@ function revertHeights(world: World, undo: HeightUndo): void {
   for (const [index, previous] of undo.corners) corners[index] = previous;
 }
 
+/**
+ * The reason `changes` cannot be made, or null if they can: a path tile one of them touches would
+ * end up steeper than a path can be laid on (`MAX_PATH_SLOPE`), so guests would walk a slope that
+ * `path_build` refuses.
+ */
+export function checkPathSlopes(world: World, changes: readonly HeightChange[]): string | null {
+  if (changes.length === 0) return null;
+  const t = world.terrain;
+  const stride = t.width + 1;
+  const after = new Map<number, number>();
+  for (const [index, , to] of changes) after.set(index, to);
+  const height = (cx: number, cy: number) => {
+    const index = cy * stride + cx;
+    return after.get(index) ?? (t.corners[index] as number);
+  };
+  const checked = new Set<number>();
+  for (const [index] of changes) {
+    const cx = index % stride;
+    const cy = (index - cx) / stride;
+    for (let ty = cy - 1; ty <= cy; ty++) {
+      for (let tx = cx - 1; tx <= cx; tx++) {
+        if (!inBounds(t, tx, ty)) continue;
+        const tile = ty * t.width + tx;
+        if (checked.has(tile)) continue;
+        checked.add(tile);
+        if (t.path[tile] === PATH_NONE) continue;
+        const hs = [height(tx, ty), height(tx + 1, ty), height(tx + 1, ty + 1), height(tx, ty + 1)];
+        if (Math.max(...hs) - Math.min(...hs) > MAX_PATH_SLOPE) return PATH_TOO_STEEP;
+      }
+    }
+  }
+  return null;
+}
+
+export const PATH_TOO_STEEP = "A path here would be too steep";
+
+/** `checkRect`, then `checkPathSlopes` on the corners `plan` would change. */
+function checkHeights<I extends Rect>(plan: (world: World, input: I) => HeightChange[]) {
+  return (world: World, input: I): string | null =>
+    checkRect(world, input) ?? checkPathSlopes(world, plan(world, input));
+}
+
 function heightCost(changes: HeightChange[]): number {
   return changes.length * RAISE_COST_PER_CORNER;
 }
@@ -88,12 +131,12 @@ const planRaise = (world: World, input: { steps: number } & Rect) =>
 export const terrainRaise = defineCommand({
   name: "terrain_raise",
   description:
-    "Raises every corner in a rectangle of tiles by a number of steps (default 1), up to the maximum height. Costs $50 for each corner that changes.",
+    "Raises every corner in a rectangle of tiles by a number of steps (default 1), up to the maximum height. Costs $50 for each corner that changes. Refused if it would leave a path steeper than 2 steps across a tile.",
   category: "terrain",
   input: stepsSchema,
   undoable: true,
   cost: (world, input) => heightCost(planRaise(world, input)),
-  validate: checkRect,
+  validate: checkHeights(planRaise),
   apply: (world, input) => applyHeights(world, planRaise(world, input)),
   revert: (world, _input, undo) => revertHeights(world, undo),
 });
@@ -104,12 +147,12 @@ const planLower = (world: World, input: { steps: number } & Rect) =>
 export const terrainLower = defineCommand({
   name: "terrain_lower",
   description:
-    "Lowers every corner in a rectangle of tiles by a number of steps (default 1), down to zero. Costs $50 for each corner that changes.",
+    "Lowers every corner in a rectangle of tiles by a number of steps (default 1), down to zero. Costs $50 for each corner that changes. Refused if it would leave a path steeper than 2 steps across a tile.",
   category: "terrain",
   input: stepsSchema,
   undoable: true,
   cost: (world, input) => heightCost(planLower(world, input)),
-  validate: checkRect,
+  validate: checkHeights(planLower),
   apply: (world, input) => applyHeights(world, planLower(world, input)),
   revert: (world, _input, undo) => revertHeights(world, undo),
 });
@@ -120,12 +163,12 @@ const planLevel = (world: World, input: { height: number } & Rect) =>
 export const terrainLevel = defineCommand({
   name: "terrain_level",
   description:
-    "Sets every corner in a rectangle of tiles to one height (0 to 63). Costs $50 for each corner that changes.",
+    "Sets every corner in a rectangle of tiles to one height (0 to 63). Costs $50 for each corner that changes. Refused if it would leave a path steeper than 2 steps across a tile.",
   category: "terrain",
   input: rectSchema.extend({ height: heightSchema }),
   undoable: true,
   cost: (world, input) => heightCost(planLevel(world, input)),
-  validate: checkRect,
+  validate: checkHeights(planLevel),
   apply: (world, input) => applyHeights(world, planLevel(world, input)),
   revert: (world, _input, undo) => revertHeights(world, undo),
 });
@@ -155,12 +198,12 @@ const planSmooth = (world: World, rect: Rect) =>
 export const terrainSmooth = defineCommand({
   name: "terrain_smooth",
   description:
-    "Sets each corner in a rectangle of tiles to the rounded average height of itself and its neighbors, in one pass. Costs $50 for each corner that changes.",
+    "Sets each corner in a rectangle of tiles to the rounded average height of itself and its neighbors, in one pass. Costs $50 for each corner that changes. Refused if it would leave a path steeper than 2 steps across a tile.",
   category: "terrain",
   input: rectSchema,
   undoable: true,
   cost: (world, input) => heightCost(planSmooth(world, input)),
-  validate: checkRect,
+  validate: checkHeights((world, input: Rect) => planSmooth(world, input)),
   apply: (world, input) => applyHeights(world, planSmooth(world, input)),
   revert: (world, _input, undo) => revertHeights(world, undo),
 });
@@ -168,12 +211,12 @@ export const terrainSmooth = defineCommand({
 // Tile commands -------------------------------------------------------------------------------
 
 /** What a tile command saves so it can be undone: each changed tile and its previous value. */
-interface TileUndo {
+export interface TileUndo {
   tiles: Array<[index: number, previous: number]>;
 }
 
 /** Calls `fn(x, y, index)` for each tile of `rect`, row by row. The rect must be on the map. */
-function forEachTileInRect(
+export function forEachTileInRect(
   world: World,
   rect: Rect,
   fn: (x: number, y: number, index: number) => void,
@@ -185,7 +228,12 @@ function forEachTileInRect(
 }
 
 /** The indexes of the tiles of `rect` where `layer` differs from `value`. */
-function tilesToChange(world: World, rect: Rect, layer: Uint8Array, value: number): number[] {
+export function tilesToChange(
+  world: World,
+  rect: Rect,
+  layer: Uint8Array,
+  value: number,
+): number[] {
   const indexes: number[] = [];
   forEachTileInRect(world, rect, (_x, _y, index) => {
     if (layer[index] !== value) indexes.push(index);
@@ -193,7 +241,7 @@ function tilesToChange(world: World, rect: Rect, layer: Uint8Array, value: numbe
   return indexes;
 }
 
-function setTiles(layer: Uint8Array, indexes: number[], value: number): TileUndo {
+export function setTiles(layer: Uint8Array, indexes: number[], value: number): TileUndo {
   return {
     tiles: indexes.map((index) => {
       const previous = layer[index] as number;
@@ -203,7 +251,7 @@ function setTiles(layer: Uint8Array, indexes: number[], value: number): TileUndo
   };
 }
 
-function revertTiles(layer: Uint8Array, undo: TileUndo): void {
+export function revertTiles(layer: Uint8Array, undo: TileUndo): void {
   for (const [index, previous] of undo.tiles) layer[index] = previous;
 }
 
@@ -230,7 +278,7 @@ export const terrainSetSurface = defineCommand({
 export const terrainSetWater = defineCommand({
   name: "terrain_set_water",
   description:
-    "Sets the water level of every tile in a rectangle (0 to 63). A level above 0 must be higher than the lowest corner of every tile; level 0 drains the tiles. Costs $20 for each tile that changes.",
+    "Sets the water level of every tile in a rectangle (0 to 63). A level above 0 must be higher than the lowest corner of every tile; level 0 drains the tiles. Water cannot cover a path or the park entrance. Costs $20 for each tile that changes.",
   category: "terrain",
   input: rectSchema.extend({ level: heightSchema }),
   undoable: true,
@@ -241,9 +289,14 @@ export const terrainSetWater = defineCommand({
     if (outside !== null) return outside;
     if (input.level === 0) return null;
     let aboveGround = true;
-    forEachTileInRect(world, input, (x, y) => {
+    let blocked = false;
+    const { entrance } = world.park;
+    forEachTileInRect(world, input, (x, y, index) => {
       if (input.level <= tileBase(world.terrain, x, y)) aboveGround = false;
+      if (world.terrain.path[index] !== PATH_NONE) blocked = true;
+      if (entrance !== null && entrance.x === x && entrance.y === y) blocked = true;
     });
+    if (blocked) return "Cannot flood a path or the park entrance";
     return aboveGround ? null : "Water must be above the ground";
   },
   apply: (world, input) =>

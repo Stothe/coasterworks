@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "../src/App";
 import { useHost, type HostState } from "../src/state/useHost";
+import { snapshotOf } from "./snapshotSource";
 
 vi.mock("../src/state/useHost", () => ({ useHost: vi.fn() }));
 // No WebGL in jsdom, and these tests are about the keys.
@@ -13,22 +14,11 @@ const setSpeed = vi.fn<(speed: Speed) => Promise<void>>();
 function hostAt(speed: Speed, halted: boolean): HostState {
   return {
     status: "ready",
-    snapshot: {
-      header: {
-        tick: 0,
-        speed,
-        halted,
-        cash: 1_000_000,
-        loan: 0,
-        monthStartCash: 1_000_000,
-        date: "March 1, Year 1",
-        terrainVersion: 0,
-        hasTerrain: false,
-        width: 16,
-        height: 16,
-      },
-    },
+    snapshot: snapshotOf({ speed, halted }),
     terrain: null,
+    paths: null,
+    guests: null,
+    park: null,
     events: [],
     client: { setSpeed } as unknown as SimClient,
     halted,

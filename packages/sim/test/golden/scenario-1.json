@@ -15,6 +15,20 @@
     { "exec": ["finance_repay_loan", { "amount": 500000 }] },
     { "exec": ["sim_advance", { "days": 70 }] },
     { "exec": ["terrain_set_surface", { "x": 12, "y": 20, "w": 3, "h": 3, "surface": 1 }] },
+    { "exec": ["path_build", { "x": 16, "y": 25, "w": 1, "h": 6, "kind": "foot" }] },
+    { "exec": ["path_build", { "x": 16, "y": 29, "w": 1, "h": 2, "kind": "queue" }] },
+    { "exec": ["path_remove", { "x": 16, "y": 25, "w": 1, "h": 1 }] },
+    { "exec": ["park_set_entrance", { "x": 16, "y": 31 }] },
+    { "exec": ["park_set_entry_fee", { "cents": 500 }] },
+    { "exec": ["park_rename", { "name": "Golden Gardens" }] },
+    { "exec": ["park_open", {}] },
+    { "exec": ["path_build", { "x": 17, "y": 25, "w": 2, "h": 1, "kind": "foot" }] },
+    { "undo": true },
+    { "redo": true },
+    { "exec": ["park_set_entry_fee", { "cents": 300 }] },
+    { "tick": 2400 },
+    { "exec": ["sim_advance", { "days": 31 }] },
+    { "exec": ["park_close", {}] },
     { "tick": 400 }
   ]
 }

@@ -1,5 +1,18 @@
-import type { DecodedSnapshot, SnapshotHeader } from "@coasterworks/protocol";
+import type { DecodedSnapshot, GuestSection, SnapshotHeader } from "@coasterworks/protocol";
 import type { SnapshotSource } from "../src/state/useSnapshot";
+
+/** The guest section of a park nobody has entered. */
+export function noGuests(): GuestSection {
+  return {
+    count: 0,
+    id: new Int32Array(0),
+    x: new Int32Array(0),
+    y: new Int32Array(0),
+    state: new Uint8Array(0),
+    color: new Uint8Array(0),
+    happiness: new Uint8Array(0),
+  };
+}
 
 /** A snapshot of a running park at its start, with `over` changed. */
 export function snapshotOf(over: Partial<SnapshotHeader> = {}): DecodedSnapshot {
@@ -14,10 +27,23 @@ export function snapshotOf(over: Partial<SnapshotHeader> = {}): DecodedSnapshot 
       date: "March 1, Year 1",
       terrainVersion: 0,
       hasTerrain: false,
+      pathVersion: 0,
+      hasPaths: false,
+      guestCount: 0,
       width: 16,
       height: 16,
+      park: {
+        name: "Test Park",
+        open: false,
+        entryFee: 10_00,
+        entrance: null,
+        rating: 500,
+        guestsInPark: 0,
+        totalAdmissions: 0,
+      },
       ...over,
     },
+    guests: noGuests(),
   };
 }
 

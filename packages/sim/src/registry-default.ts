@@ -1,4 +1,12 @@
 import { financeRepayLoan, financeTakeLoan } from "./commands/finance.js";
+import {
+  parkClose,
+  parkOpen,
+  parkRename,
+  parkSetEntrance,
+  parkSetEntryFee,
+} from "./commands/park.js";
+import { pathBuild, pathRemove } from "./commands/path.js";
 import { Registry } from "./commands/registry.js";
 import { simAdvance } from "./commands/sim.js";
 import {
@@ -10,8 +18,9 @@ import {
   terrainSmooth,
 } from "./commands/terrain.js";
 import { catalogListQuery } from "./queries/catalog.js";
+import { guestGet, guestList, guestThoughts } from "./queries/guest.js";
 import { logRecent, undoState } from "./queries/log.js";
-import { parkBounds, parkStatus } from "./queries/park.js";
+import { financeSummary, parkBounds, parkStatus } from "./queries/park.js";
 import { terrainGet } from "./queries/terrain.js";
 
 /** A registry holding every command and query in the sim. */
@@ -23,14 +32,25 @@ export function createDefaultRegistry(): Registry {
   registry.register(terrainSmooth);
   registry.register(terrainSetSurface);
   registry.register(terrainSetWater);
+  registry.register(pathBuild);
+  registry.register(pathRemove);
+  registry.register(parkSetEntrance);
+  registry.register(parkSetEntryFee);
+  registry.register(parkOpen);
+  registry.register(parkClose);
+  registry.register(parkRename);
   registry.register(simAdvance);
   registry.register(financeTakeLoan);
   registry.register(financeRepayLoan);
   registry.registerQuery(parkStatus);
   registry.registerQuery(parkBounds);
+  registry.registerQuery(financeSummary);
   registry.registerQuery(terrainGet);
   registry.registerQuery(logRecent);
   registry.registerQuery(undoState);
+  registry.registerQuery(guestList);
+  registry.registerQuery(guestGet);
+  registry.registerQuery(guestThoughts);
   // Reads the registry it is in, so a client can discover every command and query.
   registry.registerQuery(catalogListQuery(registry));
   return registry;
