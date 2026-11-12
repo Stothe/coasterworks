@@ -311,3 +311,33 @@ describe("detailFor", () => {
     expect(detailFor(80, range, 2, 0)).toBe(1);
   });
 });
+
+describe("a coarser mesh for a software renderer", () => {
+  it("starts the land's loops at the park mesh's cell, and still lands on the edge reach", () => {
+    const loops = ringLoops(1);
+    expect(loops[0]).toEqual({ distance: 0, cell: 1 });
+    expect(loops.some((loop) => loop.distance === EDGE_REACH)).toBe(true);
+    expect(loops.length).toBeLessThan(ringLoops().length);
+  });
+
+  it("meets a park mesh of one cell a tile on the park mesh's own border vertices", () => {
+    const t = flatTerrain(8, 6, 4);
+    const land = createOuterLand(t);
+    const ring = buildSurroundingsGeometry(t, land, ringLoops(1));
+    const chunk = buildTerrainChunk(t, 0, 0, 1);
+    expect(chunk.indices.length).toBe(8 * 6 * 6);
+    const border = new Set<string>();
+    for (let i = 0; i < chunk.positions.length; i += 3) {
+      const x = chunk.positions[i] as number;
+      const z = chunk.positions[i + 2] as number;
+      if (x === 0 || z === 0 || x === 8 || z === 6) border.add(`${x},${z}`);
+    }
+    // Every point of the park's border is a vertex of the ring, at the same height.
+    const ringPoints = new Set<string>();
+    for (let i = 0; i < ring.positions.length; i += 3) {
+      ringPoints.add(`${ring.positions[i]},${ring.positions[i + 2]}`);
+    }
+    for (const point of border) expect(ringPoints.has(point), point).toBe(true);
+    expect(border.size).toBe(2 * (8 + 6));
+  });
+});

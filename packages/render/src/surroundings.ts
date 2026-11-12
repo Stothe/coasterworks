@@ -29,6 +29,8 @@ import {
   type SceneryLod,
   type SceneryShape,
 } from "./scenery/shapes.js";
+import { SOFTWARE } from "./quality.js";
+import { SUBDIV } from "./units.js";
 import type { TerrainData } from "./terrain/geometry.js";
 
 /** The land beyond the park. */
@@ -65,8 +67,8 @@ const LOD_RANGE: Record<Quality, readonly (readonly [number, number, number])[]>
     [0, 18, 78],
   ],
   low: [
-    [8, 44, 110],
-    [0, 8, 60],
+    [6, 24, 70],
+    [0, 4, 30],
   ],
 };
 /** A plot goes back to a finer level only once the camera is this much inside its range. */
@@ -87,10 +89,15 @@ export function detailFor(
   if (shown >= 0 && lod < shown && d > (range[lod] as number) * LOD_SLACK) lod = shown;
   return Math.max(lod, finest);
 }
+/** Hedge stations per tile on a software renderer at low (8 elsewhere). */
+const CHEAPEST_HEDGE_STEPS = 1;
+/** The finest level of detail a software renderer at low draws a tree at. */
+const CHEAPEST_LOD = 2;
+
 /** The share of the far band's trees each quality draws; they go in the order of their rank. */
-const FAR_SHARE: Record<Quality, number> = { high: 1, medium: 0.82, low: 0.6 };
+const FAR_SHARE: Record<Quality, number> = { high: 1, medium: 0.82, low: 0.2 };
 /** The coarsest level of detail that still casts shadows, by quality. */
-const SHADOW_LOD: Record<Quality, number> = { high: 1, medium: 1, low: 0 };
+const SHADOW_LOD: Record<Quality, number> = { high: 1, medium: 1, low: -1 };
 /** How deep each kind is set into the ground, as a share of its size. */
 const SINK: readonly number[] = [0.03, 0.03, 0.03, 0.05, 0.12];
 
@@ -111,6 +118,8 @@ interface Cluster {
   z: number;
   radius: number;
   far: boolean;
+  /** Bushes and rocks, rather than trees. */
+  small: boolean;
   matrices: InstancedBufferAttribute;
   /** Per instance, in drawing order (by rank): where it stands, how far out, how deep. */
   px: Float32Array;
@@ -183,8 +192,11 @@ const NOTHING = new Uint8Array(0);
  */
 export function createSurroundings(ctx: RenderContext): SurroundingsModule {
   const materials = createSceneryMaterials(ctx);
-  const loops = ringLoops();
-  const split = loopAt(loops, EDGE_REACH);
+  // The rings' first loop matches the park mesh, which a software renderer at low builds coarser.
+  let loops = ringLoops(ctx.software === true && ctx.quality === "low" ? SOFTWARE.subdiv : SUBDIV);
+  let split = loopAt(loops, EDGE_REACH);
+  /** The last terrain given, to build everything again from when the mesh's fineness changes. */
+  let lastTerrain: TerrainData | null = null;
   /** The models, made when first wanted. */
   const models = new Map<number, BufferGeometry>();
 
@@ -199,6 +211,8 @@ export function createSurroundings(ctx: RenderContext): SurroundingsModule {
   let clusters: Cluster[] = [];
   let entrance: EntrancePlace | null = ctx.entrance();
   let quality: Quality = ctx.quality;
+  /** A software renderer at low: draw as little out here as still reads as land with trees. */
+  const cheapest = () => ctx.software === true && quality === "low";
 
   function model(kind: SceneryKind, lod: SceneryLod, variant: number): BufferGeometry {
     const key = (kind * LOD_COUNT + lod) * 16 + variant;
@@ -251,13 +265,21 @@ export function createSurroundings(ctx: RenderContext): SurroundingsModule {
 
   /** How much of every cluster the quality in force draws, and which of its meshes cast shadows. */
   function applyQuality(): void {
+    // At low nothing out here casts a shadow: the land and the hedge are many vertices for a
+    // shadow map that hardly shows them.
+    if (near) near.castShadow = quality !== "low";
+    if (hedge) hedge.castShadow = quality !== "low";
     const share = FAR_SHARE[quality];
+    const bare = cheapest();
     for (const cluster of clusters) {
       let count = cluster.rank.length;
       if (cluster.far) {
         count = 0;
         while (count < cluster.rank.length && (cluster.rank[count] as number) < share) count++;
       }
+      // A software renderer at low keeps only the trees near the park: no forest beyond, and
+      // no bushes or rocks.
+      if (bare && (cluster.band === 1 || cluster.small)) count = 0;
       cluster.count = count;
       cluster.meshes.forEach((mesh, lod) => {
         if (!mesh) return;
@@ -279,7 +301,7 @@ export function createSurroundings(ctx: RenderContext): SurroundingsModule {
       const dy = eye.y - cluster.y;
       const dz = eye.z - cluster.z;
       const d = Math.sqrt(dx * dx + dy * dy + dz * dz) - cluster.radius;
-      let lod = detailFor(d, range, cluster.shown, cluster.finest);
+      let lod = detailFor(d, range, cluster.shown, cheapest() ? CHEAPEST_LOD : cluster.finest);
       // Small things have no far model: beyond their last they are not drawn.
       if (!cluster.meshes[lod] || cluster.count === 0) lod = -1;
       if (lod === cluster.shown) continue;
@@ -338,6 +360,7 @@ export function createSurroundings(ctx: RenderContext): SurroundingsModule {
         z: 0,
         radius: 0,
         far: band === 1 && kind <= SPRUCE,
+        small: kind > SPRUCE,
         matrices,
         px: new Float32Array(count),
         pz: new Float32Array(count),
@@ -435,10 +458,16 @@ export function createSurroundings(ctx: RenderContext): SurroundingsModule {
     drop(hedge);
     hedge = null;
     if (!land || !size) return;
-    const shape = buildHedge(size.width, size.height, land.heightAt, entrance);
+    const shape = buildHedge(
+      size.width,
+      size.height,
+      land.heightAt,
+      entrance,
+      cheapest() ? CHEAPEST_HEDGE_STEPS : undefined,
+    );
     if (!shape) return;
     hedge = new Mesh(shapeGeometry(shape), materials.lit);
-    hedge.castShadow = true;
+    hedge.castShadow = quality !== "low";
     hedge.receiveShadow = true;
     hedge.matrixAutoUpdate = false;
     ctx.scene.add(hedge);
@@ -454,8 +483,9 @@ export function createSurroundings(ctx: RenderContext): SurroundingsModule {
     return mesh;
   }
 
-  return {
+  const module: SurroundingsModule = {
     setTerrain(t: TerrainData): void {
+      lastTerrain = t;
       const resized = !size || size.width !== t.width || size.height !== t.height;
       const next = edgeSignature(t);
       if (!resized && next === signature) return;
@@ -476,7 +506,7 @@ export function createSurroundings(ctx: RenderContext): SurroundingsModule {
       ctx.setOuterGround(land.heightAt);
 
       drop(near);
-      near = ringMesh(edge, 0, split, true);
+      near = ringMesh(edge, 0, split, quality !== "low");
       if (resized) {
         drop(far);
         far = ringMesh(edge, split, loops.length - 1, false);
@@ -502,7 +532,16 @@ export function createSurroundings(ctx: RenderContext): SurroundingsModule {
       buildClusters();
     },
     setQuality(q: Quality): void {
+      const wasCheapest = cheapest();
       quality = q;
+      if (cheapest() !== wasCheapest) {
+        // The land's mesh, the hedge and the clusters are built coarser for a software renderer
+        // at low: everything is built again, as for a park of a new size.
+        loops = ringLoops(cheapest() ? SOFTWARE.subdiv : SUBDIV);
+        split = loopAt(loops, EDGE_REACH);
+        size = null;
+        if (lastTerrain) module.setTerrain?.(lastTerrain);
+      }
       applyQuality();
     },
     update(): void {
@@ -520,4 +559,5 @@ export function createSurroundings(ctx: RenderContext): SurroundingsModule {
       materials.dispose();
     },
   };
+  return module;
 }

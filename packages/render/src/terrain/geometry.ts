@@ -86,6 +86,10 @@ export function tileTriangles(t: TerrainData, x: number, y: number, out: Float64
  * terrain and the vertex's place in the world, so the vertices two neighboring chunks have in
  * common get identical positions and normals: no cracks and no shading seam along chunk borders.
  *
+ * `subdiv` is the cells per tile edge: `SUBDIV`, or fewer for a renderer that cannot afford the
+ * vertices (the land beyond the park is stitched to every `1 / SUBDIV` of the border, so a coarser
+ * park leaves its in-between vertices on the edge line, hidden under the hedge).
+ *
  * Each cell is split along the diagonal joining the two corners with the smaller height
  * difference (ties along NW-SE), which keeps ridges and gullies from looking serrated.
  */
@@ -93,6 +97,7 @@ export function buildTerrainChunk(
   t: TerrainData,
   chunkX: number,
   chunkY: number,
+  subdiv: number = SUBDIV,
 ): TerrainChunkGeometry {
   const { x0, y0, x1, y1 } = chunkTiles(t, chunkX, chunkY);
   const tilesX = x1 - x0;
@@ -107,8 +112,8 @@ export function buildTerrainChunk(
     };
   }
 
-  const cellsX = tilesX * SUBDIV;
-  const cellsY = tilesY * SUBDIV;
+  const cellsX = tilesX * subdiv;
+  const cellsY = tilesY * subdiv;
   const row = cellsX + 1;
   const positions = new Float32Array(row * (cellsY + 1) * 3);
   const normals = new Float32Array(positions.length);
@@ -118,9 +123,9 @@ export function buildTerrainChunk(
   for (let j = 0; j <= cellsY; j++) {
     // Counted in whole cells from the map's corner, so a shared vertex is the same number in
     // every chunk that has it.
-    const z = (y0 * SUBDIV + j) / SUBDIV;
+    const z = (y0 * subdiv + j) / subdiv;
     for (let i = 0; i <= cellsX; i++, v += 3) {
-      const x = (x0 * SUBDIV + i) / SUBDIV;
+      const x = (x0 * subdiv + i) / subdiv;
       const normal = groundNormalAt(t, x, z);
       positions[v] = x;
       positions[v + 1] = groundHeightAt(t, x, z);

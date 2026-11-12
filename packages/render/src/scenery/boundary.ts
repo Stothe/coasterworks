@@ -92,6 +92,7 @@ export function hedgeRuns(
   width: number,
   height: number,
   entrance: EntrancePlace | null,
+  steps: number = STEPS,
 ): { stations: Station[]; closed: boolean }[] {
   const o = HEDGE_OFFSET;
   const all: (Station | null)[] = [];
@@ -114,7 +115,7 @@ export function hedgeRuns(
     // Stations on every mesh line of the ground and halfway between, so the hedge follows it
     // closely. The side's last station is the first of the corner after it.
     const marks: number[] = [];
-    for (let i = 0; i < length * STEPS; i++) marks.push(i / STEPS);
+    for (let i = 0; i < length * steps; i++) marks.push(i / steps);
     if (gap) {
       // The hedge stops and starts exactly at the gap's ends, not at the nearest whole cell.
       for (const end of gap) if (end < length && !marks.includes(end)) marks.push(end);
@@ -165,13 +166,15 @@ const END_SHAPE: readonly (readonly [number, number])[] = [
 
 /**
  * Builds the hedge around a `width` by `height` park whose land is `heightAt`, leaving the
- * entrance open. Null when the park is too small to have one.
+ * entrance open. Null when the park is too small to have one. `steps` is stations per tile (fewer
+ * for a renderer that cannot afford the vertices).
  */
 export function buildHedge(
   width: number,
   height: number,
   heightAt: (x: number, z: number) => number,
   entrance: EntrancePlace | null,
+  steps: number = STEPS,
 ): SceneryShape | null {
   if (width < 1 || height < 1) return null;
   const positions: number[] = [];
@@ -180,7 +183,7 @@ export function buildHedge(
   const indices: number[] = [];
   const points = PROFILE.length;
 
-  for (const run of hedgeRuns(width, height, entrance)) {
+  for (const run of hedgeRuns(width, height, entrance, steps)) {
     let stations = run.stations;
     if (!run.closed) {
       // Round both ends: a few stations more, each a little further on and a little less full.

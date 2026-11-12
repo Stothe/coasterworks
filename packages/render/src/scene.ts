@@ -30,7 +30,13 @@ import { createGuests, type GuestsModule } from "./guests.js";
 import { groundHeightAt, sceneGroundAt } from "./heightfield.js";
 import { pickTile, rayFromCamera, type Ray } from "./picker.js";
 import { createPost, glRendererString, type PostModule, type RenderInfo } from "./post.js";
-import { createFrameMeter, detectQuality } from "./quality.js";
+import {
+  SOFTWARE,
+  createFrameMeter,
+  detectQuality,
+  isSoftwareRenderer,
+  softwareFrameDue,
+} from "./quality.js";
 import { sunFor } from "./sky.js";
 import { createSurroundings } from "./surroundings.js";
 import {
@@ -43,8 +49,17 @@ import { createTerrainMaterial } from "./terrain/material.js";
 import { createOverlay, type OverlayModule } from "./terrain/overlay.glsl.js";
 import { createPaths, type PathsModule } from "./terrain/paths.glsl.js";
 import { createSurface } from "./terrain/surface.glsl.js";
-import { CHUNK } from "./units.js";
+import { CHUNK, SUBDIV } from "./units.js";
 import { createWater } from "./water.js";
+
+/**
+ * Whether the park's ground casts shadows (the hills on themselves) at `quality`. Not at `low`:
+ * the ground is most of the vertices of a frame, and drawing it again into the shadow map is the
+ * dearest thing a software renderer does.
+ */
+function terrainCastsShadow(quality: Quality): boolean {
+  return quality !== "low";
+}
 
 export interface SceneOptions {
   /** Upper bound on the device pixel ratio the canvas renders at. Default 2. */
@@ -183,6 +198,8 @@ export function createScene(canvas: HTMLCanvasElement, opts: SceneOptions = {}):
   const camera = new PerspectiveCamera(radiansToDegrees(rig.fovY), 1, 0.5, 1500);
   const uniforms = createSharedUniforms();
   const gl = glRendererString(renderer);
+  /** On a software renderer `low` is cheaper still (`SOFTWARE`): see `cheap`. */
+  const software = isSoftwareRenderer(gl);
 
   let terrain: TerrainData | null = null;
   let terrainMaterial: MeshStandardMaterial | null = null;
@@ -199,6 +216,7 @@ export function createScene(canvas: HTMLCanvasElement, opts: SceneOptions = {}):
     uniforms,
     atmosphereUniforms: createAtmosphereUniforms(),
     quality: requested === "auto" ? detectQuality(gl) : requested,
+    software,
     terrain: () => terrain,
     // The park's own ground over the map; beyond its edge, whatever lies out there.
     heightAt: (x, z) => sceneGroundAt(terrain, outerGround, x, z),
@@ -259,6 +277,16 @@ export function createScene(canvas: HTMLCanvasElement, opts: SceneOptions = {}):
   let clock = opts.frozenTime ?? 0;
   let lastNow: number | null = null;
   let disposed = false;
+  /** When the last frame was drawn, for the software renderer's frame interval. */
+  let lastDrawn: number | null = null;
+  /** What the last drawn frame cost, measured at the next frame offered; null until measured. */
+  let drawCost = 0;
+  let measuring = false;
+  /** True while the cheapest drawing is in force: a software renderer at `low`. */
+  const cheap = () => software && ctx.quality === "low";
+  const terrainSubdiv = () => (cheap() ? SOFTWARE.subdiv : SUBDIV);
+  /** The cells per tile edge the chunks were built with. */
+  let builtSubdiv = SUBDIV;
 
   function disposeChunk(chunk: Chunk): void {
     chunkGroup.remove(chunk.mesh);
@@ -266,8 +294,12 @@ export function createScene(canvas: HTMLCanvasElement, opts: SceneOptions = {}):
   }
 
   function buildChunk(t: TerrainData, cx: number, cy: number, hash: bigint): Chunk {
-    const mesh = new Mesh(toBufferGeometry(buildTerrainChunk(t, cx, cy)), ctx.terrainMaterial());
-    mesh.castShadow = true;
+    builtSubdiv = terrainSubdiv();
+    const mesh = new Mesh(
+      toBufferGeometry(buildTerrainChunk(t, cx, cy, builtSubdiv)),
+      ctx.terrainMaterial(),
+    );
+    mesh.castShadow = terrainCastsShadow(ctx.quality);
     mesh.receiveShadow = true;
     chunkGroup.add(mesh);
     return { hash, mesh };
@@ -279,17 +311,22 @@ export function createScene(canvas: HTMLCanvasElement, opts: SceneOptions = {}):
     for (const module of modules) module.setTerrain?.(t);
   }
 
-  function setTerrain(t: TerrainData): void {
-    const previous = terrain;
+  /** Builds every chunk of `t` again, as for a new terrain. */
+  function rebuildChunks(t: TerrainData): void {
     for (const chunk of chunks.values()) disposeChunk(chunk);
     chunks.clear();
-    terrain = t;
     const { cx, cy } = chunkCount(t);
     for (let y = 0; y < cy; y++) {
       for (let x = 0; x < cx; x++) {
         chunks.set(`${x},${y}`, buildChunk(t, x, y, chunkHash(t, x, y)));
       }
     }
+  }
+
+  function setTerrain(t: TerrainData): void {
+    const previous = terrain;
+    terrain = t;
+    rebuildChunks(t);
     if (!previous || previous.width !== t.width || previous.height !== t.height) {
       const x = t.width / 2;
       const z = t.height / 2;
@@ -322,7 +359,11 @@ export function createScene(canvas: HTMLCanvasElement, opts: SceneOptions = {}):
     const width = canvas.clientWidth;
     const height = canvas.clientHeight;
     if (width <= 0 || height <= 0) return;
-    const pixelRatio = Math.min(window.devicePixelRatio || 1, pixelRatioCap);
+    const pixelRatio = Math.min(
+      window.devicePixelRatio || 1,
+      pixelRatioCap,
+      cheap() ? SOFTWARE.pixelRatio : Infinity,
+    );
     renderer.setPixelRatio(pixelRatio);
     renderer.setSize(width, height, false);
     camera.aspect = width / height;
@@ -334,12 +375,29 @@ export function createScene(canvas: HTMLCanvasElement, opts: SceneOptions = {}):
   function applyQuality(quality: Quality): void {
     if (quality === ctx.quality) return;
     ctx.quality = quality;
+    for (const chunk of chunks.values()) chunk.mesh.castShadow = terrainCastsShadow(quality);
     for (const module of modules) module.setQuality?.(quality);
+    // Into or out of the software renderer's cheapest drawing: the ground mesh and the size of the
+    // drawing buffer change with it.
+    if (terrain && terrainSubdiv() !== builtSubdiv) rebuildChunks(terrain);
+    resize();
   }
 
   function render(nowMs?: number): void {
     if (disposed) return;
     const now = nowMs ?? performance.now();
+    // A software renderer rests between frames, in proportion to what a frame costs it: a frame
+    // offered sooner is skipped whole, so that the page keeps the CPU it needs.
+    if (cheap()) {
+      if (measuring && lastDrawn !== null) {
+        // The browser offers the next frame once the last has been drawn: the gap is its cost.
+        drawCost = now - lastDrawn;
+        measuring = false;
+      }
+      if (!softwareFrameDue(now, lastDrawn, drawCost)) return;
+      measuring = true;
+    }
+    lastDrawn = now;
     let dt = 0;
     if (opts.frozenTime === undefined && lastNow !== null) {
       dt = Math.min(MAX_CLOCK_STEP, Math.max(0, (now - lastNow) / 1000));

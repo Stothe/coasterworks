@@ -140,6 +140,11 @@ export interface RenderContext {
    * `setQuality`.
    */
   quality: Quality;
+  /**
+   * True on a software renderer (SwiftShader and the like), where `low` should draw as little as
+   * it can: every vertex and pixel is paid for on the CPU. Absent means false.
+   */
+  readonly software?: boolean;
   /** Latest terrain, or null before the first. */
   terrain(): TerrainData | null;
   /**
