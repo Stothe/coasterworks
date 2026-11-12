@@ -14,7 +14,10 @@ declare global {
       ready: boolean;
       client: SimClient;
       uiState(): { tool: Tool; placement: Placement | null; placementCheck: RideCheck | null };
-      /** A point in the window where a guest is drawn, or null if none is in view. */
+      /**
+       * A point in the window where a guest is drawn, or null if none is in view or guests are
+       * still moving on screen (a pause takes a moment to reach the drawing).
+       */
       findGuest(): { clientX: number; clientY: number; id: number } | null;
       /** A point in the window over the middle of tile (`x`, `y`), or null if it is not in view. */
       tileToScreen(x: number, y: number): { clientX: number; clientY: number } | null;
