@@ -79,8 +79,8 @@ describe("TileContextMenu", () => {
       "Set water",
       "Drain",
       "Set surface",
-      "Path build",
-      "Path remove",
+      "Build path",
+      "Remove path",
     ]);
   });
 
@@ -96,8 +96,8 @@ describe("TileContextMenu", () => {
       "Set water",
       "Drain",
       "Set surface",
-      "Path build",
-      "Path remove",
+      "Build path",
+      "Remove path",
       "Terrain flatten fake",
     ]);
   });
@@ -122,8 +122,8 @@ describe("TileContextMenu", () => {
       "Drain",
       "Set surface",
       "Terrain flatten fake",
-      "Path remove",
-      "Path build",
+      "Remove path",
+      "Build path",
     ]);
   });
 

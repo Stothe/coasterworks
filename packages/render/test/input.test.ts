@@ -196,3 +196,147 @@ describe("attachControls: keys", () => {
     expect(rig.yaw).toBe(start);
   });
 });
+
+describe("attachControls: pointer", () => {
+  /** A canvas whose pick maps client x, y to tile (x / 10, y / 10), and the calls it made. */
+  function pointerSetup(paintActive: boolean, takesClick = false) {
+    const rig = new CameraRig();
+    const canvas = Object.assign(new FakeTarget(), {
+      style: { touchAction: "" },
+      clientHeight: 600,
+      setPointerCapture() {},
+      hasPointerCapture: () => false,
+      releasePointerCapture() {},
+    });
+    const calls: string[] = [];
+    const pan = vi.spyOn(rig, "pan");
+    attachControls(
+      canvas as unknown as HTMLCanvasElement,
+      rig,
+      {
+        onTileClick: (x, y) => calls.push(`click ${x},${y}`),
+        onHover: () => {},
+        pick: (cx, cy) => (cx < 0 ? null : { x: Math.floor(cx / 10), y: Math.floor(cy / 10) }),
+        onPointClick: (cx, cy) => {
+          calls.push(`point ${cx},${cy}`);
+          return takesClick;
+        },
+        paint: {
+          active: () => paintActive,
+          start: (x, y) => calls.push(`start ${x},${y}`),
+          move: (x, y) => calls.push(`move ${x},${y}`),
+          end: (cancelled) => calls.push(`end ${cancelled}`),
+        },
+      },
+      { keyTarget: new FakeTarget() as unknown as Window },
+    );
+    const at = (clientX: number, clientY: number, extra: Record<string, unknown> = {}) => ({
+      pointerId: 1,
+      button: 0,
+      ctrlKey: false,
+      shiftKey: false,
+      altKey: false,
+      clientX,
+      clientY,
+      ...extra,
+    });
+    return { canvas, calls, pan, at };
+  }
+
+  it("paints instead of panning while painting is active", () => {
+    const { canvas, calls, pan, at } = pointerSetup(true);
+    canvas.fire("pointerdown", at(5, 5));
+    canvas.fire("pointermove", at(15, 5));
+    canvas.fire("pointermove", at(25, 5));
+    canvas.fire("pointerup", at(25, 5));
+    expect(calls).toEqual(["start 0,0", "move 1,0", "move 2,0", "end false"]);
+    expect(pan).not.toHaveBeenCalled();
+  });
+
+  it("paints one tile on a press that does not move, and does not click", () => {
+    const { canvas, calls, at } = pointerSetup(true);
+    canvas.fire("pointerdown", at(5, 5));
+    canvas.fire("pointerup", at(5, 5));
+    expect(calls).toEqual(["start 0,0", "end false"]);
+  });
+
+  it("tells a cancelled paint", () => {
+    const { canvas, calls, at } = pointerSetup(true);
+    canvas.fire("pointerdown", at(5, 5));
+    canvas.fire("pointercancel", at(5, 5));
+    expect(calls).toEqual(["start 0,0", "end true"]);
+  });
+
+  it("pans from a press off the map, even while painting", () => {
+    const { canvas, calls, pan, at } = pointerSetup(true);
+    canvas.fire("pointerdown", at(-5, 5));
+    canvas.fire("pointermove", at(-50, 50));
+    canvas.fire("pointerup", at(-50, 50));
+    expect(calls).toEqual([]);
+    expect(pan).toHaveBeenCalled();
+  });
+
+  it("asks onPointClick before clicking a tile, and a true answer takes the click", () => {
+    const passes = pointerSetup(false);
+    passes.canvas.fire("pointerdown", passes.at(35, 45));
+    passes.canvas.fire("pointerup", passes.at(35, 45));
+    expect(passes.calls).toEqual(["point 35,45", "click 3,4"]);
+
+    const takes = pointerSetup(false, true);
+    takes.canvas.fire("pointerdown", takes.at(35, 45));
+    takes.canvas.fire("pointerup", takes.at(35, 45));
+    expect(takes.calls).toEqual(["point 35,45"]);
+  });
+
+  it("pans on a left drag when painting is not active", () => {
+    const { canvas, calls, pan, at } = pointerSetup(false);
+    canvas.fire("pointerdown", at(5, 5));
+    canvas.fire("pointermove", at(50, 5));
+    canvas.fire("pointerup", at(50, 5));
+    expect(calls).toEqual([]);
+    expect(pan).toHaveBeenCalled();
+  });
+});
+
+describe("attachControls: painting off the map", () => {
+  it("tells the paint handlers when a drag goes off the map", () => {
+    const rig = new CameraRig();
+    const canvas = Object.assign(new FakeTarget(), {
+      style: { touchAction: "" },
+      clientHeight: 600,
+      setPointerCapture() {},
+      hasPointerCapture: () => false,
+      releasePointerCapture() {},
+    });
+    const calls: string[] = [];
+    attachControls(
+      canvas as unknown as HTMLCanvasElement,
+      rig,
+      {
+        onTileClick: () => {},
+        onHover: () => {},
+        pick: (cx) => (cx < 0 ? null : { x: Math.floor(cx / 10), y: 0 }),
+        paint: {
+          active: () => true,
+          start: (x) => calls.push(`start ${x}`),
+          move: (x) => calls.push(`move ${x}`),
+          leave: () => calls.push("leave"),
+          end: () => calls.push("end"),
+        },
+      },
+      { keyTarget: new FakeTarget() as unknown as Window },
+    );
+    const at = (clientX: number) => ({
+      pointerId: 1,
+      button: 0,
+      ctrlKey: false,
+      clientX,
+      clientY: 0,
+    });
+    canvas.fire("pointerdown", at(5));
+    canvas.fire("pointermove", at(-5));
+    canvas.fire("pointermove", at(45));
+    canvas.fire("pointerup", at(45));
+    expect(calls).toEqual(["start 0", "leave", "move 4", "end"]);
+  });
+});

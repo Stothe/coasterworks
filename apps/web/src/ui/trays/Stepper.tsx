@@ -10,6 +10,16 @@ export interface StepperProps {
   max: number;
   onChange(value: number): void;
   disabled?: boolean;
+  /**
+   * True to take a typed number only when the player presses Enter or leaves the field, not on
+   * every keystroke: for a value that is a command, so typing "25" is one change and not two.
+   */
+  commitOnBlur?: boolean;
+  /** Takes the buttons over: called with -1 or 1 instead of `onChange(value ± 1)`. */
+  onStep?(by: -1 | 1): void;
+  /** Whether each button can be pressed, when `onStep` decides that rather than `value`. */
+  canDecrease?: boolean;
+  canIncrease?: boolean;
 }
 
 const button = "hud-button min-w-8 rounded-md text-base font-medium text-muted hover:text-ink";
@@ -27,15 +37,28 @@ export function Stepper({
   max,
   onChange,
   disabled = false,
+  commitOnBlur = false,
+  onStep,
+  canDecrease = value > min,
+  canIncrease = value < max,
 }: StepperProps) {
   // What is in the field while it is being typed in: null when it just shows the value.
   const [draft, setDraft] = useState<string | null>(null);
   const valid =
     draft === null || (/^\d+$/.test(draft) && Number(draft) >= min && Number(draft) <= max);
 
-  const step = (by: number) => {
+  const inRange = (text: string) =>
+    /^\d+$/.test(text) && Number(text) >= min && Number(text) <= max;
+  const step = (by: -1 | 1) => {
     setDraft(null);
-    onChange(Math.min(max, Math.max(min, value + by)));
+    if (onStep) onStep(by);
+    else onChange(Math.min(max, Math.max(min, value + by)));
+  };
+  const commit = () => {
+    if (commitOnBlur && draft !== null && inRange(draft) && Number(draft) !== value) {
+      onChange(Number(draft));
+    }
+    setDraft(null);
   };
 
   return (
@@ -43,7 +66,7 @@ export function Stepper({
       <button
         type="button"
         aria-label={`Decrease ${label.toLowerCase()}`}
-        disabled={disabled || value <= min}
+        disabled={disabled || !canDecrease}
         onClick={() => step(-1)}
         className={button}
       >
@@ -59,17 +82,18 @@ export function Stepper({
         onChange={(event) => {
           const text = event.target.value;
           setDraft(text);
-          if (/^\d+$/.test(text) && Number(text) >= min && Number(text) <= max) {
-            onChange(Number(text));
-          }
+          if (!commitOnBlur && inRange(text)) onChange(Number(text));
         }}
-        onBlur={() => setDraft(null)}
+        onKeyDown={(event) => {
+          if (commitOnBlur && event.key === "Enter") commit();
+        }}
+        onBlur={commit}
         className="min-h-8 w-11 rounded-lg border border-line-strong bg-fill-strong text-center text-sm text-ink tabular-nums aria-invalid:border-danger disabled:opacity-40"
       />
       <button
         type="button"
         aria-label={`Increase ${label.toLowerCase()}`}
-        disabled={disabled || value >= max}
+        disabled={disabled || !canIncrease}
         onClick={() => step(1)}
         className={button}
       >

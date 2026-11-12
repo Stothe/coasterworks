@@ -1,4 +1,5 @@
 import type { Speed } from "@coasterworks/protocol";
+import { ratingTone, ratingWord } from "../state/useParkState";
 import { formatCents, formatChange } from "./format";
 import { SpeedControl } from "./SpeedControl";
 
@@ -17,7 +18,17 @@ export interface StatusPillsProps {
   onOpenFinances(): void;
   /** The date was clicked: show the park's overview. */
   onOpenOverview(): void;
+  /** Guests in the park now; the guests pill is left out without it. */
+  guests?: number;
+  /** The park rating, 0 to 999; the rating pill is left out without it. */
+  rating?: number;
 }
+
+const DOT: Record<ReturnType<typeof ratingTone>, string> = {
+  good: "bg-success",
+  bad: "bg-danger",
+  plain: "bg-muted",
+};
 
 /**
  * The top-left status bar: cash with the month's change beside it, and the date, which open the
@@ -32,6 +43,8 @@ export function StatusPills({
   speedDisabled = false,
   onOpenFinances,
   onOpenOverview,
+  guests,
+  rating,
 }: StatusPillsProps) {
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -67,6 +80,37 @@ export function StatusPills({
           <span className="text-sm">{date}</span>
         </button>
       </div>
+      {guests !== undefined && (
+        <div role="group" aria-label="Guests" className="glass flex">
+          <button
+            type="button"
+            aria-label={`Show guests (${guests} in the park)`}
+            onClick={onOpenOverview}
+            className="hud-button gap-2 rounded-[inherit] px-3"
+          >
+            <span aria-hidden="true">🧍</span>
+            <span data-testid="guest-count" className="text-sm tabular-nums">
+              {guests}
+            </span>
+          </button>
+        </div>
+      )}
+      {rating !== undefined && (
+        <div role="group" aria-label="Park rating" className="glass flex">
+          <button
+            type="button"
+            aria-label={`Show park rating (${rating}, ${ratingWord(rating).toLowerCase()})`}
+            onClick={onOpenOverview}
+            className="hud-button gap-2 rounded-[inherit] px-3"
+          >
+            <span
+              aria-hidden="true"
+              className={`inline-block size-2 rounded-full ${DOT[ratingTone(rating)]}`}
+            />
+            <span className="text-sm tabular-nums">{rating}</span>
+          </button>
+        </div>
+      )}
       <SpeedControl speed={speed} onChange={onSpeedChange} disabled={speedDisabled} />
     </div>
   );

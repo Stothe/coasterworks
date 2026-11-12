@@ -62,10 +62,33 @@ const TITLES: Readonly<Record<string, string>> = {
   terrain_smooth: "Smooth terrain",
   terrain_set_water: "Set water",
   terrain_set_surface: "Set surface",
+  path_build: "Build path",
+  path_remove: "Remove path",
+  park_set_entrance: "Place entrance",
+  park_set_entry_fee: "Set entry fee",
+  park_open: "Open park",
+  park_close: "Close park",
   finance_take_loan: "Take loan",
   finance_repay_loan: "Repay loan",
   sim_advance: "Advance time",
 };
+
+/**
+ * What a placement starts with for a command whose input has a choice the schema gives no default
+ * for: a path tool from the bar lays footpath unless the Paths tray says otherwise.
+ */
+const PLACEMENT_DEFAULTS: Readonly<Record<string, Record<string, unknown>>> = {
+  path_build: { kind: "foot" },
+};
+
+/** True for an input that is one tile and nothing else: integer `x` and `y`. */
+function isTileSchema(schema: JsonSchemaObject): boolean {
+  const properties = schema.properties ?? {};
+  const keys = Object.keys(properties);
+  return (
+    keys.length === 2 && properties["x"]?.type === "integer" && properties["y"]?.type === "integer"
+  );
+}
 
 /** The title of a command: a friendly one if it has one, else its name in sentence case. */
 export function humanizeName(name: string): string {
@@ -93,10 +116,14 @@ function commandAction(entry: CatalogEntry, deps: UiActionDeps): Action {
 
   if (isRectSchema(schema)) {
     // The player drags out the rectangle; everything else the command needs comes with the tool.
-    const defaults = defaultsFromSchema(schema);
+    const defaults = { ...defaultsFromSchema(schema), ...PLACEMENT_DEFAULTS[entry.name] };
     for (const key of RECT_KEYS) delete defaults[key];
     action.placement = "rect";
     action.run = () => deps.startPlacement(entry.name, { ...defaults });
+  } else if (isTileSchema(schema)) {
+    // A command of one tile (the park entrance) is placed by a click on it.
+    action.placement = "tile";
+    action.run = () => deps.startPlacement(entry.name, {});
   } else if (hasProperties(schema)) {
     action.run = () => deps.openForm(action);
   } else {
@@ -282,6 +309,16 @@ function uiActions({ ui }: UiActionDeps): Action[] {
 }
 
 /**
+ * Commands and queries whose input is a list of tiles: what a drag of the path tool sends and asks.
+ * Nothing in the command bar or a form could ask for one, so they are not actions.
+ */
+export const TILE_LIST_ENTRIES: ReadonlySet<string> = new Set([
+  "path_build_tiles",
+  "path_remove_tiles",
+  "path_check_tiles",
+]);
+
+/**
  * Every action the player can take, from the sim's catalog and the interface. A command becomes
  * the kind of action its input calls for: a rectangle of tiles is placed on the map, any other
  * input opens a form, and no input at all runs at once. Queries are not actions; nothing about
@@ -291,7 +328,7 @@ function uiActions({ ui }: UiActionDeps): Action[] {
 export function buildActions(catalog: readonly CatalogEntry[], deps: UiActionDeps): Action[] {
   return [
     ...catalog
-      .filter((entry) => entry.kind === "command")
+      .filter((entry) => entry.kind === "command" && !TILE_LIST_ENTRIES.has(entry.name))
       .map((entry) => commandAction(entry, deps)),
     ...uiActions(deps),
   ];

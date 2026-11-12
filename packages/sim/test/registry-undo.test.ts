@@ -46,6 +46,29 @@ const FIXTURES: Record<string, Fixture> = {
   path_build: { input: { ...AREA, kind: "foot" } },
   // A path to remove, so there is something to restore.
   path_remove: { input: AREA, setup: (world) => void (world.terrain.path[3 * 16 + 3] = 2) },
+  // A stroke that turns a queue into a footpath, lists a tile twice, and lays two new tiles.
+  path_build_tiles: {
+    input: {
+      tiles: [
+        { x: 3, y: 3 },
+        { x: 4, y: 3 },
+        { x: 3, y: 3 },
+        { x: 4, y: 4 },
+      ],
+      kind: "foot",
+    },
+    setup: (world) => void (world.terrain.path[3 * 16 + 3] = 2),
+  },
+  path_remove_tiles: {
+    input: {
+      tiles: [
+        { x: 3, y: 3 },
+        { x: 3, y: 3 },
+        { x: 5, y: 5 },
+      ],
+    },
+    setup: (world) => void (world.terrain.path[3 * 16 + 3] = 2),
+  },
   // A queue under the entrance tile, which the entrance replaces and an undo has to bring back.
   park_set_entrance: { input: { x: 5, y: 0 }, setup: (world) => void (world.terrain.path[5] = 2) },
   park_set_entry_fee: { input: { cents: 5_00 } },

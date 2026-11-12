@@ -2,7 +2,12 @@
 import { createDefaultRegistry, type CatalogEntry, type ExecResult } from "@coasterworks/sim";
 import type { SimClient } from "@coasterworks/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildActions, humanizeName, type UiActionDeps } from "../src/actions/registry";
+import {
+  TILE_LIST_ENTRIES,
+  buildActions,
+  humanizeName,
+  type UiActionDeps,
+} from "../src/actions/registry";
 import { fieldsFor } from "../src/actions/schema";
 import type { Action, ActionContext, DockTool } from "../src/actions/types";
 import { KEYMAP, formatCombo } from "../src/state/keys";
@@ -86,7 +91,9 @@ describe("buildActions: commands", () => {
 
   it("makes one action per command and none for a query", () => {
     const { actions } = setup();
-    const commands = catalog.filter((e) => e.kind === "command").map((e) => e.name);
+    const commands = catalog
+      .filter((e) => e.kind === "command" && !TILE_LIST_ENTRIES.has(e.name))
+      .map((e) => e.name);
     const fromCatalog = actions.filter((a) => a.kind === "command").map((a) => a.id);
     expect(fromCatalog).toEqual(commands);
     expect(actions.some((a) => a.kind === "query")).toBe(false);
@@ -137,6 +144,14 @@ describe("buildActions: commands", () => {
       ["terrain_level", {}],
       ["terrain_set_surface", {}],
     ]);
+  });
+
+  it("leaves out the tile-list path commands, which only a drag sends", () => {
+    const { actions } = setup();
+    const ids = actions.map((a) => a.id);
+    expect(ids).not.toContain("path_build_tiles");
+    expect(ids).not.toContain("path_remove_tiles");
+    expect(ids).toContain("path_build");
   });
 
   it("marks every command with a rectangle as rect placement, and no other", () => {
@@ -217,13 +232,44 @@ describe("buildActions: commands", () => {
 
   it("is not placement when the rectangle is incomplete", () => {
     const int = { type: "integer" };
-    const partial = entry("park_pick_tile", {
+    const partial = entry("park_pick_strip", {
+      type: "object",
+      properties: { x: int, y: int, w: int },
+      required: ["x", "y", "w"],
+    });
+    const { get } = setup([partial]);
+    expect(get("park_pick_strip").placement).toBeUndefined();
+  });
+
+  it("places a command of one tile (just x and y) by a click on the tile", () => {
+    const int = { type: "integer" };
+    const tile = entry("park_pick_tile", {
       type: "object",
       properties: { x: int, y: int },
       required: ["x", "y"],
     });
-    const { get } = setup([partial]);
-    expect(get("park_pick_tile").placement).toBeUndefined();
+    const { get, deps } = setup([tile]);
+    expect(get("park_pick_tile").placement).toBe("tile");
+    get("park_pick_tile").run(ctx);
+    expect(deps.startPlacement).toHaveBeenCalledWith("park_pick_tile", {});
+  });
+
+  it("starts the path tool with footpath, which its schema gives no default for", () => {
+    const int = { type: "integer" };
+    const build = entry("path_build", {
+      type: "object",
+      properties: {
+        x: int,
+        y: int,
+        w: int,
+        h: int,
+        kind: { type: "string", enum: ["foot", "queue"] },
+      },
+      required: ["x", "y", "w", "h", "kind"],
+    });
+    const { get, deps } = setup([build]);
+    get("path_build").run(ctx);
+    expect(deps.startPlacement).toHaveBeenCalledWith("path_build", { kind: "foot" });
   });
 
   it("matches on the words of the name and on the category", () => {

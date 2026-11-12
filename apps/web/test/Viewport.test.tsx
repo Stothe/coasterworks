@@ -1,4 +1,4 @@
-import type { GuestSection, SimClient } from "@coasterworks/protocol";
+import type { GuestSection, QueryResult, SimClient } from "@coasterworks/protocol";
 import type { ControlHandlers, TerrainData } from "@coasterworks/render";
 import type { ExecResult } from "@coasterworks/sim";
 import { act, cleanup, render } from "@testing-library/react";
@@ -28,6 +28,11 @@ const fake = vi.hoisted(() => ({
     x: number,
     y: number,
   ) => { x: number; y: number } | null,
+  pickGuestAt: ((_x: number, _y: number) => null) as (
+    x: number,
+    y: number,
+  ) => { id: number } | null,
+  guestsAtRest: true,
 }));
 vi.mock("@coasterworks/render", () => ({
   createScene: (_canvas: unknown, options: unknown) => {
@@ -49,6 +54,8 @@ vi.mock("@coasterworks/render", () => ({
       setQuality: record("setQuality"),
       highlightTile: () => {},
       pickAt: (x: number, y: number) => fake.pickAt(x, y),
+      pickGuestAt: (x: number, y: number) => fake.pickGuestAt(x, y),
+      guestsAtRest: () => fake.guestsAtRest,
       resize: () => {},
       render: record("render"),
       dispose: () => {},
@@ -69,13 +76,29 @@ const terrain: TerrainData = {
 };
 const OK: ExecResult = { ok: true, id: 1, cost: 0 };
 const command = vi.fn<(name: string, input: unknown) => Promise<ExecResult>>();
-const client = { command } as unknown as SimClient;
+const query = vi.fn<(name: string, input: unknown) => Promise<QueryResult<unknown>>>();
+const client = { command, query } as unknown as SimClient;
+
+/** A `path_check_tiles` that refuses the tiles `refuse` says, with its reason. */
+function checking(refuse: (x: number, y: number) => string | null = () => null) {
+  query.mockImplementation(async (_name, input) => {
+    const { tiles } = input as { tiles: Array<{ x: number; y: number }> };
+    const refused = tiles.flatMap(({ x, y }) => {
+      const reason = refuse(x, y);
+      return reason === null ? [] : [{ x, y, reason }];
+    });
+    return { ok: true, result: { refused, changes: tiles.length - refused.length, cost: 0 } };
+  });
+}
 
 beforeEach(() => {
   uiStore.setState(uiStore.getInitialState(), true);
   settingsStore.setState(settingsStore.getInitialState(), true);
   command.mockResolvedValue(OK);
+  checking();
   fake.pickAt = () => ({ x: 2, y: 5 });
+  fake.pickGuestAt = () => null;
+  fake.guestsAtRest = true;
   fake.options = undefined;
   fake.calls = [];
   fake.rig = {
@@ -91,6 +114,7 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
   command.mockReset();
+  query.mockReset();
   uiStore.setState(uiStore.getInitialState(), true);
   settingsStore.setState(settingsStore.getInitialState(), true);
 });
@@ -145,7 +169,8 @@ describe("Viewport: a left click", () => {
 
   it("looks at the tile under every dock tool that holds no placement", () => {
     mount();
-    for (const tool of ["path", "ride", "scenery", "shop", "staff", "park"] as const) {
+    // (Terrain and Paths have a tool in hand as soon as they are chosen.)
+    for (const tool of ["ride", "scenery", "shop", "staff", "park"] as const) {
       act(() => {
         uiStore.getState().select(null);
         uiStore.getState().setTool(tool);
@@ -634,5 +659,297 @@ describe("Viewport: the FPS counter", () => {
     expect(counter()).not.toBeNull();
     act(() => settingsStore.getState().setShowFps(false));
     expect(counter()).toBeNull();
+  });
+});
+
+describe("Viewport: drawing paths", () => {
+  /** Drags the path tool over `tiles`, the first being the press, and lets go. */
+  const drag = (tiles: Array<[number, number]>) => {
+    const paint = handlers().paint;
+    if (!paint) throw new Error("no paint handlers");
+    expect(paint.active()).toBe(true);
+    const [first, ...rest] = tiles;
+    paint.start(first![0], first![1]);
+    for (const [x, y] of rest) paint.move(x, y);
+    paint.end(false);
+  };
+
+  it("is not drawing with nothing in hand, nor with a terrain tool", () => {
+    mount();
+    expect(handlers().paint?.active()).toBe(false);
+    act(() => uiStore.getState().setTool("terrain"));
+    expect(handlers().paint?.active()).toBe(false);
+  });
+
+  /** The tiles of the stroke the one command sent, as [x, y] pairs. */
+  const sentTiles = (call = 0) =>
+    (command.mock.calls[call]![1] as { tiles: Array<{ x: number; y: number }> }).tiles.map(
+      ({ x, y }) => [x, y],
+    );
+
+  it("lays the whole drag as one command, each tile once, with the tiles between", async () => {
+    const { props } = mount();
+    act(() => uiStore.getState().setTool("path"));
+    command.mockResolvedValue({ ok: true, id: 7, cost: 3000 });
+    drag([
+      [1, 1],
+      [3, 1],
+      [1, 1],
+    ]);
+    await vi.waitFor(() => expect(command).toHaveBeenCalledTimes(1));
+    expect(command.mock.calls[0]![0]).toBe("path_build_tiles");
+    expect(command.mock.calls[0]![1]).toMatchObject({ kind: "foot" });
+    expect(sentTiles()).toEqual([
+      [1, 1],
+      [2, 1],
+      [3, 1],
+    ]);
+    await vi.waitFor(() =>
+      expect(props.onResult).toHaveBeenCalledWith({ ok: true, id: 7, cost: 3000 }),
+    );
+    expect(props.onResult).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves out the tiles the sim refuses, sends the rest, and says so once at the end", async () => {
+    const { props } = mount();
+    act(() => uiStore.getState().startPlacement("path_build", { kind: "queue" }));
+    checking((x) => (x === 2 || x === 3 ? "Cannot build on water" : null));
+    command.mockResolvedValue({ ok: true, id: 1, cost: 2000 });
+    drag([
+      [1, 0],
+      [4, 0],
+    ]);
+    await vi.waitFor(() =>
+      expect(props.onResult).toHaveBeenCalledWith({
+        ok: false,
+        error: "2 tiles skipped: Cannot build on water",
+      }),
+    );
+    expect(props.onResult).toHaveBeenCalledWith({ ok: true, id: 1, cost: 2000 });
+    expect(command).toHaveBeenCalledTimes(1);
+    expect(command.mock.calls[0]![1]).toMatchObject({ kind: "queue" });
+    expect(sentTiles()).toEqual([
+      [1, 0],
+      [4, 0],
+    ]);
+  });
+
+  it("sends nothing when every tile is refused, and takes the preview away", async () => {
+    const { props } = mount();
+    act(() => uiStore.getState().setTool("path"));
+    checking(() => "Tile is too steep");
+    drag([
+      [0, 0],
+      [1, 0],
+    ]);
+    await vi.waitFor(() =>
+      expect(props.onResult).toHaveBeenCalledWith({
+        ok: false,
+        error: "2 tiles skipped: Tile is too steep",
+      }),
+    );
+    expect(command).not.toHaveBeenCalled();
+  });
+
+  it("shows the stroke while it is drawn, before the sim has it", async () => {
+    mount({ paths: new Uint8Array(8 * 8) });
+    act(() => uiStore.getState().setTool("path"));
+    const paint = handlers().paint!;
+    paint.start(2, 3);
+    paint.move(3, 3);
+    await vi.waitFor(() => {
+      const laid = callsTo("setPaths").at(-1)?.[0] as Uint8Array | null;
+      expect(laid?.[3 * 8 + 2]).toBe(1);
+      expect(laid?.[3 * 8 + 3]).toBe(1);
+    });
+    expect(command).not.toHaveBeenCalled();
+    paint.end(false);
+    await vi.waitFor(() => expect(command).toHaveBeenCalledTimes(1));
+  });
+
+  it("takes the preview away when the stroke is refused", async () => {
+    const { props } = mount({ paths: new Uint8Array(8 * 8) });
+    act(() => uiStore.getState().setTool("path"));
+    command.mockResolvedValue({ ok: false, error: "Not enough cash" });
+    drag([[2, 3]]);
+    await vi.waitFor(() =>
+      expect(props.onResult).toHaveBeenCalledWith({ ok: false, error: "Not enough cash" }),
+    );
+    await vi.waitFor(() => {
+      const laid = callsTo("setPaths").at(-1)?.[0] as Uint8Array | null;
+      expect(laid?.[3 * 8 + 2] ?? 0).toBe(0);
+    });
+  });
+
+  it("lays nothing if the tool is put down or changed mid-drag", async () => {
+    const { props } = mount();
+    act(() => uiStore.getState().setTool("path"));
+    const paint = handlers().paint!;
+    paint.start(0, 0);
+    await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(1));
+    act(() => uiStore.getState().setTool("terrain"));
+    paint.move(1, 0);
+    paint.end(false);
+    await new Promise((done) => setTimeout(done, 20));
+    expect(command).not.toHaveBeenCalled();
+    expect(props.onResult).not.toHaveBeenCalled();
+  });
+
+  it("lays nothing when the pointer is cancelled", async () => {
+    mount();
+    act(() => uiStore.getState().setTool("path"));
+    const paint = handlers().paint!;
+    paint.start(0, 0);
+    paint.move(2, 0);
+    paint.end(true);
+    await new Promise((done) => setTimeout(done, 20));
+    expect(command).not.toHaveBeenCalled();
+  });
+
+  it("checks the stroke again before sending it, and leaves out what changed meanwhile", async () => {
+    const { props } = mount();
+    act(() => uiStore.getState().setTool("path"));
+    let flooded = false;
+    checking((x) => (flooded && x === 1 ? "Cannot build on water" : null));
+    const paint = handlers().paint!;
+    paint.start(0, 0);
+    paint.move(2, 0);
+    await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(2));
+    // Tile (1, 0) is flooded by someone else before the drag ends.
+    flooded = true;
+    command.mockResolvedValue({ ok: true, id: 3, cost: 2000 });
+    paint.end(false);
+    await vi.waitFor(() => expect(command).toHaveBeenCalledTimes(1));
+    expect(sentTiles()).toEqual([
+      [0, 0],
+      [2, 0],
+    ]);
+    await vi.waitFor(() =>
+      expect(props.onResult).toHaveBeenCalledWith({
+        ok: false,
+        error: "1 tile skipped: Cannot build on water",
+      }),
+    );
+  });
+
+  it("keeps the first stroke shown while a second is drawn before the first is through", async () => {
+    mount({ paths: new Uint8Array(8 * 8) });
+    act(() => uiStore.getState().setTool("path"));
+    let answer: (result: ExecResult) => void = () => {};
+    command.mockImplementation(() => new Promise((done) => (answer = done)));
+    const paint = handlers().paint!;
+    paint.start(1, 1);
+    paint.end(false);
+    await vi.waitFor(() => expect(command).toHaveBeenCalledTimes(1));
+    // A second stroke begins while the first is still on its way.
+    paint.start(5, 5);
+    await vi.waitFor(() => {
+      const laid = callsTo("setPaths").at(-1)?.[0] as Uint8Array | null;
+      expect(laid?.[1 * 8 + 1]).toBe(1);
+      expect(laid?.[5 * 8 + 5]).toBe(1);
+    });
+    // The first is refused: it goes, the second stays.
+    answer({ ok: false, error: "Not enough cash" });
+    await vi.waitFor(() => {
+      const laid = callsTo("setPaths").at(-1)?.[0] as Uint8Array | null;
+      expect(laid?.[1 * 8 + 1] ?? 0).toBe(0);
+      expect(laid?.[5 * 8 + 5]).toBe(1);
+    });
+    paint.end(false);
+  });
+
+  it("does not fill in the tiles between leaving the map and coming back", async () => {
+    mount();
+    act(() => uiStore.getState().setTool("path"));
+    const paint = handlers().paint!;
+    paint.start(0, 0);
+    paint.leave?.();
+    paint.move(4, 0);
+    paint.end(false);
+    await vi.waitFor(() => expect(command).toHaveBeenCalledTimes(1));
+    expect(sentTiles()).toEqual([
+      [0, 0],
+      [4, 0],
+    ]);
+  });
+
+  it("removes paths by dragging too, as one command", async () => {
+    mount();
+    act(() => uiStore.getState().startPlacement("path_remove", {}));
+    drag([
+      [0, 0],
+      [0, 1],
+    ]);
+    await vi.waitFor(() => expect(command).toHaveBeenCalledTimes(1));
+    expect(command.mock.calls[0]).toEqual([
+      "path_remove_tiles",
+      {
+        tiles: [
+          { x: 0, y: 0 },
+          { x: 0, y: 1 },
+        ],
+      },
+    ]);
+    expect(query.mock.calls[0]![1]).toMatchObject({ kind: "remove" });
+  });
+});
+
+describe("Viewport: findGuest", () => {
+  function mountWithHandle() {
+    const ref = createRef<ViewportHandle>();
+    const view = render(
+      <Viewport terrain={terrain} tick={0} client={client} onResult={vi.fn()} ref={ref} />,
+    );
+    const canvas = view.getByLabelText("Park view") as HTMLCanvasElement;
+    canvas.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 60, bottom: 60, width: 60, height: 60, x: 0, y: 0 }) as DOMRect;
+    return ref;
+  }
+
+  it("finds where a guest is drawn once the guests stand still", () => {
+    const ref = mountWithHandle();
+    fake.pickGuestAt = (x, y) => (x === 30 && y === 24 ? { id: 7 } : null);
+    expect(ref.current?.findGuest()).toEqual({ clientX: 30, clientY: 24, id: 7 });
+  });
+
+  // A pause reaches the drawing a moment late: the last moves are still drawn, and a point found
+  // then is off the guest by the time it is clicked (CI, Nov 2026).
+  it("finds nothing while guests are still moving on screen", () => {
+    const ref = mountWithHandle();
+    fake.pickGuestAt = (x, y) => (x === 30 && y === 24 ? { id: 7 } : null);
+    fake.guestsAtRest = false;
+    expect(ref.current?.findGuest()).toBeNull();
+    fake.guestsAtRest = true;
+    expect(ref.current?.findGuest()).toEqual({ clientX: 30, clientY: 24, id: 7 });
+  });
+});
+
+describe("Viewport: guests and the entrance", () => {
+  it("looks at a guest clicked with nothing in hand", () => {
+    mount();
+    fake.pickGuestAt = () => ({ id: 42 });
+    expect(handlers().onPointClick?.(100, 100)).toBe(true);
+    expect(uiStore.getState().selection).toEqual({ kind: "guest", id: 42 });
+    expect(uiStore.getState().inspector.open).toBe(true);
+  });
+
+  it("leaves a click with no guest under it to the tile", () => {
+    mount();
+    expect(handlers().onPointClick?.(100, 100)).toBe(false);
+  });
+
+  it("does not pick guests while placing", () => {
+    mount();
+    fake.pickGuestAt = () => ({ id: 42 });
+    act(() => uiStore.getState().setTool("terrain"));
+    expect(handlers().onPointClick?.(100, 100)).toBe(false);
+  });
+
+  it("looks at the entrance when its tile is clicked", () => {
+    mount({ getEntrance: () => ({ x: 4, y: 7, side: 2 }) });
+    click(4, 7);
+    expect(uiStore.getState().selection).toEqual({ kind: "entrance" });
+    click(4, 6);
+    expect(uiStore.getState().selection).toEqual({ kind: "tile", x: 4, y: 6 });
   });
 });

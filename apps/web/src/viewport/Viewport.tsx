@@ -5,13 +5,20 @@ import {
   type SceneHandle,
   type TerrainData,
 } from "@coasterworks/render";
-import { PATH_FOOT, type ExecResult } from "@coasterworks/sim";
+import {
+  MAX_PATH_TILES,
+  PATH_FOOT,
+  PATH_NONE,
+  PATH_QUEUE,
+  type ExecResult,
+} from "@coasterworks/sim";
 import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
 import { CLASSIC_VIEW_EVENT, onShellEvent } from "../host/shell";
 import { settingsStore, useSettings, type GraphicsQuality } from "../state/settings";
 import { uiStore, useUiStore } from "../state/uiStore";
 import { brushRect, planPlacement, timeOfDay } from "./brush";
 import { classicCycle, onClassicViewRequest } from "./classicView";
+import { PathStroke, skippedMessage, type Tile } from "./drawPath";
 import { framingDistance } from "./framing";
 
 /** What the app can ask of the view. */
@@ -22,7 +29,17 @@ export interface ViewportHandle {
    * height follows the ground there.
    */
   focusTile(x: number, y: number, w: number, h: number): void;
+  /**
+   * A point in the window where a guest is drawn, found by trying points across the view a few
+   * pixels apart, or null if no guest is in view. For tests and the console: it is slow. It is
+   * also null while guests are still moving on screen (the sim running, or the last moves before
+   * a pause still being drawn), when a point found now would not be on the guest a moment later.
+   */
+  findGuest(): { clientX: number; clientY: number; id: number } | null;
 }
+
+/** How far apart `findGuest` tries points, in CSS pixels. */
+const FIND_STEP = 6;
 
 export interface ViewportProps {
   terrain: TerrainData | null;
@@ -70,6 +87,25 @@ interface Live {
   pathsWidth: number;
   /** The quality the scene was made with, or was last asked for. */
   quality: GraphicsQuality;
+  /** The path strokes being drawn or on their way to the sim, each shown before the sim has it. */
+  previews: Set<StrokePreview>;
+  /** Goes up whenever a preview comes, changes or goes, so `showPark` knows to lay the paths again. */
+  previewVersion: number;
+  /** The `previewVersion` the scene's path layer was last made with. */
+  previewShown: number;
+}
+
+/** What one stroke shows before the sim has it. */
+interface StrokePreview {
+  /** Tile index to the path value it gets. */
+  cells: Map<number, number>;
+  /** The width of the map the indexes are for: on a map of another width it shows nothing. */
+  width: number;
+  /**
+   * Set once the stroke was sent and taken: the sim's path layer then. The preview stays until a
+   * layer other than this one comes, so the path does not blink out between reply and snapshot.
+   */
+  untilNot?: Uint8Array | null;
 }
 
 function show(live: Live, terrain: TerrainData | null): void {
@@ -143,15 +179,78 @@ function showPark(
     live.entrance = entrance;
     live.scene.setEntrance(entrance);
   }
+  for (const preview of live.previews) {
+    if (preview.untilNot !== undefined && paths !== preview.untilNot) {
+      // The snapshot with the stroke in it has come: the sim's layer shows it from now on.
+      live.previews.delete(preview);
+      live.previewVersion++;
+    }
+  }
   const width = terrain?.width ?? 0;
-  if (!moved && paths === live.paths && width === live.pathsWidth) return;
+  if (
+    !moved &&
+    paths === live.paths &&
+    width === live.pathsWidth &&
+    live.previewVersion === live.previewShown
+  )
+    return;
   live.paths = paths;
   live.pathsWidth = width;
-  live.scene.setPaths(pavedPaths(paths, entrance, terrain));
+  live.previewShown = live.previewVersion;
+  live.scene.setPaths(pavedPaths(withPreview(paths, live.previews, terrain), entrance, terrain));
+}
+
+/** The path layer with the strokes being drawn laid over it: a copy, or `paths` itself if none. */
+function withPreview(
+  paths: Uint8Array | null,
+  previews: ReadonlySet<StrokePreview>,
+  terrain: TerrainData | null,
+): Uint8Array | null {
+  if (!terrain) return paths;
+  const shown = [...previews].filter((p) => p.width === terrain.width && p.cells.size > 0);
+  if (shown.length === 0) return paths;
+  const size = terrain.width * terrain.height;
+  const out = paths && paths.length === size ? paths.slice() : new Uint8Array(size);
+  // In the order the strokes began: a later one over an earlier one.
+  for (const preview of shown) {
+    for (const [index, value] of preview.cells) if (index >= 0 && index < size) out[index] = value;
+  }
+  return out;
 }
 
 function failure(error: unknown): ExecResult {
   return { ok: false, error: error instanceof Error ? error.message : String(error) };
+}
+
+/** One drag of the path tool: the tiles it has covered and what the sim said about each. */
+interface Stroke {
+  /** The command and its defaults as they were when the drag began: the whole drag lays these. */
+  command: string;
+  defaults: Record<string, unknown>;
+  path: PathStroke;
+  /** The answers still to come, one per batch of tiles checked. */
+  pending: Promise<void>[];
+  /** The tiles the sim would take, in the order the pointer came over them. */
+  tiles: Tile[];
+  /** Why each refused tile was refused. */
+  refused: string[];
+  /** What it shows until the sim has it. */
+  preview: StrokePreview;
+  /** The size of the map it began on: on another, it lays nothing. */
+  width: number;
+  height: number;
+  /** Put down mid-drag (Esc, another tool, a cancelled pointer): nothing of it is laid. */
+  cancelled: boolean;
+}
+
+/** What `path_check_tiles` answers. */
+interface PathCheck {
+  refused: Array<{ x: number; y: number; reason: string }>;
+}
+
+/** True for a placement that is drawn by dragging over tiles rather than placed click by click. */
+function drawsByDragging(command: string | undefined): boolean {
+  return command === "path_build" || command === "path_remove";
 }
 
 /**
@@ -190,6 +289,19 @@ export function Viewport(props: ViewportProps) {
         const { terrain } = latest.current;
         if (terrain) rig.clampTarget(terrain.width, terrain.height);
       },
+      findGuest() {
+        const scene = live.current?.scene;
+        const canvas = canvasRef.current;
+        if (!scene || !canvas || !scene.guestsAtRest()) return null;
+        const box = canvas.getBoundingClientRect();
+        for (let y = box.top + FIND_STEP; y < box.bottom; y += FIND_STEP) {
+          for (let x = box.left + FIND_STEP; x < box.right; x += FIND_STEP) {
+            const guest = scene.pickGuestAt(x, y);
+            if (guest) return { clientX: x, clientY: y, id: guest.id };
+          }
+        }
+        return null;
+      },
     }),
     [],
   );
@@ -208,6 +320,9 @@ export function Viewport(props: ViewportProps) {
       entrance: undefined,
       pathsWidth: 0,
       quality,
+      previews: new Set(),
+      previewVersion: 0,
+      previewShown: 0,
     };
     live.current = mine;
     show(mine, latest.current.terrain);
@@ -233,18 +348,173 @@ export function Viewport(props: ViewportProps) {
     };
     outlineRef.current = outline;
 
+    // A drag of the path tool is one stroke and one command: as the pointer comes over tiles the
+    // sim is asked which it would take (`path_check_tiles`), those are shown at once, and when the
+    // drag ends they are checked once more and go in one `path_build_tiles` or
+    // `path_remove_tiles`, so the stroke is one charge and one undo step. What was refused (water,
+    // too steep) is told once, at the end. Esc, another tool or a cancelled pointer mid-drag puts
+    // the stroke down: nothing of it is laid.
+    let stroke: Stroke | null = null;
+    let disposed = false;
+    const changedPreviews = () => {
+      if (disposed) return;
+      mine.previewVersion++;
+      park();
+    };
+    const dropPreview = (preview: StrokePreview) => {
+      if (mine.previews.delete(preview)) changedPreviews();
+    };
+    /** Whether the stroke still stands: same tool in hand, same map, not put down. */
+    const stands = (current: Stroke) => {
+      const { placement, terrain } = latest.current;
+      if (placement?.command !== current.command) current.cancelled = true;
+      if (!terrain || terrain.width !== current.width || terrain.height !== current.height)
+        current.cancelled = true;
+      return !current.cancelled && !disposed;
+    };
+    const kindOf = (current: Stroke) =>
+      current.command === "path_remove" ? "remove" : String(current.defaults.kind ?? "foot");
+    const paintTiles = (current: Stroke, tiles: Tile[]) => {
+      const { client } = latest.current;
+      if (!client || !stands(current) || tiles.length === 0) return;
+      const room = MAX_PATH_TILES - current.tiles.length - current.refused.length;
+      if (room <= 0) return;
+      const asked = tiles.slice(0, room);
+      const kind = kindOf(current);
+      const value = kind === "remove" ? PATH_NONE : kind === "queue" ? PATH_QUEUE : PATH_FOOT;
+      current.pending.push(
+        client.query("path_check_tiles", { tiles: asked, kind }).then(
+          (answer) => {
+            if (!answer.ok) {
+              current.refused.push(...asked.map(() => answer.error));
+              return;
+            }
+            const refused = new Set<string>();
+            for (const tile of (answer.result as PathCheck).refused) {
+              refused.add(`${tile.x},${tile.y}`);
+              current.refused.push(tile.reason);
+            }
+            if (!stands(current)) return;
+            for (const tile of asked) {
+              if (refused.has(`${tile.x},${tile.y}`)) continue;
+              current.tiles.push(tile);
+              current.preview.cells.set(tile.y * current.width + tile.x, value);
+            }
+            changedPreviews();
+          },
+          (error: unknown) => {
+            const message = error instanceof Error ? error.message : String(error);
+            current.refused.push(...asked.map(() => message));
+          },
+        ),
+      );
+    };
+    const sendStroke = async (done: Stroke) => {
+      await Promise.all(done.pending);
+      const { client } = latest.current;
+      if (!client || done.tiles.length === 0 || !stands(done)) {
+        dropPreview(done.preview);
+        if (!done.cancelled) report(skippedMessage(done.refused));
+        return;
+      }
+      // Checked again as a whole: the park may have changed under the stroke since its first tiles
+      // were checked (an agent flooding one), and one bad tile would refuse the lot.
+      const kind = kindOf(done);
+      let tiles = done.tiles;
+      const recheck = await client.query("path_check_tiles", { tiles, kind }).catch(() => null);
+      if (recheck?.ok) {
+        const refused = new Set<string>();
+        for (const tile of (recheck.result as PathCheck).refused) {
+          refused.add(`${tile.x},${tile.y}`);
+          done.refused.push(tile.reason);
+        }
+        tiles = tiles.filter((tile) => !refused.has(`${tile.x},${tile.y}`));
+      }
+      if (tiles.length === 0 || !stands(done)) {
+        dropPreview(done.preview);
+        if (!done.cancelled) report(skippedMessage(done.refused));
+        return;
+      }
+      const name = kind === "remove" ? "path_remove_tiles" : "path_build_tiles";
+      const input = kind === "remove" ? { tiles } : { tiles, kind };
+      const result = await client.command(name, input).catch(failure);
+      if (disposed) return;
+      latest.current.onResult(result);
+      if (result.ok) {
+        // Kept until the snapshot with the stroke in it comes (see `showPark`).
+        done.preview.untilNot = latest.current.paths ?? null;
+        park();
+      } else {
+        dropPreview(done.preview);
+      }
+      report(skippedMessage(done.refused));
+    };
+    const report = (skipped: string | null) => {
+      if (skipped && !disposed) latest.current.onResult({ ok: false, error: skipped });
+    };
+
     const detach = attachControls(canvas, scene.rig, {
       pick: (clientX, clientY) => scene.pickAt(clientX, clientY),
+      paint: {
+        active: () => {
+          const { placement, client } = latest.current;
+          return client !== null && drawsByDragging(placement?.command);
+        },
+        start: (x, y) => {
+          const { placement, terrain } = latest.current;
+          if (!placement || !terrain) return;
+          const preview: StrokePreview = { cells: new Map(), width: terrain.width };
+          stroke = {
+            command: placement.command,
+            defaults: { ...placement.defaults },
+            path: new PathStroke({ x, y }),
+            pending: [],
+            tiles: [],
+            refused: [],
+            preview,
+            width: terrain.width,
+            height: terrain.height,
+            cancelled: false,
+          };
+          mine.previews.add(preview);
+          paintTiles(stroke, [{ x, y }]);
+        },
+        leave: () => stroke?.path.lift(),
+        move: (x, y) => {
+          const current = stroke;
+          if (!current) return;
+          paintTiles(current, current.path.extend({ x, y }));
+        },
+        end: (cancelled) => {
+          const done = stroke;
+          stroke = null;
+          if (!done) return;
+          if (cancelled) done.cancelled = true;
+          void sendStroke(done);
+        },
+      },
+      // With nothing in hand, a click on a guest looks at the guest rather than the tile under them.
+      onPointClick: (clientX, clientY) => {
+        if (latest.current.placement) return false;
+        const guest = scene.pickGuestAt(clientX, clientY);
+        if (!guest) return false;
+        uiStore.getState().inspectGuest(guest.id);
+        return true;
+      },
       onHover: (x, y) => {
         hover.current = x === null || y === null ? null : { x, y };
         outline();
       },
       onTileClick: (x, y, mods) => {
-        const { client, terrain, placement, onResult } = latest.current;
+        const { client, terrain, placement, onResult, getEntrance } = latest.current;
         if (!terrain) return;
         if (!placement) {
-          // Nothing in hand but the pointer, whatever tool the dock is on: a click looks at the tile.
-          uiStore.getState().inspectTile(x, y);
+          // Nothing in hand but the pointer, whatever tool the dock is on: a click looks at the
+          // tile, or at the entrance if that is where it is.
+          const entrance = getEntrance?.();
+          if (entrance && entrance.x === x && entrance.y === y)
+            uiStore.getState().inspectEntrance();
+          else uiStore.getState().inspectTile(x, y);
           return;
         }
         if (!client) return;
@@ -323,6 +593,7 @@ export function Viewport(props: ViewportProps) {
     });
 
     return () => {
+      disposed = true;
       cancelAnimationFrame(frame);
       stopShell();
       stopRequest();

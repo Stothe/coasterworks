@@ -3,7 +3,7 @@ import { Sim, createDefaultRegistry, createWorld, type ExecResult } from "@coast
 import { cleanup, render, renderHook, waitFor } from "@testing-library/react";
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { UiActionDeps } from "../src/actions/registry";
+import { TILE_LIST_ENTRIES, type UiActionDeps } from "../src/actions/registry";
 import { useActions, type UseActions } from "../src/actions/useActions";
 
 afterEach(cleanup);
@@ -225,7 +225,9 @@ describe("useActions", () => {
       const deps = makeDeps();
       const { result } = renderHook(() => useActions(client, deps));
       await waitFor(() => expect(result.current.ready).toBe(true));
-      const commands = catalog.filter((e) => e.kind === "command").map((e) => e.name);
+      const commands = catalog
+        .filter((e) => e.kind === "command" && !TILE_LIST_ENTRIES.has(e.name))
+        .map((e) => e.name);
       for (const name of commands) expect(result.current.byId.has(name), name).toBe(true);
     } finally {
       client.close();

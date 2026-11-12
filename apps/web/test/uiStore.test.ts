@@ -350,3 +350,37 @@ describe("uiStore: cancel", () => {
     expect(state().selection).toBe(before.selection);
   });
 });
+
+describe("uiStore: paths, the entrance, guests", () => {
+  it("puts a footpath in hand when the dock goes to Paths, one tile at a time", () => {
+    state().setBrushSize(3);
+    state().setTool("path");
+    expect(state().placement).toEqual({
+      command: "path_build",
+      defaults: { kind: "foot" },
+      size: 1,
+    });
+  });
+
+  it("keeps a path or entrance placement at one tile, and the brush for the next terrain tool", () => {
+    state().setBrushSize(2);
+    state().startPlacement("path_build", { kind: "queue" }, 3);
+    expect(state().placement?.size).toBe(1);
+    state().setBrushSize(3);
+    expect(state().placement?.size).toBe(1);
+    expect(state().brushSize).toBe(3);
+    state().startPlacement("park_set_entrance", {});
+    expect(state().tool).toBe("park");
+    expect(state().placement?.size).toBe(1);
+    state().setTool("terrain");
+    expect(state().placement?.size).toBe(3);
+  });
+
+  it("selects a guest or the entrance and opens the inspector on it", () => {
+    state().inspectGuest(9);
+    expect(state().selection).toEqual({ kind: "guest", id: 9 });
+    expect(state().inspector.open).toBe(true);
+    state().inspectEntrance();
+    expect(state().selection).toEqual({ kind: "entrance" });
+  });
+});

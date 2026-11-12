@@ -240,10 +240,30 @@ describe("ParkOverview", () => {
     expect(fact("Loan").textContent).toBe("$5,000.00");
   });
 
-  it("holds the places of guests and the rating, which come later", () => {
+  it("says the guests are loading until the park's gate is known", () => {
     render(<ParkOverview info={park()} />);
-    expect(fact("Guests").textContent).toBe("Coming with guests");
-    expect(fact("Park rating").textContent).toBe("Coming with guests");
+    expect(fact("Guests").textContent).toBe("Loading");
+  });
+
+  it("shows the gate, the fee, the guests and the rating", () => {
+    render(
+      <ParkOverview
+        info={park()}
+        park={{
+          open: true,
+          entryFee: 500,
+          rating: 640,
+          guestsInPark: 12,
+          totalAdmissions: 30,
+          entrance: { x: 31, y: 63 },
+        }}
+      />,
+    );
+    expect(fact("Gate").textContent).toBe("Open");
+    expect(fact("Entry fee").textContent).toBe("$5.00");
+    expect(fact("Guests").textContent).toBe("12");
+    expect(fact("Admissions").textContent).toBe("30");
+    expect(fact("Park rating").textContent).toBe("640 · Good");
   });
 
   it("says it is loading before the first snapshot", () => {

@@ -68,6 +68,10 @@ export interface UiState {
   openInspector(tab: InspectorTab): void;
   /** Selects tile (`x`, `y`) and opens the inspector on it: the one inspector moves to the tile. */
   inspectTile(x: number, y: number): void;
+  /** Selects the guest with `id` and opens the inspector on them. */
+  inspectGuest(id: number): void;
+  /** Selects the park entrance and opens the inspector on it. */
+  inspectEntrance(): void;
   closeInspector(): void;
   /** Opens the command bar, and puts the keyboard map away if it is up. */
   openCommandBar(): void;
@@ -89,6 +93,17 @@ export interface UiState {
 function dockToolOf(command: string): DockTool | undefined {
   return DOCK_TOOLS.find((tool) => command.startsWith(`${tool}_`));
 }
+
+/**
+ * True for a command placed one tile at a time whatever the brush: paths, which are drawn by
+ * dragging, and the park entrance.
+ */
+export function placedOneTile(command: string): boolean {
+  return command.startsWith("path_") || command === "park_set_entrance";
+}
+
+/** A footpath, the path tool in hand when the dock goes to Paths. */
+export const FOOTPATH: Placement = { command: "path_build", defaults: { kind: "foot" }, size: 1 };
 
 /** Raise, the terrain tool in hand when the dock goes to Terrain. */
 function raise(size: BrushSize): Placement {
@@ -112,13 +127,24 @@ export const uiStore = createStore<UiState>()((set, get) => ({
       // The same tool keeps what is in hand. Another puts it down, and Terrain always has
       // something in hand: a click would otherwise do nothing under a tray with no verb chosen.
       if (tool === state.tool) return state;
-      return { tool, placement: tool === "terrain" ? raise(state.brushSize) : null };
+      const placement =
+        tool === "terrain"
+          ? raise(state.brushSize)
+          : tool === "path"
+            ? { ...FOOTPATH, defaults: { ...FOOTPATH.defaults } }
+            : null;
+      return { tool, placement };
     }),
   startPlacement: (command, defaults, size) =>
     set((state) => ({
       tool: dockToolOf(command) ?? state.tool,
-      placement: { command, defaults: { ...defaults }, size: size ?? state.brushSize },
-      brushSize: size ?? state.brushSize,
+      placement: {
+        command,
+        defaults: { ...defaults },
+        size: placedOneTile(command) ? 1 : (size ?? state.brushSize),
+      },
+      // A one-tile placement does not change the brush the next terrain tool starts with.
+      brushSize: placedOneTile(command) ? state.brushSize : (size ?? state.brushSize),
       // The player picked it from the bar, which has done its work.
       commandBarOpen: false,
       formAction: null,
@@ -133,7 +159,10 @@ export const uiStore = createStore<UiState>()((set, get) => ({
   setBrushSize: (size) =>
     set((state) => ({
       brushSize: size,
-      placement: state.placement && { ...state.placement, size },
+      placement: state.placement && {
+        ...state.placement,
+        size: placedOneTile(state.placement.command) ? 1 : size,
+      },
     })),
   select: (selection) => set({ selection }),
   openInspector: (tab) =>
@@ -143,6 +172,10 @@ export const uiStore = createStore<UiState>()((set, get) => ({
     })),
   inspectTile: (x, y) =>
     set({ selection: { kind: "tile", x, y }, inspector: { open: true, tab: "tile" } }),
+  inspectGuest: (id) =>
+    set({ selection: { kind: "guest", id }, inspector: { open: true, tab: "tile" } }),
+  inspectEntrance: () =>
+    set({ selection: { kind: "entrance" }, inspector: { open: true, tab: "tile" } }),
   closeInspector: () => set((state) => ({ inspector: { ...state.inspector, open: false } })),
   // The bar and the keyboard map are layers of the same kind: one at a time.
   openCommandBar: () => set({ commandBarOpen: true, formAction: null, helpOpen: false }),

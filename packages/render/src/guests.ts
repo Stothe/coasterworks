@@ -41,6 +41,13 @@ export type GuestsModule = SceneModule & {
    * that distance along the ray counts: what is behind the ground the ray meets is out of sight.
    */
   pickAt(ray: Ray, reach?: number): { id: number } | null;
+  /**
+   * Whether the guests drawn are standing still where the sim has them: the latest snapshot put
+   * every guest where the one before it did, and the last frame drew each one there. While the
+   * sim runs, or just after a pause while the last moves are still being drawn, it is false. A
+   * place read off the screen (to click a guest there, say) holds only while this is true.
+   */
+  atRest(): boolean;
 };
 
 /** The most guests drawn at once. */
@@ -183,6 +190,21 @@ export function interpolateGuests(
   }
   return out;
 }
+
+/**
+ * Whether two snapshots have the same guests in the same order at the same places: nobody moved
+ * between them.
+ */
+function sameGuests(a: GuestMoment, b: GuestSection): boolean {
+  if (a.count !== b.count) return false;
+  for (let i = 0; i < a.count; i++) {
+    if (a.id[i] !== b.id[i] || a.x[i] !== b.x[i] || a.y[i] !== b.y[i]) return false;
+  }
+  return true;
+}
+
+/** How near, in units, a drawn guest must be to its place in the snapshot to count as there. */
+const REST_UNITS = 0.25;
 
 /** The difference `to - from` between two angles, taken the short way round: -PI to PI. */
 export function angleDelta(from: number, to: number): number {
@@ -1066,6 +1088,12 @@ export function createGuests(ctx: RenderContext): GuestsModule {
   let latestSection: GuestSection | null = null;
   const latest: GuestMoment = { count: 0, id: [], x: [], y: [], atMs: 0 };
   let hasLatest = false;
+  // Whether the latest snapshot put every guest where the one before it did, and where the last
+  // frame drew them (in units, as the snapshot has them): what `atRest` reads.
+  let still = true;
+  const drawnX = new Float64Array(GUEST_CAPACITY);
+  const drawnY = new Float64Array(GUEST_CAPACITY);
+  let drawnCount = 0;
   let spanMs = DEFAULT_SPAN_MS;
   /** Where everybody is in the frame being drawn. */
   const shown = createGuestPlaces(GUEST_CAPACITY);
@@ -1137,6 +1165,7 @@ export function createGuests(ctx: RenderContext): GuestsModule {
       latestSection = null;
       hasLatest = false;
       hasCarried = false;
+      still = true;
       mesh.count = 0;
       shade.count = 0;
       shown.count = 0;
@@ -1166,6 +1195,7 @@ export function createGuests(ctx: RenderContext): GuestsModule {
     const previousX = latest.x;
     const previousY = latest.y;
     const had = hasLatest;
+    still = had && sameGuests(latest, section);
     latestSection = section;
     latest.count = section.count;
     latest.id = section.id;
@@ -1233,6 +1263,11 @@ export function createGuests(ctx: RenderContext): GuestsModule {
       return;
     }
     interpolateGuests(hasCarried ? carried : null, latest, frame.nowMs, shown, carriedIndex);
+    drawnCount = shown.count;
+    for (let i = 0; i < drawnCount; i++) {
+      drawnX[i] = shown.x[i] as number;
+      drawnY[i] = shown.y[i] as number;
+    }
     const count = shown.count;
     mesh.count = count;
     shade.count = count;
@@ -1317,6 +1352,15 @@ export function createGuests(ctx: RenderContext): GuestsModule {
     pickAt(ray: Ray, reach?: number): { id: number } | null {
       const hit = pickGuest(ray, places, pickSizes, mesh.count, reach);
       return hit < 0 ? null : { id: shown.id[hit] as number };
+    },
+    atRest(): boolean {
+      if (!hasLatest) return true;
+      if (!still || drawnCount !== latest.count) return false;
+      for (let i = 0; i < drawnCount; i++) {
+        if (Math.abs((drawnX[i] as number) - (latest.x[i] as number)) > REST_UNITS) return false;
+        if (Math.abs((drawnY[i] as number) - (latest.y[i] as number)) > REST_UNITS) return false;
+      }
+      return true;
     },
     dispose(): void {
       ctx.scene.remove(mesh, shade);

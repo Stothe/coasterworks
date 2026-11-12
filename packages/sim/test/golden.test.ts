@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { parseScenario, runScenario } from "./golden/run.js";
+import { applySteps, parseScenario, runScenario } from "./golden/run.js";
 
 const scenarioText = readFileSync(new URL("./golden/scenario-1.json", import.meta.url), "utf8");
 const expectedHash = readFileSync(
@@ -64,6 +64,8 @@ describe("golden scenario 1", () => {
       "finance_repay_loan",
       "path_build",
       "path_remove",
+      "path_build_tiles",
+      "path_remove_tiles",
       "park_set_entrance",
       "park_set_entry_fee",
       "park_open",
@@ -95,6 +97,8 @@ describe("runScenario", () => {
     // The foot path ran (16, 25..30); its first tile was removed and its last two became a queue.
     const path = (x: number, y: number) => world.terrain.path[y * 32 + x];
     expect([25, 26, 27, 28, 29, 30].map((y) => path(16, y))).toEqual([0, 1, 1, 1, 2, 2]);
+    // The tile-list stroke was built, undone and built again; one of its tiles then removed.
+    expect([path(19, 25), path(20, 25), path(20, 26)]).toEqual([1, 1, 0]);
     // The extra pair was built, undone, and built again.
     expect([path(17, 25), path(18, 25)]).toEqual([1, 1]);
     expect(world.park).toMatchObject({
@@ -133,9 +137,9 @@ describe("runScenario", () => {
     expect(Array.from(g.sinceAction.subarray(0, g.count)).some((v) => v > 0)).toBe(true);
     expect(g.nextGuestId - 1).toBeGreaterThanOrEqual(park.totalAdmissions);
 
-    // Closing the park and waiting 400 ticks is the end of the scenario, and empties the park.
-    sim.execute("park_close", {});
-    sim.step(400);
+    // Closing the park, a last stroke of path, and waiting 400 ticks is the end of the scenario,
+    // and empties the park.
+    applySteps(sim, steps.slice(closing), closing);
     expect(sim.world.park.open).toBe(false);
     expect(sim.world.park.guestsInPark).toBe(0);
     expect(sim.world.guests.count).toBe(0);

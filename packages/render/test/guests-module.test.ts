@@ -269,3 +269,55 @@ describe("createGuests", () => {
     expect(h.place(GUEST_CAPACITY - 1)[0]).toBeCloseTo(((GUEST_CAPACITY - 1) % 60) + 0.0625, 4);
   });
 });
+
+describe("createGuests: atRest", () => {
+  it("is true with no guests", () => {
+    const h = harness();
+    expect(h.guests.atRest()).toBe(true);
+  });
+
+  it("is false while guests move, and through the last moves after a pause, then true", () => {
+    const h = harness();
+    h.guests.setGuests(section([[1, 2, 2]]), 0);
+    h.update(0);
+    // The first snapshot: nothing to say yet that nobody moves.
+    expect(h.guests.atRest()).toBe(false);
+    h.guests.setGuests(section([[1, 3, 2]]), 100);
+    h.update(150);
+    expect(h.guests.atRest()).toBe(false);
+    // The sim pauses: the next snapshot puts the guest where the last one did, but the frame drawn
+    // just after it still shows the walk from where the guest was drawn.
+    h.guests.setGuests(section([[1, 3, 2]]), 200);
+    h.update(210);
+    expect(h.place(0)[0]).not.toBeCloseTo(3, 3);
+    expect(h.guests.atRest()).toBe(false);
+    // Once the frames have caught up with the snapshot, it is true.
+    for (let t = 250; t <= 2000; t += 50) {
+      h.guests.setGuests(section([[1, 3, 2]]), t);
+      h.update(t + 25);
+    }
+    expect(h.place(0)[0]).toBeCloseTo(3, 2);
+    expect(h.guests.atRest()).toBe(true);
+    // Moving again: false at once.
+    h.guests.setGuests(section([[1, 3.5, 2]]), 2100);
+    h.update(2110);
+    expect(h.guests.atRest()).toBe(false);
+  });
+
+  it("is false when a new snapshot has come but no frame has drawn it", () => {
+    const h = harness();
+    for (let t = 0; t <= 1000; t += 50) {
+      h.guests.setGuests(section([[1, 3, 2]]), t);
+      h.update(t + 25);
+    }
+    expect(h.guests.atRest()).toBe(true);
+    h.guests.setGuests(
+      section([
+        [1, 3, 2],
+        [2, 5, 5],
+      ]),
+      1050,
+    );
+    expect(h.guests.atRest()).toBe(false);
+  });
+});
