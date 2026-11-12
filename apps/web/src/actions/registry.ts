@@ -309,6 +309,16 @@ function uiActions({ ui }: UiActionDeps): Action[] {
 }
 
 /**
+ * Commands and queries whose input is a list of tiles: what a drag of the path tool sends and asks.
+ * Nothing in the command bar or a form could ask for one, so they are not actions.
+ */
+export const TILE_LIST_ENTRIES: ReadonlySet<string> = new Set([
+  "path_build_tiles",
+  "path_remove_tiles",
+  "path_check_tiles",
+]);
+
+/**
  * Every action the player can take, from the sim's catalog and the interface. A command becomes
  * the kind of action its input calls for: a rectangle of tiles is placed on the map, any other
  * input opens a form, and no input at all runs at once. Queries are not actions; nothing about
@@ -318,7 +328,7 @@ function uiActions({ ui }: UiActionDeps): Action[] {
 export function buildActions(catalog: readonly CatalogEntry[], deps: UiActionDeps): Action[] {
   return [
     ...catalog
-      .filter((entry) => entry.kind === "command")
+      .filter((entry) => entry.kind === "command" && !TILE_LIST_ENTRIES.has(entry.name))
       .map((entry) => commandAction(entry, deps)),
     ...uiActions(deps),
   ];

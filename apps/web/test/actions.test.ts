@@ -2,7 +2,12 @@
 import { createDefaultRegistry, type CatalogEntry, type ExecResult } from "@coasterworks/sim";
 import type { SimClient } from "@coasterworks/protocol";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildActions, humanizeName, type UiActionDeps } from "../src/actions/registry";
+import {
+  TILE_LIST_ENTRIES,
+  buildActions,
+  humanizeName,
+  type UiActionDeps,
+} from "../src/actions/registry";
 import { fieldsFor } from "../src/actions/schema";
 import type { Action, ActionContext, DockTool } from "../src/actions/types";
 import { KEYMAP, formatCombo } from "../src/state/keys";
@@ -86,7 +91,9 @@ describe("buildActions: commands", () => {
 
   it("makes one action per command and none for a query", () => {
     const { actions } = setup();
-    const commands = catalog.filter((e) => e.kind === "command").map((e) => e.name);
+    const commands = catalog
+      .filter((e) => e.kind === "command" && !TILE_LIST_ENTRIES.has(e.name))
+      .map((e) => e.name);
     const fromCatalog = actions.filter((a) => a.kind === "command").map((a) => a.id);
     expect(fromCatalog).toEqual(commands);
     expect(actions.some((a) => a.kind === "query")).toBe(false);
@@ -137,6 +144,14 @@ describe("buildActions: commands", () => {
       ["terrain_level", {}],
       ["terrain_set_surface", {}],
     ]);
+  });
+
+  it("leaves out the tile-list path commands, which only a drag sends", () => {
+    const { actions } = setup();
+    const ids = actions.map((a) => a.id);
+    expect(ids).not.toContain("path_build_tiles");
+    expect(ids).not.toContain("path_remove_tiles");
+    expect(ids).toContain("path_build");
   });
 
   it("marks every command with a rectangle as rect placement, and no other", () => {

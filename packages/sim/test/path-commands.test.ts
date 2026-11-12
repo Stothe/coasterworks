@@ -444,3 +444,113 @@ describe("path_remove", () => {
     expect(world.pathVersion).toBe(start + 2);
   });
 });
+
+describe("path_build_tiles and path_remove_tiles: one stroke, one command", () => {
+  const stroke = [
+    { x: 5, y: 6 },
+    { x: 6, y: 6 },
+    { x: 7, y: 6 },
+    { x: 7, y: 7 },
+  ];
+
+  it("lays a stroke as one charge and one undo step", () => {
+    const { world, sim } = pondAndPlateau();
+    const before = snapshot(world);
+    const undoDepth = world.undoStack.length;
+    const result = sim.execute("path_build_tiles", { tiles: stroke, kind: "foot" });
+    expect(result).toMatchObject({ ok: true, cost: 4 * PATH_COST });
+    expect(stroke.map(({ x, y }) => pathOf(world, x, y))).toEqual([1, 1, 1, 1]);
+    expect(world.undoStack.length).toBe(undoDepth + 1);
+    expect(world.log.filter((e) => e.name === "path_build_tiles")).toHaveLength(1);
+
+    expect(sim.undo().ok).toBe(true);
+    expect(snapshot(world)).toEqual(before);
+    expect(sim.redo().ok).toBe(true);
+    expect(world.finance.cash).toBe(before.cash - 4 * PATH_COST);
+  });
+
+  it("charges only for tiles that change, and a tile listed twice once", () => {
+    const { world, sim } = pondAndPlateau();
+    run(sim, "path_build", { x: 5, y: 6, w: 1, h: 1, kind: "foot" });
+    const result = sim.execute("path_build_tiles", {
+      tiles: [...stroke, { x: 6, y: 6 }],
+      kind: "foot",
+    });
+    expect(result).toMatchObject({ ok: true, cost: 3 * PATH_COST });
+    // Undo restores each tile's own previous value, the twice-listed one included.
+    expect(sim.undo().ok).toBe(true);
+    expect([pathOf(world, 5, 6), pathOf(world, 6, 6), pathOf(world, 7, 7)]).toEqual([1, 0, 0]);
+  });
+
+  it("refuses the whole stroke, naming the first tile that cannot take a path", () => {
+    const { world, sim } = pondAndPlateau();
+    const before = snapshot(world);
+    expect(
+      sim.execute("path_build_tiles", {
+        tiles: [
+          { x: 7, y: 8 },
+          { x: 8, y: 8 },
+          { x: 4, y: 4 },
+        ],
+        kind: "queue",
+      }),
+    ).toEqual({ ok: false, error: "Cannot build on water at (8, 8)" });
+    expect(sim.execute("path_build_tiles", { tiles: [{ x: 16, y: 0 }], kind: "foot" })).toEqual({
+      ok: false,
+      error: "Area is outside the park at (16, 0)",
+    });
+    expect(sim.execute("path_build_tiles", { tiles: [], kind: "foot" }).ok).toBe(false);
+    expect(snapshot(world)).toEqual(before);
+  });
+
+  it("removes a stroke as one free command, and undo brings back each kind", () => {
+    const { world, sim } = pondAndPlateau();
+    run(sim, "path_build_tiles", { tiles: stroke.slice(0, 2), kind: "foot" });
+    run(sim, "path_build_tiles", { tiles: stroke.slice(2), kind: "queue" });
+    const before = snapshot(world);
+    const result = sim.execute("path_remove_tiles", { tiles: [...stroke, { x: 1, y: 1 }] });
+    expect(result).toMatchObject({ ok: true, cost: 0 });
+    expect(stroke.map(({ x, y }) => pathOf(world, x, y))).toEqual([0, 0, 0, 0]);
+    expect(sim.undo().ok).toBe(true);
+    expect(snapshot(world)).toEqual(before);
+    expect(sim.execute("path_remove_tiles", { tiles: [{ x: 0, y: 16 }] })).toEqual({
+      ok: false,
+      error: "Area is outside the park at (0, 16)",
+    });
+  });
+});
+
+describe("path_check_tiles", () => {
+  it("says which tiles a stroke would be refused on, and what the rest would cost", () => {
+    const { sim } = pondAndPlateau();
+    run(sim, "path_build", { x: 5, y: 6, w: 1, h: 1, kind: "foot" });
+    const tiles = [
+      { x: 5, y: 6 },
+      { x: 6, y: 6 },
+      { x: 8, y: 8 },
+      { x: 4, y: 4 },
+      { x: 6, y: 6 },
+      { x: 20, y: 1 },
+    ];
+    expect(sim.query("path_check_tiles", { tiles, kind: "foot" })).toEqual({
+      ok: true,
+      result: {
+        refused: [
+          { x: 8, y: 8, reason: "Cannot build on water" },
+          { x: 20, y: 1, reason: "Area is outside the park" },
+        ],
+        // (6, 6) and the top of the plateau; (5, 6) is a footpath already.
+        changes: 2,
+        cost: 2 * PATH_COST,
+      },
+    });
+    expect(sim.query("path_check_tiles", { tiles, kind: "remove" })).toEqual({
+      ok: true,
+      result: {
+        refused: [{ x: 20, y: 1, reason: "Area is outside the park" }],
+        changes: 1,
+        cost: 0,
+      },
+    });
+  });
+});

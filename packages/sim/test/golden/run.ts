@@ -52,8 +52,13 @@ export function runScenario(doc: ScenarioDoc): Sim {
   const { cash, ...rest } = doc.world;
   const options: CreateWorldOptions = cash === undefined ? rest : { ...rest, cash };
   const sim = new Sim(createWorld(options));
+  applySteps(sim, doc.steps);
+  return sim;
+}
 
-  doc.steps.forEach((step, index) => {
+/** Runs `steps` on `sim` in order, throwing on the first that fails. `from` numbers them. */
+export function applySteps(sim: Sim, steps: ScenarioDoc["steps"], from = 0): void {
+  steps.forEach((step, offset) => {
     if ("tick" in step) {
       sim.step(step.tick);
       return;
@@ -65,8 +70,9 @@ export function runScenario(doc: ScenarioDoc): Sim {
           ? sim.undo()
           : sim.redo();
     if (!result.ok) {
-      throw new Error(`Scenario step ${index} (${describeStep(step)}) failed: ${result.error}`);
+      throw new Error(
+        `Scenario step ${from + offset} (${describeStep(step)}) failed: ${result.error}`,
+      );
     }
   });
-  return sim;
 }

@@ -31,7 +31,7 @@ const recentCommands = (page: Page, limit: number) =>
 
 const guestCount = async (page: Page) => Number(await page.getByTestId("guest-count").innerText());
 
-test("2 is Paths: a drag lays footpath, one command per tile", async ({ page }) => {
+test("2 is Paths: a drag lays footpath as one command, undone in one step", async ({ page }) => {
   await openPark(page);
   await page.keyboard.press("Space");
 
@@ -54,9 +54,12 @@ test("2 is Paths: a drag lays footpath, one command per tile", async ({ page }) 
   }
   await page.mouse.up();
 
-  await expect
-    .poll(async () => (await recentCommands(page, 20)).filter((n) => n === "path_build").length)
-    .toBeGreaterThanOrEqual(3);
+  // The whole drag is one command: one charge, one undo step.
+  await expect.poll(async () => (await recentCommands(page, 20))[0]).toBe("path_build_tiles");
+  const sent = await recentCommands(page, 20);
+  expect(sent.filter((n) => n === "path_build_tiles")).toHaveLength(1);
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect.poll(async () => (await recentCommands(page, 20))[0]).toBe("undo");
 });
 
 test("guests come in through the gate, a click on one shows them, and closing sends them home", async ({

@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { createDefaultRegistry } from "@coasterworks/sim";
 import { describe, expect, it } from "vitest";
+import { TILE_LIST_ENTRIES } from "../src/actions/registry";
 import { defaultsFromSchema, fieldsFor, isRectSchema } from "../src/actions/schema";
 import type { JsonSchemaObject } from "../src/actions/types";
 
@@ -59,7 +60,8 @@ describe("fieldsFor", () => {
   });
 
   it("can render every command the sim has today", () => {
-    for (const entry of catalog) {
+    // The tile lists are sent by a drag of the path tool, never asked for in a form.
+    for (const entry of catalog.filter((e) => !TILE_LIST_ENTRIES.has(e.name))) {
       expect(fieldsFor(entry.inputSchema as JsonSchemaObject), entry.name).not.toBeNull();
     }
   });

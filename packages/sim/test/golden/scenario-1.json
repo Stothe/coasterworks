@@ -29,6 +29,33 @@
     { "tick": 2400 },
     { "exec": ["sim_advance", { "days": 31 }] },
     { "exec": ["park_close", {}] },
+    {
+      "exec": [
+        "path_build_tiles",
+        {
+          "tiles": [
+            { "x": 19, "y": 25 },
+            { "x": 20, "y": 25 },
+            { "x": 20, "y": 26 },
+            { "x": 20, "y": 25 }
+          ],
+          "kind": "foot"
+        }
+      ]
+    },
+    { "undo": true },
+    { "redo": true },
+    {
+      "exec": [
+        "path_remove_tiles",
+        {
+          "tiles": [
+            { "x": 20, "y": 26 },
+            { "x": 20, "y": 26 }
+          ]
+        }
+      ]
+    },
     { "tick": 400 }
   ]
 }
