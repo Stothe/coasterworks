@@ -12,6 +12,7 @@ import {
   meanEdgeHeight,
   ringLoops,
 } from "../src/scenery/land.js";
+import { detailFor } from "../src/surroundings.js";
 import { buildTerrainChunk, type TerrainData } from "../src/terrain/geometry.js";
 import { SUBDIV } from "../src/units.js";
 
@@ -287,5 +288,26 @@ describe("buildSurroundingsGeometry", () => {
     const t = flatTerrain(64, 64, 8);
     const g = buildSurroundingsGeometry(t, createOuterLand(t));
     expect(g.indices.length / 3).toBeLessThan(160_000);
+  });
+});
+
+describe("detailFor", () => {
+  const range = [16, 100, 190] as const;
+
+  it("uses a finer model the nearer the camera", () => {
+    expect(detailFor(1, range, -1, 0)).toBe(0);
+    expect(detailFor(16, range, -1, 0)).toBe(1);
+    expect(detailFor(100, range, -1, 0)).toBe(2);
+    expect(detailFor(200, range, -1, 0)).toBe(3);
+  });
+
+  it("never goes finer than the band allows", () => {
+    expect(detailFor(1, range, -1, 1)).toBe(1);
+  });
+
+  it("holds the coarser level until the camera is well inside the finer range", () => {
+    // Showing level 2 at 99 tiles: 99 is inside level 1's range but not by the slack.
+    expect(detailFor(99, range, 2, 0)).toBe(2);
+    expect(detailFor(80, range, 2, 0)).toBe(1);
   });
 });

@@ -71,6 +71,22 @@ const LOD_RANGE: Record<Quality, readonly (readonly [number, number, number])[]>
 };
 /** A plot goes back to a finer level only once the camera is this much inside its range. */
 const LOD_SLACK = 0.9;
+/**
+ * The level of detail (0 finest .. 3 coarsest) for a plot `d` tiles from the camera, given the
+ * band's `range`, the level it shows now (-1 for none) and the finest it may use. Stepping to a
+ * finer level takes coming a little closer than stepping off it did, so a plot on the line does
+ * not flicker between two.
+ */
+export function detailFor(
+  d: number,
+  range: readonly [number, number, number],
+  shown: number,
+  finest: number,
+): number {
+  let lod = d < range[0] ? 0 : d < range[1] ? 1 : d < range[2] ? 2 : 3;
+  if (shown >= 0 && lod < shown && d > (range[lod] as number) * LOD_SLACK) lod = shown;
+  return Math.max(lod, finest);
+}
 /** The share of the far band's trees each quality draws; they go in the order of their rank. */
 const FAR_SHARE: Record<Quality, number> = { high: 1, medium: 0.82, low: 0.6 };
 /** The coarsest level of detail that still casts shadows, by quality. */
@@ -146,8 +162,6 @@ function edgeSignature(t: TerrainData): number {
 }
 
 const NOTHING = new Uint8Array(0);
-const DBG_NOTREES = typeof location !== "undefined" && location.search.includes("notrees"); // DBG
-const DBG_NOFAR = typeof location !== "undefined" && location.search.includes("nofar"); // DBG
 
 /**
  * Creates the surroundings module: everything beyond the park's edge.
@@ -185,7 +199,6 @@ export function createSurroundings(ctx: RenderContext): SurroundingsModule {
   let clusters: Cluster[] = [];
   let entrance: EntrancePlace | null = ctx.entrance();
   let quality: Quality = ctx.quality;
-  let debugFrames = 0;
 
   function model(kind: SceneryKind, lod: SceneryLod, variant: number): BufferGeometry {
     const key = (kind * LOD_COUNT + lod) * 16 + variant;
@@ -266,14 +279,7 @@ export function createSurroundings(ctx: RenderContext): SurroundingsModule {
       const dy = eye.y - cluster.y;
       const dz = eye.z - cluster.z;
       const d = Math.sqrt(dx * dx + dy * dy + dz * dz) - cluster.radius;
-      let lod = d < range[0] ? 0 : d < range[1] ? 1 : d < range[2] ? 2 : 3;
-      // Stepping to a finer level takes coming a little closer than stepping off it did, so a
-      // plot on the line does not flicker between two.
-      if (cluster.shown >= 0 && lod < cluster.shown && d > (range[lod] as number) * LOD_SLACK) {
-        lod = cluster.shown;
-      }
-      if (lod < cluster.finest) lod = cluster.finest;
-      if (DBG_NOTREES || (DBG_NOFAR && cluster.band === 1)) lod = -1; // DBG
+      let lod = detailFor(d, range, cluster.shown, cluster.finest);
       // Small things have no far model: beyond their last they are not drawn.
       if (!cluster.meshes[lod] || cluster.count === 0) lod = -1;
       if (lod === cluster.shown) continue;
@@ -501,17 +507,6 @@ export function createSurroundings(ctx: RenderContext): SurroundingsModule {
     },
     update(): void {
       chooseDetail();
-      if (++debugFrames % 200 === 100) {
-        const tris = [0, 0, 0, 0, 0, 0, 0, 0];
-        const count = [0, 0, 0, 0, 0, 0, 0, 0];
-        for (const c of clusters) {
-          const mesh = c.meshes[c.shown];
-          if (!mesh) continue;
-          tris[c.band * 4 + c.shown]! += ((mesh.geometry.index?.count ?? 0) / 3) * mesh.count;
-          count[c.band * 4 + c.shown]! += mesh.count;
-        }
-        console.log("DBG calls", ctx.renderer.info.render.calls, "tris", ctx.renderer.info.render.triangles, "bandlod tris", tris.map((t) => Math.round(t / 1000)).join("/"), "count", count.join("/"));
-      }
     },
     dispose(): void {
       ctx.setOuterGround(null);
