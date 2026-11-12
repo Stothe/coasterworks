@@ -165,6 +165,9 @@ function failure(error: unknown): ExecResult {
 
 /** One drag of the path tool: the tiles it has covered and what the sim said about each. */
 interface Stroke {
+  /** The command and its defaults as they were when the drag began: the whole drag lays these. */
+  command: string;
+  defaults: Record<string, unknown>;
   path: PathStroke;
   /** The answers still to come, one per tile sent. */
   pending: Promise<void>[];
@@ -277,10 +280,11 @@ export function Viewport(props: ViewportProps) {
     let stroke: Stroke | null = null;
     const paintTile = (current: Stroke, tile: Tile) => {
       const { client, placement } = latest.current;
-      if (!client || !placement) return;
-      const input = { ...placement.defaults, x: tile.x, y: tile.y, w: 1, h: 1 };
+      // A tool put down or changed mid-drag (Esc, a dock key) ends what the drag lays.
+      if (!client || placement?.command !== current.command) return;
+      const input = { ...current.defaults, x: tile.x, y: tile.y, w: 1, h: 1 };
       current.pending.push(
-        client.command(placement.command, input).then(
+        client.command(current.command, input).then(
           (result) => {
             if (result.ok) {
               current.built = { ...result, cost: (current.built?.cost ?? 0) + result.cost };
@@ -303,9 +307,19 @@ export function Viewport(props: ViewportProps) {
           return client !== null && drawsByDragging(placement?.command);
         },
         start: (x, y) => {
-          stroke = { path: new PathStroke({ x, y }), pending: [], refused: [], built: null };
+          const { placement } = latest.current;
+          if (!placement) return;
+          stroke = {
+            command: placement.command,
+            defaults: { ...placement.defaults },
+            path: new PathStroke({ x, y }),
+            pending: [],
+            refused: [],
+            built: null,
+          };
           paintTile(stroke, { x, y });
         },
+        leave: () => stroke?.path.lift(),
         move: (x, y) => {
           const current = stroke;
           if (!current) return;

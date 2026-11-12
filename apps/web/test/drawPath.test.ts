@@ -49,7 +49,6 @@ describe("tilesBetween", () => {
 describe("PathStroke", () => {
   it("gives each tile once, the ones skipped over included", () => {
     const stroke = new PathStroke({ x: 2, y: 2 });
-    expect(stroke.first()).toEqual({ x: 2, y: 2 });
     expect(stroke.extend({ x: 2, y: 2 })).toEqual([]);
     expect(stroke.extend({ x: 4, y: 2 })).toEqual([
       { x: 3, y: 2 },
@@ -58,6 +57,19 @@ describe("PathStroke", () => {
     // Going back over the stroke adds nothing.
     expect(stroke.extend({ x: 2, y: 2 })).toEqual([]);
     expect(stroke.extend({ x: 2, y: 3 })).toEqual([{ x: 2, y: 3 }]);
+  });
+});
+
+describe("PathStroke.lift", () => {
+  it("does not join a tile after the pointer left the map to the last one before", () => {
+    const stroke = new PathStroke({ x: 0, y: 0 });
+    stroke.lift();
+    expect(stroke.extend({ x: 5, y: 0 })).toEqual([{ x: 5, y: 0 }]);
+    // And carries on from there as usual.
+    expect(stroke.extend({ x: 6, y: 0 })).toEqual([{ x: 6, y: 0 }]);
+    // A tile already laid is not laid again.
+    stroke.lift();
+    expect(stroke.extend({ x: 0, y: 0 })).toEqual([]);
   });
 });
 

@@ -31,6 +31,8 @@ export interface PaintHandlers {
   active(): boolean;
   start(x: number, y: number): void;
   move(x: number, y: number): void;
+  /** The pointer went off the map mid-drag: the next `move` is not joined to the last tile. */
+  leave?(): void;
   end(cancelled: boolean): void;
 }
 
@@ -208,6 +210,8 @@ export function attachControls(
       if (tile) {
         handlers.onHover(tile.x, tile.y);
         handlers.paint?.move(tile.x, tile.y);
+      } else {
+        handlers.paint?.leave?.();
       }
       return;
     }

@@ -707,6 +707,31 @@ describe("Viewport: drawing paths", () => {
     expect(command).toHaveBeenCalledTimes(4);
   });
 
+  it("lays what the drag began with, and stops if the tool changes mid-drag", async () => {
+    mount();
+    act(() => uiStore.getState().setTool("path"));
+    const paint = handlers().paint!;
+    paint.start(0, 0);
+    act(() => uiStore.getState().setTool("terrain"));
+    paint.move(1, 0);
+    paint.end(false);
+    await vi.waitFor(() => expect(command).toHaveBeenCalledTimes(1));
+    expect(command).toHaveBeenCalledWith("path_build", { kind: "foot", x: 0, y: 0, w: 1, h: 1 });
+    expect(command).not.toHaveBeenCalledWith("terrain_raise", expect.anything());
+  });
+
+  it("does not fill in the tiles between leaving the map and coming back", async () => {
+    mount();
+    act(() => uiStore.getState().setTool("path"));
+    const paint = handlers().paint!;
+    paint.start(0, 0);
+    paint.leave?.();
+    paint.move(4, 0);
+    paint.end(false);
+    await vi.waitFor(() => expect(command).toHaveBeenCalledTimes(2));
+    expect(command.mock.calls.map((call) => (call[1] as { x: number }).x)).toEqual([0, 4]);
+  });
+
   it("removes paths by dragging too", async () => {
     mount();
     act(() => uiStore.getState().startPlacement("path_remove", {}));

@@ -297,3 +297,46 @@ describe("attachControls: pointer", () => {
     expect(pan).toHaveBeenCalled();
   });
 });
+
+describe("attachControls: painting off the map", () => {
+  it("tells the paint handlers when a drag goes off the map", () => {
+    const rig = new CameraRig();
+    const canvas = Object.assign(new FakeTarget(), {
+      style: { touchAction: "" },
+      clientHeight: 600,
+      setPointerCapture() {},
+      hasPointerCapture: () => false,
+      releasePointerCapture() {},
+    });
+    const calls: string[] = [];
+    attachControls(
+      canvas as unknown as HTMLCanvasElement,
+      rig,
+      {
+        onTileClick: () => {},
+        onHover: () => {},
+        pick: (cx) => (cx < 0 ? null : { x: Math.floor(cx / 10), y: 0 }),
+        paint: {
+          active: () => true,
+          start: (x) => calls.push(`start ${x}`),
+          move: (x) => calls.push(`move ${x}`),
+          leave: () => calls.push("leave"),
+          end: () => calls.push("end"),
+        },
+      },
+      { keyTarget: new FakeTarget() as unknown as Window },
+    );
+    const at = (clientX: number) => ({
+      pointerId: 1,
+      button: 0,
+      ctrlKey: false,
+      clientX,
+      clientY: 0,
+    });
+    canvas.fire("pointerdown", at(5));
+    canvas.fire("pointermove", at(-5));
+    canvas.fire("pointermove", at(45));
+    canvas.fire("pointerup", at(45));
+    expect(calls).toEqual(["start 0", "leave", "move 4", "end"]);
+  });
+});

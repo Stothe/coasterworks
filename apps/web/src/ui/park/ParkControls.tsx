@@ -46,10 +46,19 @@ export function ParkControls({ park, execute, onError, disabled = false }: ParkC
         <Stepper
           label="Entry fee"
           inputLabel="Entry fee in dollars"
-          value={Math.round(park.entryFee / 100)}
+          // Whole dollars shown; a fee an agent set in cents steps from what it is.
+          value={Math.floor(park.entryFee / 100)}
           min={0}
           max={MAX_FEE_DOLLARS}
+          commitOnBlur
           onChange={(dollars) => run("park_set_entry_fee", { cents: dollars * 100 })}
+          onStep={(by) =>
+            run("park_set_entry_fee", {
+              cents: Math.min(MAX_ENTRY_FEE, Math.max(0, park.entryFee + by * 100)),
+            })
+          }
+          canDecrease={park.entryFee > 0}
+          canIncrease={park.entryFee < MAX_ENTRY_FEE}
           disabled={disabled}
         />
       </div>

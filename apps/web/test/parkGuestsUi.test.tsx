@@ -122,6 +122,27 @@ describe("ParkTray: the gate", () => {
     expect(execute).toHaveBeenCalledWith("park_set_entry_fee", { cents: 600 });
   });
 
+  it("takes a typed fee only on Enter, as one command", () => {
+    const { execute } = renderPark(park({ entryFee: 500 }));
+    const field = screen.getByLabelText("Entry fee in dollars");
+    fireEvent.change(field, { target: { value: "2" } });
+    fireEvent.change(field, { target: { value: "25" } });
+    expect(execute).not.toHaveBeenCalled();
+    fireEvent.keyDown(field, { key: "Enter" });
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledWith("park_set_entry_fee", { cents: 2500 });
+  });
+
+  it("steps a fee that is not whole dollars from what it is", () => {
+    const { execute } = renderPark(park({ entryFee: 50 }));
+    expect((screen.getByLabelText("Entry fee in dollars") as HTMLInputElement).value).toBe("0");
+    expect((button("Decrease entry fee") as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(button("Increase entry fee"));
+    expect(execute).toHaveBeenCalledWith("park_set_entry_fee", { cents: 150 });
+    fireEvent.click(button("Decrease entry fee"));
+    expect(execute).toHaveBeenCalledWith("park_set_entry_fee", { cents: 0 });
+  });
+
   it("tells a refusal", async () => {
     const { execute, onError } = renderPark(park());
     execute.mockResolvedValue({ ok: false, error: "Nope" });
@@ -216,6 +237,36 @@ describe("GuestInspector", () => {
       .getAllByRole("listitem")
       .map((li) => li.textContent);
     expect(listed).toEqual(["“f”", "“e”", "“d”", "“c”", "“b”"]);
+  });
+
+  it("stops asking once the guest has left, and a failed question is not taken as leaving", async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const query = vi.fn(async (): Promise<QueryResult<unknown>> => {
+      calls++;
+      if (calls === 2) throw new Error("timed out");
+      if (calls >= 3) return { ok: false, error: "No guest with id 4" };
+      return { ok: true, result: guest() };
+    });
+    render(<GuestInspector id={4} query={query} />);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(screen.getByText("Ada Park")).toBeTruthy();
+    // The second question fails: the guest is still shown, still there.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(GUEST_POLL_MS);
+    });
+    expect(screen.getByText("Walking around")).toBeTruthy();
+    // The third says they are gone; after that nobody asks.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(GUEST_POLL_MS);
+    });
+    expect(screen.getByText("Has left the park")).toBeTruthy();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(GUEST_POLL_MS * 5);
+    });
+    expect(query).toHaveBeenCalledTimes(3);
   });
 
   it("says when the guest has left", async () => {

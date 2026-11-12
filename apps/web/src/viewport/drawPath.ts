@@ -44,7 +44,7 @@ export function tilesBetween(from: Tile, to: Tile): Tile[] {
  * back the tiles that are new to the stroke, the ones in between included.
  */
 export class PathStroke {
-  private last: Tile;
+  private last: Tile | null;
   private readonly seen = new Set<string>();
 
   constructor(start: Tile) {
@@ -52,15 +52,26 @@ export class PathStroke {
     this.seen.add(key(start));
   }
 
-  /** The tile the stroke began on, which is its first new tile. */
-  first(): Tile {
-    return { ...this.last };
+  /**
+   * Lifts the stroke: the pointer left the map, so the next tile is a fresh start, not joined to
+   * the last by the tiles between (which the pointer never crossed).
+   */
+  lift(): void {
+    this.last = null;
   }
 
   extend(to: Tile): Tile[] {
-    if (to.x === this.last.x && to.y === this.last.y) return [];
+    const last = this.last;
+    if (last === null) {
+      this.last = { ...to };
+      const k = key(to);
+      if (this.seen.has(k)) return [];
+      this.seen.add(k);
+      return [{ ...to }];
+    }
+    if (to.x === last.x && to.y === last.y) return [];
     const fresh: Tile[] = [];
-    for (const tile of tilesBetween(this.last, to)) {
+    for (const tile of tilesBetween(last, to)) {
       const k = key(tile);
       if (this.seen.has(k)) continue;
       this.seen.add(k);

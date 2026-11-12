@@ -101,16 +101,19 @@ export function GuestInspector({ id, query }: { id: number; query: QueryFn | nul
     setThoughts([]);
     if (!query) return;
     let live = true;
+    let timer: ReturnType<typeof setInterval> | undefined;
     const ask = () => {
       query("guest_get", { id }).then(
         (answer) => {
           if (!live) return;
           if (!answer.ok || !isGuestView(answer.result)) {
+            // The sim says there is no such guest, and ids are never given out again: they have
+            // left for good, so there is nothing more to ask.
             setGone(true);
+            clearInterval(timer);
             return;
           }
           const view = answer.result;
-          setGone(false);
           setGuest(view);
           const text = view.thought?.text;
           if (text !== undefined) {
@@ -119,13 +122,13 @@ export function GuestInspector({ id, query }: { id: number; query: QueryFn | nul
             );
           }
         },
-        () => {
-          if (live) setGone(true);
-        },
+        // A question that did not get through says nothing about the guest: keep what is shown
+        // and ask again next time.
+        () => {},
       );
     };
     ask();
-    const timer = setInterval(ask, GUEST_POLL_MS);
+    timer = setInterval(ask, GUEST_POLL_MS);
     return () => {
       live = false;
       clearInterval(timer);
