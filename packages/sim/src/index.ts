@@ -42,6 +42,11 @@ export {
   pathAt,
 } from "./paths/paths.js";
 export { RouteCache, UNREACHABLE } from "./paths/routing.js";
+export { QUEUE_PER_TILE, queueCapacity, queueInfo, queueSlotTile } from "./rides/queue.js";
+export type { QueueInfo } from "./rides/queue.js";
+export { canPlaceRide } from "./rides/rides.js";
+export { MAX_RIDE_ID, MAX_RIDE_NAME, MAX_RIDE_PRICE, RIDE_CAP, RidePhase } from "./rides/types.js";
+export type { RideRecord, RideStats, Tile } from "./rides/types.js";
 export { createDefaultRegistry } from "./registry-default.js";
 export { Rng } from "./rng.js";
 export type { RngState } from "./rng.js";
@@ -53,6 +58,7 @@ export { SAMPLE_SIZE, createSamplePark } from "./sample-park.js";
 export { Sim } from "./sim.js";
 export { LOAN_MAX, financeSystem } from "./systems/finance.js";
 export { guestSystem } from "./systems/guests.js";
+export { rideSystem } from "./systems/rides.js";
 export type { System } from "./systems/types.js";
 export {
   cornerIndex,

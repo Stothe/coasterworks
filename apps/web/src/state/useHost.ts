@@ -4,6 +4,8 @@ import {
   type EventMessage,
   type GuestSection,
   type ParkPublic,
+  type RidePublic,
+  type RideStatusSection,
   type SimClient,
 } from "@coasterworks/protocol";
 import type { TerrainData } from "@coasterworks/render";
@@ -28,6 +30,18 @@ export interface HostState extends SnapshotSource {
    * path, 1 for a footpath and 2 for a queue. A snapshot without paths leaves it as it was.
    */
   paths: Uint8Array | null;
+  /**
+   * The latest list of rides and stalls, in ascending id order: where each stands, its name and
+   * price and whether it is open. A snapshot without the list leaves it as it was, so this changes
+   * (and renders) only when a ride is built, demolished or changed. Null before the first snapshot.
+   */
+  rides: RidePublic[] | null;
+  /**
+   * What every ride is doing in the latest snapshot (phase, ticks into it, riders, queue length),
+   * in ascending id order, or null before the first. Read when asked for, like `guests`: it moves in
+   * every snapshot, so a render does not follow it.
+   */
+  getRideStatus(): RideStatusSection | null;
   /**
    * The guests of the latest snapshot, or null before the first. Like `snapshot` this is read when
    * asked for and is always the latest: guests move in every snapshot, so a render does not
@@ -77,12 +91,13 @@ const HALT_PREFIX = "Simulation halted";
  * What the hook keeps in React state: all of `HostState` but what is read from the snapshot feed,
  * which changes with every snapshot and has its own way of telling those who want to know.
  */
-type Core = Omit<HostState, keyof SnapshotSource | "guests" | "park">;
+type Core = Omit<HostState, keyof SnapshotSource | "guests" | "park" | "getRideStatus">;
 
 const INITIAL: Core = {
   status: "connecting",
   terrain: null,
   paths: null,
+  rides: null,
   events: [],
   client: null,
   halted: false,
@@ -122,14 +137,16 @@ interface Session {
  */
 function withSnapshot(state: Core, snapshot: DecodedSnapshot): Core {
   const { header, terrain, paths } = snapshot;
+  const { rides } = header;
   // Running again: the halt, and the error that announced it, are over.
   const clearsHalt =
     !header.halted && (state.haltMessage !== undefined || !!state.error?.startsWith(HALT_PREFIX));
-  if (!terrain && !paths && state.halted === header.halted && !clearsHalt) return state;
+  if (!terrain && !paths && !rides && state.halted === header.halted && !clearsHalt) return state;
   const next: Core = {
     ...state,
     terrain: terrain ? { width: header.width, height: header.height, ...terrain } : state.terrain,
     paths: paths ?? state.paths,
+    rides: rides ?? state.rides,
     halted: header.halted,
   };
   if (clearsHalt) {
@@ -273,9 +290,9 @@ function open(
  *
  * The component renders when anything but the snapshot changes. The snapshot is read from the
  * returned state when needed (`state.snapshot`, and `state.guests` and `state.park`, which are
- * parts of it), and a component that shows part of it follows it with `useSnapshot`, so a
- * snapshot every 50 ms renders only what shows it. The terrain and the paths are state, because
- * they change only when someone builds.
+ * parts of it, and `getRideStatus()`), and a component that shows part of it follows it with
+ * `useSnapshot`, so a snapshot every 50 ms renders only what shows it. The terrain, the paths and
+ * the rides are state, because they change only when someone builds.
  *
  * React strict mode mounts, unmounts and mounts a component again at once. The close is therefore
  * put off until the next turn of the event loop, and a mount in that gap keeps the connection, so
@@ -312,6 +329,7 @@ export function useHost(connect: ConnectFn = connectHost): HostState {
       get park() {
         return feed.latest?.header.park ?? null;
       },
+      getRideStatus: () => feed.latest?.rideStatus ?? null,
       subscribeSnapshot: feed.subscribe,
     }),
     [core, feed],

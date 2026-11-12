@@ -96,5 +96,7 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # The sim imports @coasterworks/content through its built `dist`.
+      - run: pnpm --filter @coasterworks/content build
       - run: bun packages/sim/scripts/update-golden.ts
       - run: git diff --exit-code packages/sim/test/golden/scenario-1.hash

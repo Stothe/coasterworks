@@ -157,7 +157,7 @@ describe("canBuildPath", () => {
   });
 
   it("gives each reason its exact text", () => {
-    const { world } = pondAndPlateau();
+    const { world, sim } = pondAndPlateau();
     expect(canBuildPath(world, -1, 0)).toBe("Area is outside the park");
     expect(canBuildPath(world, 16, 0)).toBe("Area is outside the park");
     expect(canBuildPath(world, 0, 16)).toBe("Area is outside the park");
@@ -165,6 +165,10 @@ describe("canBuildPath", () => {
     expect(canBuildPath(world, 3, 4)).toBe("Tile is too steep");
     world.park.entrance = { x: 7, y: 0, side: 0 };
     expect(canBuildPath(world, 7, 0)).toBe("Tile is the park entrance");
+    run(sim, "stall_build", { type: "snack_stand", x: 2, y: 2, rot: 0 });
+    expect(canBuildPath(world, 2, 2)).toBe("Something is already here");
+    // The stall's service tile, in front of it, takes a path.
+    expect(canBuildPath(world, 2, 3)).toBeNull();
   });
 
   it("allows a drop of 2 steps and refuses 3", () => {

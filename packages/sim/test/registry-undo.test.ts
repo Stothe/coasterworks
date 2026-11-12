@@ -6,6 +6,8 @@ import {
   type CommandDef,
   type World,
 } from "../src/index.js";
+import { typeById } from "@coasterworks/content";
+import { addRide, newRide } from "../src/rides/rides.js";
 import { takeLoan } from "../src/systems/finance.js";
 
 /**
@@ -28,6 +30,26 @@ function addBump(world: World): void {
 /** Puts the park entrance on the north edge, which `park_open` needs. */
 function placeEntrance(world: World): void {
   world.park.entrance = { x: 5, y: 0, side: 0 };
+}
+
+/** Puts a ride of `typeId` at (x, y) straight into the world, as `ride_build` would. */
+function placeRide(
+  world: World,
+  typeId: string,
+  x: number,
+  y: number,
+  rot: 0 | 1 | 2 | 3 = 0,
+): void {
+  const type = typeById(typeId);
+  if (type === undefined) throw new Error(`no type ${typeId}`);
+  addRide(world, newRide(world, world.nextRideId++, type, x, y, rot));
+}
+
+/** A carousel (id 1) and an open snack stand (id 2), for the commands that act on a ride. */
+function twoRides(world: World): void {
+  placeRide(world, "carousel", 2, 2, 1);
+  placeRide(world, "snack_stand", 8, 8, 3);
+  (world.rides[1] as { open: boolean }).open = true;
 }
 
 /**
@@ -81,6 +103,24 @@ const FIXTURES: Record<string, Fixture> = {
     },
   },
   park_rename: { input: { name: "Renamed Park" } },
+  // Next to an existing ride, so the id counter and the sorted list both have to come back.
+  ride_build: { input: { type: "big_wheel", x: 8, y: 3, rot: 1 }, setup: twoRides },
+  stall_build: { input: { type: "restrooms", x: 12, y: 12, rot: 2 }, setup: twoRides },
+  // The first of two, with a price, a name and stats of its own that the revert must restore.
+  ride_demolish: {
+    input: { id: 1 },
+    setup: (world) => {
+      twoRides(world);
+      const ride = world.rides[0] as { price: number; name: string; stats: { income: number } };
+      ride.price = 375;
+      ride.name = "Spinny";
+      ride.stats.income = 12_345;
+    },
+  },
+  ride_open: { input: { id: 1 }, setup: twoRides },
+  ride_close: { input: { id: 2 }, setup: twoRides },
+  ride_set_price: { input: { id: 2, cents: 1_999 }, setup: twoRides },
+  ride_rename: { input: { id: 1, name: "Whirligig" }, setup: twoRides },
   sim_advance: { input: { days: 5 } },
   finance_take_loan: { input: { amount: 20_000_00 } },
   finance_repay_loan: { input: { amount: 10_00 }, setup: (world) => takeLoan(world, 20_000_00) },

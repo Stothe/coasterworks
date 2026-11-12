@@ -13,7 +13,7 @@ export type DockTool = (typeof DOCK_TOOLS)[number];
 
 /**
  * The parts of the inspector: the park's three tabs, and the tile tab, which is the only one a
- * selected tile has (and the one a selected guest or entrance is shown under).
+ * selected tile has (and the one a selected guest, ride or entrance is shown under).
  */
 export type InspectorTab = "overview" | "finances" | "timeline" | "tile";
 
@@ -21,6 +21,7 @@ export type InspectorTab = "overview" | "finances" | "timeline" | "tile";
 export type UiSelection =
   | { kind: "tile"; x: number; y: number }
   | { kind: "guest"; id: number }
+  | { kind: "ride"; id: number }
   | { kind: "entrance" }
   | { kind: "park" }
   | null;

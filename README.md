@@ -2,9 +2,9 @@
 
 Coasterworks is an open-source theme-park builder in the spirit of RollerCoaster Tycoon: the depth of the original with a UI built for 2026, playable without any original game files, and MCP native so Claude or any agent can build and run a park through the same commands the player uses. Mac first; other platforms later.
 
-Status: pre-alpha. You can fly around a park, shape terrain, lay footpaths and queues, place the entrance, set the entry fee and open the gates, then watch guests arrive, wander your paths, think, pay and go home. Click a guest to see their needs and thoughts. Drive it all from a labeled dock, a ⌘K command bar or an MCP agent, in the browser (`pnpm dev:web`) or the Mac app (`pnpm dev:desktop`). Rides and shops are next.
+Status: pre-alpha. You can fly around a park, shape terrain, lay footpaths and queues, place the entrance, set the entry fee and open the gates, build flat rides and stalls and set their prices, then watch guests arrive, wander your paths, queue for and ride the rides, buy food and drinks, use the restrooms, think, pay and go home. Click a guest to see their needs and thoughts, or a ride to see how it is doing. Drive it all from a labeled dock, a ⌘K command bar or an MCP agent, in the browser (`pnpm dev:web`) or the Mac app (`pnpm dev:desktop`). Roller coasters are next.
 
-![Coasterworks in the browser: a 64 by 64 tile park of rolling grass with a hill ringed by a footpath and a sandy pond, guests walking up the path from the gate, woods beyond the hedge, the cash, date, guest count, park rating and speed controls at the top left, the dock and the terrain tray at the bottom, and the inspector open on the park finances at the right](apps/web/e2e/__screenshots__/park.png)
+![Coasterworks in the browser: a 64 by 64 tile park of rolling grass with a hill ringed by a footpath and a sandy pond, guests walking up the main path from the gate past a big wheel with guests queuing for it, a red and white carousel and three small stalls, woods beyond the hedge, the cash, date, guest count, park rating and speed controls at the top left, the dock and the terrain tray at the bottom, and the inspector open on the park finances at the right](apps/web/e2e/__screenshots__/park.png)
 
 ## Run it in the browser
 
@@ -15,7 +15,13 @@ pnpm install
 pnpm dev:web
 ```
 
-Open `http://localhost:5173`. The page runs a sample park, "Leafy Lake", in a worker of its own. The dock along the bottom has seven tools (keys `1` to `7`), and Terrain's tray shapes the land: Raise, Lower, Level, Smooth, Water and Surface (keys `R`, `L`, `V`, `M`, `W`, `U`; `[` and `]` change the brush). `Esc` puts the tool down, Space pauses, `+` and `-` change the speed, and Cmd+Z undoes. Cmd+K opens the command bar, where every action is a search away, and `?` lists every key.
+Open `http://localhost:5173`. The page runs a sample park, "Leafy Lake", in a worker of its own: a hill ringed by a footpath, a pond with a plaza, and a main path up from the gate with a Big Wheel and a Carousel (each with a short queue), a Snack Stand, a Drinks Stand and Restrooms beside it, all open. The dock along the bottom has seven tools (keys `1` to `7`), and Terrain's tray shapes the land: Raise, Lower, Level, Smooth, Water and Surface (keys `R`, `L`, `V`, `M`, `W`, `U`; `[` and `]` change the brush). `Esc` puts the tool down, Space pauses, `+` and `-` change the speed, and Cmd+Z undoes. Cmd+K opens the command bar, where every action is a search away, and `?` lists every key.
+
+### Rides and stalls
+
+`3` opens the Rides tray (Gentle and Thrill: Carousel, Big Wheel and Swing Tower) and `5` the Shops tray (Food, Drink and Facilities: Snack Stand, Drinks Stand and Restrooms). A card puts that ride or stall in hand with a ghost that follows the pointer: green where it can go, red where it cannot (the tray says why: a slope, water, a path or another ride in the way). `R` turns it a quarter while it is in hand (otherwise `R` is still Raise), and a click builds it. A ride has an entrance tile and an exit tile just outside its footprint, set by its type and turned with it (an unturned Carousel's entrance is below the middle of its south side, its exit beside the middle of its east side; `ride_get` gives both); lay queue path (in the Paths tray) from the entrance to one of your paths, and footpath on the exit. The entrance tile is the loading platform, and the queue is the line of queue tiles joined to it. A stall serves onto the tile in front of its counter, so put that tile on a path.
+
+Rides and stalls are built closed. Click one to open its inspector: open or close it, set its price, rename it, demolish it (half the cost back), and see its customers, takings this month and all time, running cost, queue and riders, and a ride's excitement, intensity and nausea. Guests pick a ride they like that is not too intense for them and not too busy, queue in order, pay as they board and come off happier (or a little queasy); hungry, thirsty or in need of the toilet, they walk to the nearest stall that helps. Ride and shop takings and the monthly running costs show up in the park's Finances.
 
 ## Run the Mac app (dev)
 
@@ -77,16 +83,18 @@ node apps/cli/dist/index.js undo --save my.park --out my.park
 node apps/cli/dist/index.js redo --save my.park --out my.park
 ```
 
-An agent can run a park end to end with no window at all. The sample park comes with an entrance, paths and a $5 entry fee; open it, let a week pass, and ask the guests what they think (`scripts/demo-headless.sh` does exactly this, and CI runs it):
+An agent can run a park end to end with no window at all. The sample park comes with an entrance, paths, a $5 entry fee, two rides and three stalls; open it, let a week pass, and ask the guests what they think (`scripts/demo-headless.sh` does exactly this, then builds another carousel with a short queue and another snack stand beside the main path near the gate, opens them, runs a month and prints what they took; CI runs it):
 
 ```bash
 node apps/cli/dist/index.js new --out demo.park --sample
 node apps/cli/dist/index.js exec --save demo.park --command park_open --out demo.park
 node apps/cli/dist/index.js run --save demo.park --days 7 --out demo.park
 node apps/cli/dist/index.js query --save demo.park --name guest_thoughts
+node apps/cli/dist/index.js query --save demo.park --name content_list --input '{"kind":"ride"}'
+node apps/cli/dist/index.js exec --save demo.park --command ride_build --input '{"type":"carousel","x":37,"y":60,"rot":2}' --out demo.park
 ```
 
-Command names such as `terrain_raise` come from `packages/sim/src/commands`, and query names such as `park_status` and `terrain_get` from `packages/sim/src/queries`. A failed command or query exits 1 and still prints its result.
+`run` prints the park's status, including how many `rides` and `stalls` it has. Command names such as `terrain_raise` come from `packages/sim/src/commands`, and query names such as `park_status` and `terrain_get` from `packages/sim/src/queries`. A failed command or query exits 1 and still prints its result.
 
 ## Connect Claude Code
 
@@ -96,7 +104,15 @@ The same commands are available to an agent over MCP. Build first (`pnpm build`)
 claude mcp add coasterworks -- node /absolute/path/to/apps/cli/dist/index.js mcp --save /absolute/path/my.park --out /absolute/path/my.park
 ```
 
-Claude can then build in the park with the tools the sim exposes (`terrain_raise`, `park_status`, `undo`, and so on). `--out` writes every change back to the file; without it the park lives in memory and `--save` is never modified.
+Claude can then build in the park with the tools the sim exposes, one per command and query plus `undo` and `redo`:
+
+- terrain: `terrain_raise`, `terrain_lower`, and the rest of the terrain tools
+- paths: `path_build`, `path_remove`, and the stroke tools `path_build_tiles`, `path_remove_tiles` and `path_check_tiles`
+- rides and stalls: `content_list` (what can be built), `ride_check` (whether a build would be taken, and why not), `ride_build`, `stall_build`, `ride_demolish`, `ride_open`, `ride_close`, `ride_set_price`, `ride_rename`, `ride_list` and `ride_get`
+- the park and its money: `park_status`, `park_open`, `park_set_entry_fee`, `finance_summary`, `finance_take_loan`, and more
+- time: `sim_advance`
+
+Every tool describes its own input, so an agent can list them and read the schemas. `--out` writes every change back to the file; without it the park lives in memory and `--save` is never modified.
 
 For a client that cannot start a process, serve it over HTTP instead:
 
@@ -134,12 +150,13 @@ To point the web app at the sidecar, start it with `pnpm dev:web` and open `http
 
 ## What's here
 
-- `packages/sim`: the deterministic simulation core: world, commands, queries, undo, and the save format (`@coasterworks/sim`)
+- `packages/content`: the ride and stall types as typed data (footprint, entrance and exit, cost, capacity, ratings, what a stall sells), checked by a Zod schema (`@coasterworks/content`)
+- `packages/sim`: the deterministic simulation core: world, commands, queries, undo, guests, rides and the save format (`@coasterworks/sim`)
 - `packages/mcp`: the MCP server that exposes sim commands to agents over stdio and HTTP (`@coasterworks/mcp`)
 - `packages/protocol`: the wire between a running sim and its clients: messages, binary snapshots, `SimHostServer` and `SimClient` (`@coasterworks/protocol`)
-- `packages/render`: the three.js renderer (smooth ground, water, paths, guests, sky and the land around the park), camera and picking, with no React in it (`@coasterworks/render`)
+- `packages/render`: the three.js renderer (smooth ground, water, paths, guests, procedural ride and stall models, sky and the land around the park), camera and picking, with no React in it (`@coasterworks/render`)
 - `apps/cli`: the `coasterworks` command line app: `new`, `run`, `inspect`, `exec`, `query`, `undo`, `redo`, `mcp`, and `serve`
-- `apps/web`: the browser client, built with Vite and React: the park view, status pills, speed control, the terrain, path and park tools, and the inspector (`@coasterworks/web`)
+- `apps/web`: the browser client, built with Vite and React: the park view, status pills, speed control, the terrain, path, ride, shop and park tools, and the inspector (`@coasterworks/web`)
 - `apps/desktop`: the Mac app, a Tauri 2 shell that starts the `serve` sidecar and opens the web client (`@coasterworks/desktop`)
 
 ## Determinism

@@ -12,6 +12,7 @@ export interface HelpOverlayProps {
 const GROUPS: ReadonlyArray<{ title: string; has(actionId: string): boolean }> = [
   { title: "Tools", has: (id) => id.startsWith("ui.tool.") },
   { title: "Terrain", has: (id) => id.startsWith("ui.terrain.") || id.startsWith("ui.brush.") },
+  { title: "Rides and shops", has: (id) => id === "ui.rotate" },
   { title: "Camera", has: (id) => id === "ui.classicView" },
   { title: "Speed", has: (id) => id === "ui.pause" || id.startsWith("ui.speed.") },
   { title: "History", has: (id) => id === "ui.undo" || id === "ui.redo" },

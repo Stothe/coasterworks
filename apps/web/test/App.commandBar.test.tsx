@@ -40,6 +40,8 @@ function host(speed: Speed = 1): HostState {
     snapshot: snapshotOf({ speed }),
     terrain: null,
     paths: null,
+    rides: null,
+    getRideStatus: () => null,
     guests: null,
     park: null,
     events: [],

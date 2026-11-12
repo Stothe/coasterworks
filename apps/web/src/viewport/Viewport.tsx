@@ -1,4 +1,11 @@
-import type { GuestSection, ParkPublic, SimClient } from "@coasterworks/protocol";
+import type {
+  GuestSection,
+  ParkPublic,
+  QueryResult,
+  RidePublic,
+  RideStatusSection,
+  SimClient,
+} from "@coasterworks/protocol";
 import {
   attachControls,
   createScene,
@@ -20,6 +27,14 @@ import { brushRect, planPlacement, timeOfDay } from "./brush";
 import { classicCycle, onClassicViewRequest } from "./classicView";
 import { PathStroke, skippedMessage, type Tile } from "./drawPath";
 import { framingDistance } from "./framing";
+import {
+  OFF_THE_MAP,
+  footprintAt,
+  isBuildCommand,
+  isRideCheck,
+  rotOf,
+  type RideCheck,
+} from "./ridePlacement";
 
 /** What the app can ask of the view. */
 export interface ViewportHandle {
@@ -36,10 +51,17 @@ export interface ViewportHandle {
    * a pause still being drawn), when a point found now would not be on the guest a moment later.
    */
   findGuest(): { clientX: number; clientY: number; id: number } | null;
+  /**
+   * A point in the window over the middle of tile (`x`, `y`): the mean of the points across the view
+   * that pick it, or null if it is not in view. For tests and the console: it is slow.
+   */
+  tileToScreen(x: number, y: number): { clientX: number; clientY: number } | null;
 }
 
 /** How far apart `findGuest` tries points, in CSS pixels. */
 const FIND_STEP = 6;
+/** How far apart `tileToScreen` tries points first, and then, for a tile that small, again. */
+const TILE_STEPS = [8, 3] as const;
 
 export interface ViewportProps {
   terrain: TerrainData | null;
@@ -65,6 +87,18 @@ export interface ViewportProps {
   getGuests?(): GuestSection | null;
   /** Reads the park entrance of the latest snapshot, on the same terms as `getGuests`. */
   getEntrance?(): ParkPublic["entrance"] | undefined;
+  /** The rides and stalls of the latest snapshot that carried them, or null for none. */
+  rides?: readonly RidePublic[] | null;
+  /** Reads what every ride is doing in the latest snapshot, on the same terms as `getGuests`. */
+  getRideStatus?(): RideStatusSection | null;
+  /**
+   * Reads a string that changes when what a placement check depends on does (the cash, the
+   * terrain, the paths, the rides) in the latest snapshot, on the same terms as `getGuests`. The
+   * placement in hand is then asked about again.
+   */
+  getCheckStamp?(): string | null;
+  /** The sim's speed (0 paused, 1, 2, 4 or 8), which the rides move by. 1 when not given. */
+  simSpeed?: number;
   /** Filled with the view's handle while the view is up. */
   ref?: Ref<ViewportHandle>;
 }
@@ -302,6 +336,28 @@ export function Viewport(props: ViewportProps) {
         }
         return null;
       },
+      tileToScreen(x, y) {
+        const scene = live.current?.scene;
+        const canvas = canvasRef.current;
+        if (!scene || !canvas) return null;
+        const box = canvas.getBoundingClientRect();
+        for (const step of TILE_STEPS) {
+          let sumX = 0;
+          let sumY = 0;
+          let hits = 0;
+          for (let py = box.top + step; py < box.bottom; py += step) {
+            for (let px = box.left + step; px < box.right; px += step) {
+              const tile = scene.pickAt(px, py);
+              if (tile?.x !== x || tile.y !== y) continue;
+              sumX += px;
+              sumY += py;
+              hits++;
+            }
+          }
+          if (hits > 0) return { clientX: sumX / hits, clientY: sumY / hits };
+        }
+        return null;
+      },
     }),
     [],
   );
@@ -313,6 +369,7 @@ export function Viewport(props: ViewportProps) {
     // time the park loads; a change of quality goes to the scene already up, further down.
     const { pixelRatioCap, graphicsQuality: quality } = settingsStore.getState();
     const scene = createScene(canvas, { pixelRatioCap, quality });
+    let disposed = false;
     const mine: Live = {
       scene,
       hasTerrain: false,
@@ -335,10 +392,143 @@ export function Viewport(props: ViewportProps) {
     park();
     scene.setGridVisible(latest.current.placement !== null);
     scene.setTimeOfDay(timeOfDay(latest.current.tick));
+    scene.setSimSpeed(latest.current.simSpeed ?? 1);
+
+    // A ride or stall in hand is drawn see-through where it would go, green where the sim would
+    // build it and red where not, and the tray says why not. The sim is asked (`ride_check`) once
+    // the footprint moves to other tiles or turns, one question at a time: an answer that comes
+    // after the pointer has moved on asks again for where it is now. Until the answer for the very
+    // spot comes the ghost is grey, with nothing in the tray: the last spot's answer is not this
+    // one's. A question that fails (or is answered with nonsense) is not asked again for that spot
+    // until the pointer, the placement or the park moves it on.
+    let wanted: { key: string; type: string; x: number; y: number; rot: 0 | 1 | 2 | 3 } | null =
+      null;
+    let known: { key: string; check: RideCheck } | null = null;
+    /** Whether `known` may be out of date: the park changed since it was asked. */
+    let stale = false;
+    /** The spot whose question failed. */
+    let failed: string | null = null;
+    /** Goes up when what was asked no longer holds, so an answer in flight is not taken. */
+    let epoch = 0;
+    let seenPlacement: unknown = null;
+    let asking = false;
+    const showGhost = () => {
+      if (wanted) {
+        const { type, x, y, rot } = wanted;
+        const ok = known?.key === wanted.key ? known.check.ok : null;
+        scene.setPlacementGhost({ type, x, y, rot, ok });
+      } else scene.setPlacementGhost(null);
+    };
+    /** Shows what is known of the wanted spot: its answer, or nothing yet. */
+    const showCheck = () => {
+      const check = wanted && known?.key === wanted.key ? known.check : null;
+      uiStore.getState().setPlacementCheck(check);
+      showGhost();
+    };
+    const settle = (key: string, check: RideCheck) => {
+      known = { key, check };
+      stale = false;
+      if (wanted?.key === key) showCheck();
+    };
+    const askCheck = () => {
+      const target = wanted;
+      const { client } = latest.current;
+      if (!target || asking || !client || disposed || failed === target.key) return;
+      if (known?.key === target.key && !stale) {
+        showCheck();
+        return;
+      }
+      if (target.x < 0 || target.y < 0) {
+        settle(target.key, { ok: false, reason: OFF_THE_MAP });
+        return;
+      }
+      asking = true;
+      const asked = epoch;
+      const { key, type, x, y, rot } = target;
+      const done = (check: RideCheck | null) => {
+        asking = false;
+        if (disposed) return;
+        if (asked === epoch) {
+          if (check) settle(key, check);
+          else failed = key;
+        }
+        // The pointer moved on, or the park changed, while the sim was answering. A spot whose
+        // question failed is left: asking it again from here could go on without end.
+        if (wanted && failed !== wanted.key && (wanted.key !== known?.key || stale)) askCheck();
+      };
+      let reply: Promise<QueryResult<unknown>>;
+      try {
+        reply = client.query("ride_check", { type, x, y, rot });
+      } catch {
+        // A closed client throws rather than rejects.
+        done(null);
+        return;
+      }
+      reply.then(
+        (answer) =>
+          done(
+            !answer.ok
+              ? { ok: false, reason: answer.error }
+              : isRideCheck(answer.result)
+                ? { ok: answer.result.ok, reason: answer.result.reason }
+                : null,
+          ),
+        () => done(null),
+      );
+    };
+    /** The park has changed, and the same tiles may answer otherwise: ask again, and keep the answer shown until the new one comes. */
+    const recheck = () => {
+      stale = true;
+      failed = null;
+      epoch++;
+      askCheck();
+    };
 
     const outline = () => {
       const { terrain, placement } = latest.current;
       const at = hover.current;
+      if (placement && isBuildCommand(placement.command)) {
+        const type = String(placement.defaults["type"]);
+        const rot = rotOf(placement.defaults);
+        const area = at ? footprintAt(type, rot, at.x, at.y) : null;
+        const key = area && `${type}:${area.x}:${area.y}:${rot}`;
+        // Another thing in hand is a new question, whatever was known.
+        if (placement !== seenPlacement) {
+          seenPlacement = placement;
+          known = null;
+          stale = false;
+          failed = null;
+          epoch++;
+          wanted = null;
+        }
+        if (!area || !key) {
+          wanted = null;
+          uiStore.getState().setPlacementCheck(null);
+          showGhost();
+          scene.highlightTile(null);
+          return;
+        }
+        if (wanted?.key !== key) {
+          wanted = { key, type, x: area.x, y: area.y, rot };
+          failed = null;
+          showCheck();
+          askCheck();
+        }
+        // The outline is the part of the footprint on the map.
+        const x0 = Math.max(0, area.x);
+        const y0 = Math.max(0, area.y);
+        const x1 = Math.min(terrain?.width ?? 0, area.x + area.w);
+        const y1 = Math.min(terrain?.height ?? 0, area.y + area.h);
+        if (x1 > x0 && y1 > y0) scene.highlightTile(x0, y0, x1 - x0, y1 - y0);
+        else scene.highlightTile(null);
+        return;
+      }
+      seenPlacement = null;
+      if (wanted) {
+        wanted = null;
+        uiStore.getState().setPlacementCheck(null);
+        showGhost();
+      }
       const rect =
         at && terrain && placement
           ? brushRect(at.x, at.y, placement.size, terrain.width, terrain.height)
@@ -355,7 +545,6 @@ export function Viewport(props: ViewportProps) {
     // too steep) is told once, at the end. Esc, another tool or a cancelled pointer mid-drag puts
     // the stroke down: nothing of it is laid.
     let stroke: Stroke | null = null;
-    let disposed = false;
     const changedPreviews = () => {
       if (disposed) return;
       mine.previewVersion++;
@@ -493,12 +682,18 @@ export function Viewport(props: ViewportProps) {
           void sendStroke(done);
         },
       },
-      // With nothing in hand, a click on a guest looks at the guest rather than the tile under them.
+      // With nothing in hand, a click on a guest looks at the guest, and one on a ride or stall at
+      // that, rather than the tile under them. A guest in front of a ride is the guest.
       onPointClick: (clientX, clientY) => {
         if (latest.current.placement) return false;
         const guest = scene.pickGuestAt(clientX, clientY);
-        if (!guest) return false;
-        uiStore.getState().inspectGuest(guest.id);
+        if (guest) {
+          uiStore.getState().inspectGuest(guest.id);
+          return true;
+        }
+        const ride = scene.pickRideAt(clientX, clientY);
+        if (!ride) return false;
+        uiStore.getState().inspectRide(ride.id);
         return true;
       },
       onHover: (x, y) => {
@@ -520,9 +715,15 @@ export function Viewport(props: ViewportProps) {
         if (!client) return;
         const plan = planPlacement(placement, mods, x, y, terrain);
         if (!plan) return;
-        client
-          .command(plan.name, plan.input)
-          .then(onResult, (error: unknown) => onResult(failure(error)));
+        // A ride or stall stays in hand to build another; the tiles it took answer otherwise now.
+        const builds = isBuildCommand(plan.name);
+        client.command(plan.name, plan.input).then(
+          (result) => {
+            onResult(result);
+            if (builds && !disposed) recheck();
+          },
+          (error: unknown) => onResult(failure(error)),
+        );
       },
     });
 
@@ -568,11 +769,35 @@ export function Viewport(props: ViewportProps) {
     // The guests the scene was last given. The guests module keeps the last two sections to move
     // guests between them, so a section goes in once, when it is new.
     let guests: GuestSection | null | undefined;
+    // The rides and their status the scene was last given: each goes in when it is new.
+    let rides: readonly RidePublic[] | null | undefined;
+    let stamp: string | null | undefined;
+    let rideStatus: RideStatusSection | null | undefined;
     let frame = requestAnimationFrame(function draw(now) {
       const nextGuests = latest.current.getGuests?.() ?? null;
       if (nextGuests !== guests) {
         guests = nextGuests;
         scene.setGuests(nextGuests, now);
+      }
+      const nextRides = latest.current.rides ?? null;
+      if (nextRides !== rides) {
+        const changed = rides !== undefined;
+        rides = nextRides;
+        scene.setRides(nextRides);
+        // Someone built or took something down: where the ghost is may answer otherwise.
+        if (changed && wanted) recheck();
+      }
+      // Cash, the ground or the paths changed: so may the answer.
+      const nextStamp = latest.current.getCheckStamp?.() ?? null;
+      if (nextStamp !== stamp) {
+        const changed = stamp !== undefined;
+        stamp = nextStamp;
+        if (changed && wanted) recheck();
+      }
+      const nextStatus = latest.current.getRideStatus?.() ?? null;
+      if (nextStatus !== rideStatus) {
+        rideStatus = nextStatus;
+        scene.setRideStatus(nextStatus);
       }
       // The entrance comes with the snapshots, which render nothing: this is where it is noticed.
       park();
@@ -621,6 +846,10 @@ export function Viewport(props: ViewportProps) {
   useEffect(() => {
     parkRef.current?.();
   }, [props.paths]);
+
+  useEffect(() => {
+    live.current?.scene.setSimSpeed(props.simSpeed ?? 1);
+  }, [props.simSpeed]);
 
   // The build grid shows while there is something to place, and only then.
   useEffect(() => {

@@ -384,3 +384,59 @@ describe("uiStore: paths, the entrance, guests", () => {
     expect(state().selection).toEqual({ kind: "entrance" });
   });
 });
+
+describe("uiStore: rides and stalls", () => {
+  it("puts a ride on Rides and a stall on Shops, each one tile whatever the brush", () => {
+    state().setBrushSize(3);
+    state().startPlacement("ride_build", { type: "carousel", rot: 0 }, 3);
+    expect(state().tool).toBe("ride");
+    expect(state().placement).toEqual({
+      command: "ride_build",
+      defaults: { type: "carousel", rot: 0 },
+      size: 1,
+    });
+    state().startPlacement("stall_build", { type: "snack_stand", rot: 0 });
+    expect(state().tool).toBe("shop");
+    expect(state().brushSize).toBe(3);
+  });
+
+  it("turns the ride or stall in hand a quarter turn clockwise, round to the start", () => {
+    state().startPlacement("ride_build", { type: "big_wheel", rot: 0 });
+    const turns = [1, 2, 3, 0].map(() => {
+      state().rotatePlacement();
+      return state().placement?.defaults["rot"];
+    });
+    expect(turns).toEqual([1, 2, 3, 0]);
+    expect(state().placement?.defaults["type"]).toBe("big_wheel");
+  });
+
+  it("turns nothing else", () => {
+    state().rotatePlacement();
+    expect(state().placement).toBeNull();
+    state().setTool("terrain");
+    const raise = state().placement;
+    state().rotatePlacement();
+    expect(state().placement).toBe(raise);
+  });
+
+  it("forgets what the sim said of the spot once something else is in hand or it is put down", () => {
+    state().startPlacement("ride_build", { type: "carousel", rot: 0 });
+    state().setPlacementCheck({ ok: false, reason: "Ground is not flat" });
+    expect(state().placementCheck).toEqual({ ok: false, reason: "Ground is not flat" });
+    state().startPlacement("ride_build", { type: "big_wheel", rot: 0 });
+    expect(state().placementCheck).toBeNull();
+    state().setPlacementCheck({ ok: true, reason: null });
+    state().cancel();
+    expect(state().placementCheck).toBeNull();
+    state().startPlacement("stall_build", { type: "restrooms", rot: 0 });
+    state().setPlacementCheck({ ok: true, reason: null });
+    state().setTool("path");
+    expect(state().placementCheck).toBeNull();
+  });
+
+  it("selects a ride and opens the inspector on it", () => {
+    state().inspectRide(5);
+    expect(state().selection).toEqual({ kind: "ride", id: 5 });
+    expect(state().inspector).toEqual({ open: true, tab: "tile" });
+  });
+});

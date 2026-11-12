@@ -1,4 +1,5 @@
 import type { ExecResult } from "./commands/execute.js";
+import type { RideRecord, Tile } from "./rides/types.js";
 import { canBuildPath } from "./paths/paths.js";
 import { Sim } from "./sim.js";
 import { tileCorners } from "./terrain/terrain.js";
@@ -40,6 +41,15 @@ const PLAZA_W = 5;
 const PLAZA_H = 3;
 /** How long each queue stub off the loop is, in tiles. */
 const STUB_LENGTH = 3;
+/**
+ * How far down the main path from the plaza's bottom row the rides and stalls start, in tiles:
+ * the Big Wheel's footprint and the Carousel's on the east side, the first stall on the west, and
+ * the rows between one stall and the next.
+ */
+const WHEEL_DOWN = 3;
+const CAROUSEL_DOWN = 10;
+const STALLS_DOWN = 5;
+const STALL_GAP = 3;
 /** What each guest pays at the gate, in cents. */
 const ENTRY_FEE = 5_00;
 
@@ -110,12 +120,60 @@ function buildRun(sim: Sim, x0: number, y0: number, x1: number, y1: number, kind
   });
 }
 
+/** Builds a ride or stall through `command` and returns its record. */
+function buildRide(
+  sim: Sim,
+  command: "ride_build" | "stall_build",
+  type: string,
+  x: number,
+  y: number,
+  rot: 0 | 1 | 2 | 3,
+): RideRecord {
+  mustRun(sim, command, { type, x, y, rot });
+  return sim.world.rides[sim.world.rides.length - 1] as RideRecord;
+}
+
+/**
+ * The rides and stalls, all open, along the main path between the plaza and the gate, where every
+ * guest walks in. East of it, a Big Wheel and then a Carousel, each with a short queue running
+ * from its entrance to the main path and its exit one footpath tile from it; west of it, a Snack
+ * Stand, a Drinks Stand and Restrooms, each serving onto it. They are placed relative to the main
+ * path and the plaza, which the seed only moves by a tile or two, onto ground the land shaping
+ * leaves flat, and every build goes through the same commands (and `canPlaceRide`) a player's does.
+ */
+function buildRides(sim: Sim, main: { x: number; y: number }): void {
+  const { x, y } = main;
+
+  // The Big Wheel, unturned: two tiles wide and four long, beside the path, its exit on the west
+  // side facing it and its entrance below its south end, two queue tiles from the path.
+  const wheel = buildRide(sim, "ride_build", "big_wheel", x + 2, y + WHEEL_DOWN, 0);
+  const wheelIn = wheel.entrance as Tile;
+  buildRun(sim, wheelIn.x, wheelIn.y, x + 1, wheelIn.y, "queue");
+  const wheelOut = wheel.exit as Tile;
+  buildRun(sim, wheelOut.x, wheelOut.y, wheelOut.x, wheelOut.y, "foot");
+
+  // The Carousel, turned half round: its exit on the west side facing the path, its entrance in
+  // the middle of its north side, three queue tiles from the path.
+  const carousel = buildRide(sim, "ride_build", "carousel", x + 2, y + CAROUSEL_DOWN, 2);
+  const carouselIn = carousel.entrance as Tile;
+  buildRun(sim, carouselIn.x, carouselIn.y, x + 1, carouselIn.y, "queue");
+  const carouselOut = carousel.exit as Tile;
+  buildRun(sim, carouselOut.x, carouselOut.y, carouselOut.x, carouselOut.y, "foot");
+
+  // The stalls, turned to face east onto the path (rot 3), three rows apart.
+  const stalls = (["snack_stand", "drinks_stand", "restrooms"] as const).map((type, i) =>
+    buildRide(sim, "stall_build", type, x - 1, y + STALLS_DOWN + i * STALL_GAP, 3),
+  );
+
+  for (const ride of [wheel, carousel, ...stalls]) mustRun(sim, "ride_open", { id: ride.id });
+}
+
 /**
  * Lays the entrance, paths and fee, and opens the park. See `createSamplePark`. Where things go is
  * read off the land as it is, not assumed from the recipe: the seed moves the hill and the pond by
  * a tile each way, and for some seeds that leaves the pond's shore where the loop would have run.
  */
-function layOutPark(sim: Sim, land: Landmarks): void {
+function layOutPark(sim: Sim, land: Landmarks, withRides: boolean): void {
   const { world } = sim;
   const { hillX, hillY, pondX, pondY, pondW, pondH } = land;
   const last = SAMPLE_SIZE - 1;
@@ -154,9 +212,11 @@ function layOutPark(sim: Sim, land: Landmarks): void {
   buildRun(sim, east, north, east, plazaY, "foot");
   buildRun(sim, east, plazaY, plazaX, plazaY, "foot");
 
-  // Two queue stubs off the loop, where rides will later stand: one west, one east.
+  // Two queue stubs off the loop, one west and one east, for the player's own rides.
   buildRun(sim, west - STUB_LENGTH, hillY, west - 1, hillY, "queue");
   buildRun(sim, east + 1, hillY, east + STUB_LENGTH, hillY, "queue");
+
+  if (withRides) buildRides(sim, { x: gateX, y: plazaBottom });
 
   mustRun(sim, "park_set_entry_fee", { cents: ENTRY_FEE });
   mustRun(sim, "park_open", {});
@@ -172,11 +232,16 @@ function layOutPark(sim: Sim, land: Landmarks): void {
  * Unless `withPark` is false, the park is also laid out and opened: an entrance on the south edge,
  * a main footpath from it up to a plaza at the pond's waterline, a loop of footpath around the
  * base of the hill, joined to the plaza by a path down the pond's west shore, two short queue
- * stubs off the loop, a $5.00 entry fee, and the park open. Where each piece goes is read off the
+ * stubs off the loop, a $5.00 entry fee, and the park open. Unless `withRides` is also false, it
+ * gets its rides and stalls too, all open (`buildRides`): a Big Wheel and a Carousel with short
+ * queues off the main path, and a Snack Stand, a Drinks Stand and Restrooms beside it. Where each piece goes is read off the
  * land the seed produced (`canPave`), and every tile is built through `path_build`, so nothing
  * lands on water, under the pond's edge, or on a slope that is too steep, whatever the seed.
  */
-export function createSamplePark(seed: number, options: { withPark?: boolean } = {}): World {
+export function createSamplePark(
+  seed: number,
+  options: { withPark?: boolean; withRides?: boolean } = {},
+): World {
   const world = createWorld({
     width: SAMPLE_SIZE,
     height: SAMPLE_SIZE,
@@ -256,7 +321,9 @@ export function createSamplePark(seed: number, options: { withPark?: boolean } =
     surface: SURFACE_SAND,
   });
 
-  if (options.withPark !== false) layOutPark(sim, { hillX, hillY, pondX, pondY, pondW, pondH });
+  if (options.withPark !== false) {
+    layOutPark(sim, { hillX, hillY, pondX, pondY, pondW, pondH }, options.withRides !== false);
+  }
 
   // The park is handed over as if nothing had been paid for: full purse, nothing to undo.
   world.finance.cash = STARTING_CASH;

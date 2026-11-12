@@ -179,6 +179,25 @@ describe("interpolateGuests", () => {
   });
 });
 
+describe("interpolateGuests, getting on and off rides", () => {
+  const RIDING = 7;
+  const withState = (m: GuestMoment, state: number[]): GuestMoment => ({ ...m, state });
+  const before = withState(moment(1000, [[1, 0, 0]]), [RIDING]);
+
+  it("does not walk a guest out of the middle of a ride, nor into it", () => {
+    const off = withState(moment(1050, [[1, 8, 0]]), [2]);
+    expect(places(before, off, 1050)).toEqual({ 1: [8, 0] });
+    const on = withState(moment(1100, [[1, 0, 0]]), [RIDING]);
+    expect(places(withState(moment(1050, [[1, 8, 0]]), [2]), on, 1100)).toEqual({ 1: [0, 0] });
+    // Walking before and after still walks, and riding both times stays put.
+    const walking = withState(moment(1050, [[1, 8, 0]]), [2]);
+    expect(places(withState(moment(1000, [[1, 0, 0]]), [2]), walking, 1075)).toEqual({ 1: [4, 0] });
+    expect(places(before, withState(moment(1050, [[1, 0, 0]]), [RIDING]), 1075)).toEqual({
+      1: [0, 0],
+    });
+  });
+});
+
 describe("angleDelta", () => {
   it("is the short way round", () => {
     expect(angleDelta(0, 1)).toBeCloseTo(1, 12);

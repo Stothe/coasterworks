@@ -52,11 +52,13 @@ test("the dock opens a tray for each tool, Water is paid for, and Escape puts it
   await expect(tool("Select")).toHaveAttribute("aria-pressed", "false");
   await expect(page.getByRole("region", { name: "Terrain tray" })).toBeVisible();
 
-  // 3 is Rides, whose tray is empty until the next update.
+  // 3 is Rides, whose tray lists the rides the sim can build.
   await page.keyboard.press("3");
   await expect(tool("Rides")).toHaveAttribute("aria-pressed", "true");
   await expect(tool("Terrain")).toHaveAttribute("aria-pressed", "false");
-  await expect(page.getByText("Coming with the next update")).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "Rides tray" }).getByRole("button", { name: /^Carousel/ }),
+  ).toBeVisible();
   await expect(page.getByRole("region", { name: "Terrain tray" })).toHaveCount(0);
 
   // 1 is Terrain again. Hold the park still, then fill the water in near the pond.

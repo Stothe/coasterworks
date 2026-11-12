@@ -97,10 +97,41 @@ describe("planPlacement: the brush", () => {
   });
 
   it("places any other command over the brush with its defaults, and nothing else of its own", () => {
-    expect(planPlacement(place("ride_build", { kind: "carousel" }), none, 0, 0, terrain)).toEqual({
-      name: "ride_build",
-      input: { x: 0, y: 0, w: 1, h: 1, kind: "carousel" },
+    expect(planPlacement(place("scenery_plant", { kind: "pine" }), none, 0, 0, terrain)).toEqual({
+      name: "scenery_plant",
+      input: { x: 0, y: 0, w: 1, h: 1, kind: "pine" },
     });
+  });
+});
+
+describe("planPlacement: rides and stalls", () => {
+  const terrain = flat(16, 16);
+
+  it("builds with the turned footprint centred on the click, at its top-left tile", () => {
+    // A carousel is 3 by 3: the click is its middle tile.
+    expect(
+      planPlacement(place("ride_build", { type: "carousel", rot: 0 }), none, 5, 6, terrain),
+    ).toEqual({ name: "ride_build", input: { type: "carousel", x: 4, y: 5, rot: 0 } });
+    // A big wheel is 2 by 4, and 4 by 2 turned once or three times.
+    expect(
+      planPlacement(place("ride_build", { type: "big_wheel", rot: 0 }), none, 5, 6, terrain),
+    ).toEqual({ name: "ride_build", input: { type: "big_wheel", x: 5, y: 5, rot: 0 } });
+    expect(
+      planPlacement(place("ride_build", { type: "big_wheel", rot: 3 }), none, 5, 6, terrain),
+    ).toEqual({ name: "ride_build", input: { type: "big_wheel", x: 4, y: 6, rot: 3 } });
+    // A stall is one tile.
+    expect(
+      planPlacement(place("stall_build", { type: "snack_stand", rot: 2 }), none, 5, 6, terrain),
+    ).toEqual({ name: "stall_build", input: { type: "snack_stand", x: 5, y: 6, rot: 2 } });
+  });
+
+  it("sends nothing for a footprint off the top or left of the map, or a type there is not", () => {
+    const carousel = place("ride_build", { type: "carousel", rot: 0 });
+    expect(planPlacement(carousel, none, 0, 5, terrain)).toBeNull();
+    expect(planPlacement(carousel, none, 5, 0, terrain)).toBeNull();
+    expect(planPlacement(place("ride_build", { type: "nope", rot: 0 }), none, 5, 5, terrain)).toBe(
+      null,
+    );
   });
 });
 

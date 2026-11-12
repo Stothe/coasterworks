@@ -19,7 +19,7 @@ interface EntranceUndo {
 export const parkSetEntrance = defineCommand({
   name: "park_set_entrance",
   description:
-    "Places the park entrance on a tile on the edge of the map, moving it if there is one already. The tile cannot have water. Any path on the tile is replaced. Costs $500 each time, and a move is not refunded.",
+    "Places the park entrance on a tile on the edge of the map, moving it if there is one already. The tile cannot have water or a ride. Any path on the tile is replaced. Costs $500 each time, and a move is not refunded.",
   category: "park",
   input: z.object({ x: z.int().min(0), y: z.int().min(0) }),
   undoable: true,
@@ -29,6 +29,7 @@ export const parkSetEntrance = defineCommand({
     if (!inBounds(t, x, y)) return OUTSIDE_PARK;
     if (edgeSide(t, x, y) === -1) return "The entrance must be on the park edge";
     if ((t.water[tileIndex(t, x, y)] as number) > 0) return "Cannot build on water";
+    if ((t.occupant[tileIndex(t, x, y)] as number) !== 0) return "Something is already here";
     return null;
   },
   apply: (world, { x, y }): EntranceUndo => {

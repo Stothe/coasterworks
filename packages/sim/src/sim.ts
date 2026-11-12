@@ -6,6 +6,7 @@ import { redoLast, undoLast } from "./commands/undo.js";
 import { createDefaultRegistry } from "./registry-default.js";
 import { financeSystem } from "./systems/finance.js";
 import { guestSystem } from "./systems/guests.js";
+import { rideSystem } from "./systems/rides.js";
 import type { System } from "./systems/types.js";
 import { TICKS_PER_DAY } from "./time.js";
 import { hashWorld } from "./world/hash.js";
@@ -19,7 +20,7 @@ export class Sim {
   private current: World;
   readonly registry: Registry;
   /** Run in this order on every tick. Later tasks append their own. */
-  systems: System[] = [financeSystem, guestSystem];
+  systems: System[] = [financeSystem, rideSystem, guestSystem];
 
   constructor(world: World, registry: Registry = createDefaultRegistry()) {
     this.current = world;

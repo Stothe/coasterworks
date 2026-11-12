@@ -4,6 +4,7 @@ import { buildActions, type UiActionDeps } from "../src/actions/registry";
 import {
   KEYMAP,
   bindingFor,
+  bindingsFor,
   formatCombo,
   matchCombo,
   shortcutOf,
@@ -218,6 +219,8 @@ describe("KEYMAP", () => {
       cancel: vi.fn(),
       terrain: vi.fn(),
       brush: vi.fn(),
+      rotate: vi.fn(),
+      canRotate: () => false,
     },
   };
   const ids = new Set(buildActions([], deps).map((action) => action.id));
@@ -226,9 +229,26 @@ describe("KEYMAP", () => {
     for (const { combo, actionId } of KEYMAP) expect(ids.has(actionId), combo).toBe(true);
   });
 
-  it("has no combo twice", () => {
+  it("has no combo twice but R, which turns a ride in hand and else takes up Raise", () => {
     const combos = KEYMAP.map((binding) => binding.combo);
-    expect(new Set(combos).size).toBe(combos.length);
+    const twice = combos.filter((combo, at) => combos.indexOf(combo) !== at);
+    expect(twice).toEqual(["r"]);
+    expect(KEYMAP.filter((b) => b.combo === "r").map((b) => b.actionId)).toEqual([
+      "ui.rotate",
+      "ui.terrain.raise",
+    ]);
+  });
+
+  it("runs the first of a shared key's bindings that can be done: all of them are offered", () => {
+    const at = (k: string) =>
+      ({ ...key(k), target: { tagName: "DIV" } }) as unknown as KeyboardEvent;
+    expect(bindingsFor(at("r"), false).map((b) => b.actionId)).toEqual([
+      "ui.rotate",
+      "ui.terrain.raise",
+    ]);
+    expect(bindingsFor(at("l"), false).map((b) => b.actionId)).toEqual(["ui.terrain.lower"]);
+    const typed = { ...key("r"), target: { tagName: "INPUT" } } as unknown as KeyboardEvent;
+    expect(bindingsFor(typed, false)).toEqual([]);
   });
 
   it("covers the keys of the interface", () => {
@@ -254,7 +274,10 @@ describe("KEYMAP", () => {
   });
 
   it("puts the terrain verbs and the brush on their keys", () => {
-    const by = (combo: string) => KEYMAP.find((binding) => binding.combo === combo)?.actionId;
+    // R is Rotate first, for a ride in hand; the terrain verb is the binding after it.
+    const by = (combo: string) =>
+      KEYMAP.find((binding) => binding.combo === combo && binding.actionId !== "ui.rotate")
+        ?.actionId;
     expect(["r", "l", "v", "m", "w", "u"].map(by)).toEqual([
       "ui.terrain.raise",
       "ui.terrain.lower",

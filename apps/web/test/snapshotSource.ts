@@ -1,3 +1,4 @@
+import { emptyRideStatus } from "@coasterworks/protocol";
 import type { DecodedSnapshot, GuestSection, SnapshotHeader } from "@coasterworks/protocol";
 import type { SnapshotSource } from "../src/state/useSnapshot";
 
@@ -29,6 +30,9 @@ export function snapshotOf(over: Partial<SnapshotHeader> = {}): DecodedSnapshot 
       hasTerrain: false,
       pathVersion: 0,
       hasPaths: false,
+      rideVersion: 0,
+      hasRides: false,
+      rideCount: 0,
       guestCount: 0,
       width: 16,
       height: 16,
@@ -44,6 +48,7 @@ export function snapshotOf(over: Partial<SnapshotHeader> = {}): DecodedSnapshot 
       ...over,
     },
     guests: noGuests(),
+    rideStatus: emptyRideStatus(),
   };
 }
 

@@ -30,6 +30,8 @@ const deps: UiActionDeps = {
     cancel: noop,
     terrain: noop,
     brush: noop,
+    rotate: noop,
+    canRotate: () => false,
   },
 };
 const actions = buildActions(createDefaultRegistry().catalog(), deps);
@@ -399,5 +401,52 @@ describe("Inspector: the park's name", () => {
         name: "Renamed Park",
       }),
     ).toBeTruthy();
+  });
+});
+
+describe("Inspector: rides and stalls", () => {
+  const ride = (id: number, kind: "ride" | "stall") => ({
+    id,
+    type: kind === "ride" ? "carousel" : "snack_stand",
+    kind,
+    x: 0,
+    y: 0,
+    rot: 0 as const,
+    name: `Thing ${id}`,
+    open: true,
+    price: 100,
+    entrance: null,
+    exit: null,
+    service: null,
+  });
+
+  it("Overview counts the rides and the stalls", () => {
+    store().openInspector("overview");
+    renderInspector({ rides: [ride(1, "ride"), ride(2, "stall"), ride(3, "stall")] });
+    const row = (label: string) => screen.getByText(label).nextElementSibling?.textContent;
+    expect(row("Rides")).toBe("1");
+    expect(row("Shops and stalls")).toBe("2");
+  });
+
+  it("shows a selected ride, asked after by id, under the one panel", async () => {
+    query.mockResolvedValue({
+      ok: true,
+      result: {
+        ...ride(4, "ride"),
+        name: "Carousel 1",
+        phase: 2,
+        riders: [],
+        queue: [],
+        stats: { customers: 0, income: 0, runningCost: 0, monthCustomers: 0, monthIncome: 0 },
+        content: { name: "Carousel", cost: 120_000, runningCost: 3_000 },
+      },
+    });
+    store().inspectRide(4);
+    renderInspector();
+    expect(await within(inspector()).findByRole("heading", { name: "Carousel 1" })).toBeTruthy();
+    expect(query).toHaveBeenCalledWith("ride_get", { id: 4 });
+    expect(tabs()).toEqual(["Overview", "Stats"]);
+    fireEvent.click(within(inspector()).getByRole("button", { name: "Close ride" }));
+    await vi.waitFor(() => expect(execute).toHaveBeenCalledWith("ride_close", { id: 4 }));
   });
 });

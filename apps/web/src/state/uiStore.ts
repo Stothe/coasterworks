@@ -7,6 +7,7 @@ import {
   type UiSelection,
 } from "../actions/types";
 import type { BrushSize } from "../viewport/brush";
+import { isBuildCommand, nextRot, rotOf, type RideCheck } from "../viewport/ridePlacement";
 import {
   optionsOfDefaults,
   terrainPlacement,
@@ -40,6 +41,11 @@ export interface UiState {
   brushSize: BrushSize;
   selection: UiSelection;
   inspector: InspectorState;
+  /**
+   * What the sim said of the ride or stall in hand where the pointer is: whether it would be
+   * built there and why not. Null while nothing has been asked, or nothing of the kind is in hand.
+   */
+  placementCheck: RideCheck | null;
   commandBarOpen: boolean;
   /** The action whose form the command bar is showing, or null while it shows the list. */
   formAction: Action | null;
@@ -60,6 +66,10 @@ export interface UiState {
   startTerrain(verb: TerrainVerb, options?: TerrainOptions): void;
   /** Sets the brush size, for the placement in progress and for the next one. */
   setBrushSize(size: BrushSize): void;
+  /** Turns the ride or stall in hand a quarter turn clockwise (R). Anything else stays as it is. */
+  rotatePlacement(): void;
+  /** What the sim said of the ride or stall in hand where the pointer is; the view sets it. */
+  setPlacementCheck(check: RideCheck | null): void;
   select(selection: UiSelection): void;
   /**
    * Opens the inspector on `tab`. A park tab (Overview, Finances, Timeline) is the park's, so it
@@ -70,6 +80,8 @@ export interface UiState {
   inspectTile(x: number, y: number): void;
   /** Selects the guest with `id` and opens the inspector on them. */
   inspectGuest(id: number): void;
+  /** Selects the ride or stall with `id` and opens the inspector on it. */
+  inspectRide(id: number): void;
   /** Selects the park entrance and opens the inspector on it. */
   inspectEntrance(): void;
   closeInspector(): void;
@@ -89,17 +101,21 @@ export interface UiState {
   cancel(): void;
 }
 
-/** The dock tool a command belongs to, from the category its name starts with. */
+/**
+ * The dock tool a command belongs to, from the category its name starts with. A stall is the Shops
+ * tool's, whose name is not the commands'.
+ */
 function dockToolOf(command: string): DockTool | undefined {
+  if (command.startsWith("stall_")) return "shop";
   return DOCK_TOOLS.find((tool) => command.startsWith(`${tool}_`));
 }
 
 /**
  * True for a command placed one tile at a time whatever the brush: paths, which are drawn by
- * dragging, and the park entrance.
+ * dragging, the park entrance, and a ride or stall, whose footprint is its own size.
  */
 export function placedOneTile(command: string): boolean {
-  return command.startsWith("path_") || command === "park_set_entrance";
+  return command.startsWith("path_") || command === "park_set_entrance" || isBuildCommand(command);
 }
 
 /** A footpath, the path tool in hand when the dock goes to Paths. */
@@ -118,6 +134,7 @@ export const uiStore = createStore<UiState>()((set, get) => ({
   brushSize: 1,
   selection: null,
   inspector: { open: false, tab: "overview" },
+  placementCheck: null,
   commandBarOpen: false,
   formAction: null,
   helpOpen: false,
@@ -133,7 +150,7 @@ export const uiStore = createStore<UiState>()((set, get) => ({
           : tool === "path"
             ? { ...FOOTPATH, defaults: { ...FOOTPATH.defaults } }
             : null;
-      return { tool, placement };
+      return { tool, placement, placementCheck: null };
     }),
   startPlacement: (command, defaults, size) =>
     set((state) => ({
@@ -145,6 +162,8 @@ export const uiStore = createStore<UiState>()((set, get) => ({
       },
       // A one-tile placement does not change the brush the next terrain tool starts with.
       brushSize: placedOneTile(command) ? state.brushSize : (size ?? state.brushSize),
+      // A new thing in hand has not been asked about yet.
+      placementCheck: null,
       // The player picked it from the bar, which has done its work.
       commandBarOpen: false,
       formAction: null,
@@ -164,6 +183,14 @@ export const uiStore = createStore<UiState>()((set, get) => ({
         size: placedOneTile(state.placement.command) ? 1 : size,
       },
     })),
+  rotatePlacement: () =>
+    set((state) => {
+      const { placement } = state;
+      if (!placement || !isBuildCommand(placement.command)) return state;
+      const rot = nextRot(rotOf(placement.defaults));
+      return { placement: { ...placement, defaults: { ...placement.defaults, rot } } };
+    }),
+  setPlacementCheck: (placementCheck) => set({ placementCheck }),
   select: (selection) => set({ selection }),
   openInspector: (tab) =>
     set((state) => ({
@@ -174,6 +201,8 @@ export const uiStore = createStore<UiState>()((set, get) => ({
     set({ selection: { kind: "tile", x, y }, inspector: { open: true, tab: "tile" } }),
   inspectGuest: (id) =>
     set({ selection: { kind: "guest", id }, inspector: { open: true, tab: "tile" } }),
+  inspectRide: (id) =>
+    set({ selection: { kind: "ride", id }, inspector: { open: true, tab: "tile" } }),
   inspectEntrance: () =>
     set({ selection: { kind: "entrance" }, inspector: { open: true, tab: "tile" } }),
   closeInspector: () => set((state) => ({ inspector: { ...state.inspector, open: false } })),
@@ -192,7 +221,7 @@ export const uiStore = createStore<UiState>()((set, get) => ({
       if (state.tool === "select" && state.placement === null && state.inspector.open) {
         return { inspector: { ...state.inspector, open: false } };
       }
-      return { placement: null, tool: "select" };
+      return { placement: null, tool: "select", placementCheck: null };
     }),
 }));
 

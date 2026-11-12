@@ -55,6 +55,8 @@ function host(over: Partial<HostState> = {}): HostState {
     snapshot: snapshotOf({ loan: 500_000, hasTerrain: true }),
     terrain: terrain(),
     paths: null,
+    rides: null,
+    getRideStatus: () => null,
     guests: null,
     park: null,
     events: [],
@@ -127,12 +129,12 @@ describe("the page's hook for tests", () => {
     const hook = window.__coasterworks;
     expect(hook?.ready).toBe(true);
     // The park opens with nothing in hand.
-    expect(hook?.uiState()).toEqual({ tool: "select", placement: null });
+    expect(hook?.uiState()).toEqual({ tool: "select", placement: null, placementCheck: null });
     act(() => press("1"));
     expect(hook?.uiState().tool).toBe("terrain");
     expect(hook?.uiState().placement?.command).toBe("terrain_raise");
     act(() => press("Escape"));
-    expect(hook?.uiState()).toEqual({ tool: "select", placement: null });
+    expect(hook?.uiState()).toEqual({ tool: "select", placement: null, placementCheck: null });
   });
 });
 
@@ -438,10 +440,11 @@ describe("the dock does not swallow clicks beside it", () => {
 describe("what the player reads", () => {
   it("names no plan or task, and no inspector stand-in", async () => {
     await ready();
-    press("3");
+    // Scenery has no commands yet, so its tray says what is still to come.
+    press("4");
     fireEvent.click(cashPill());
     const text = document.body.textContent ?? "";
-    expect(text).toContain("Rides, scenery, shops and staff are coming soon.");
+    expect(text).toContain("Scenery and staff are coming soon.");
     expect(text).not.toMatch(/\bPlan [A-Z0-9]\b|next task|Task \d|coming in the next/i);
   });
 });

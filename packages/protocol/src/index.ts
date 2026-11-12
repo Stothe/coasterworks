@@ -28,11 +28,19 @@ export type {
   UndoMessage,
   WelcomeMessage,
 } from "./messages.js";
-export { decodeSnapshot, encodeSnapshot } from "./snapshot.js";
+export {
+  ParkPublicSchema,
+  RidePublicSchema,
+  decodeSnapshot,
+  emptyRideStatus,
+  encodeSnapshot,
+} from "./snapshot.js";
 export type {
   DecodedSnapshot,
   GuestSection,
   ParkPublic,
+  RidePublic,
+  RideStatusSection,
   SnapshotHeader,
   SnapshotParts,
   SnapshotTerrain,

@@ -1,5 +1,5 @@
 import { TICKS_PER_SECOND, dateOf, formatDate } from "@coasterworks/sim";
-import type { GuestStore, LogEntry, Sim, World } from "@coasterworks/sim";
+import type { GuestStore, LogEntry, RideRecord, Sim, World } from "@coasterworks/sim";
 import {
   PROTOCOL_VERSION,
   SpeedSchema,
@@ -11,7 +11,13 @@ import {
   type ResultPayload,
   type Speed,
 } from "./messages.js";
-import { encodeSnapshot, type GuestSection, type SnapshotParts } from "./snapshot.js";
+import {
+  encodeSnapshot,
+  type GuestSection,
+  type RidePublic,
+  type RideStatusSection,
+  type SnapshotParts,
+} from "./snapshot.js";
 import type { Frame, MessageTransport } from "./transport.js";
 
 /** The clock and the repeating timer the host runs on. The app supplies them; `src` has no globals. */
@@ -40,8 +46,26 @@ interface ClientState {
   lastTerrainVersion: number;
   /** The path version this client was last sent, or -1 if it has had none. */
   lastPathVersion: number;
+  /** The ride version this client was last sent, or -1 if it has had none. */
+  lastRideVersion: number;
   helloDone: boolean;
 }
+
+/** The layer versions a frame was built from. */
+interface LayerVersions {
+  terrain: number;
+  paths: number;
+  rides: number;
+}
+
+/** Which layers a frame carries. */
+interface Layers {
+  terrain: boolean;
+  paths: boolean;
+  rides: boolean;
+}
+
+const ALL_LAYERS: Layers = { terrain: true, paths: true, rides: true };
 
 const DEFAULT_SNAPSHOT_INTERVAL_MS = 50;
 const DEFAULT_MAX_TICKS_PER_FRAME = 40;
@@ -108,6 +132,59 @@ function guestSection(store: GuestStore): GuestSection {
   return section;
 }
 
+/** The rides of the world in ascending id order, without changing the world's own list. */
+function ridesById(rides: readonly RideRecord[]): RideRecord[] {
+  return [...rides].sort((a, b) => a.id - b.id);
+}
+
+function tileOrNull(tile: { x: number; y: number } | null): { x: number; y: number } | null {
+  return tile === null ? null : { x: tile.x, y: tile.y };
+}
+
+/** A ride as clients see it: copied, so nothing the sim does next can change it. */
+function ridePublic(ride: RideRecord): RidePublic {
+  return {
+    id: ride.id,
+    type: ride.type,
+    kind: ride.kind,
+    x: ride.x,
+    y: ride.y,
+    rot: ride.rot,
+    name: ride.name,
+    open: ride.open,
+    price: ride.price,
+    entrance: tileOrNull(ride.entrance),
+    exit: tileOrNull(ride.exit),
+    service: tileOrNull(ride.service),
+  };
+}
+
+/** `value` held to `0..max`, so a typed array stores it as the most it can rather than wrapping. */
+function clamp(value: number, max: number): number {
+  return value < 0 ? 0 : value > max ? max : value;
+}
+
+/** What every ride is doing, in ascending id order, each value clamped to fit its field. */
+function rideStatusSection(rides: readonly RideRecord[]): RideStatusSection {
+  const count = rides.length;
+  const section: RideStatusSection = {
+    count,
+    id: new Int32Array(count),
+    phase: new Uint8Array(count),
+    phaseTicks: new Uint16Array(count),
+    riders: new Uint8Array(count),
+    queue: new Uint16Array(count),
+  };
+  rides.forEach((ride, i) => {
+    section.id[i] = ride.id;
+    section.phase[i] = clamp(ride.phase, 0xff);
+    section.phaseTicks[i] = clamp(ride.phaseTicks, 0xffff);
+    section.riders[i] = clamp(ride.riders.length, 0xff);
+    section.queue[i] = clamp(ride.queue.length, 0xffff);
+  });
+  return section;
+}
+
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -146,6 +223,13 @@ export class SimHostServer {
   private pathVersion = 0;
   /** The world's own `pathVersion` as of the last time this host looked. */
   private seenPathVersion: number;
+  /**
+   * Bumped whenever the world's `rideVersion` moves (a ride command, or undoing or redoing one),
+   * and when the sim holds a different world; kept by the host for the same reason as `pathVersion`.
+   */
+  private rideVersion = 0;
+  /** The world's own `rideVersion` as of the last time this host looked. */
+  private seenRideVersion: number;
   /** Where the scheduler's accounting of real time stands; see `advance`. */
   private lastTickAt: number;
   private lastSnapshotAt: number;
@@ -177,6 +261,7 @@ export class SimHostServer {
     this.trackedWorld = sim.world;
     this.loggedCount = sim.world.log.length;
     this.seenPathVersion = sim.world.pathVersion;
+    this.seenRideVersion = sim.world.rideVersion;
   }
 
   get speed(): Speed {
@@ -211,6 +296,7 @@ export class SimHostServer {
       transport,
       lastTerrainVersion: -1,
       lastPathVersion: -1,
+      lastRideVersion: -1,
       helloDone: false,
     };
     this.clients.set(transport, client);
@@ -435,6 +521,8 @@ export class SimHostServer {
     this.terrainVersion++;
     this.pathVersion++;
     this.seenPathVersion = world.pathVersion;
+    this.rideVersion++;
+    this.seenRideVersion = world.rideVersion;
   }
 
   /** Counts a change to the world's paths or entrance, which its `pathVersion` records. */
@@ -443,6 +531,21 @@ export class SimHostServer {
     if (seen === this.seenPathVersion) return;
     this.seenPathVersion = seen;
     this.pathVersion++;
+  }
+
+  /** Counts a change to the world's rides, which its `rideVersion` records. */
+  private trackRides(): void {
+    const seen = this.sim.world.rideVersion;
+    if (seen === this.seenRideVersion) return;
+    this.seenRideVersion = seen;
+    this.rideVersion++;
+  }
+
+  /** Catches up with the world's path and ride versions, and returns the layer versions now. */
+  private currentVersions(): LayerVersions {
+    this.trackPaths();
+    this.trackRides();
+    return { terrain: this.terrainVersion, paths: this.pathVersion, rides: this.rideVersion };
   }
 
   /**
@@ -513,15 +616,17 @@ export class SimHostServer {
 
   /**
    * The one place a snapshot is made, for a join, a broadcast, a periodic send and a halt alike.
-   * The terrain and the paths are in it only when asked for; the park and the guests are in every
-   * one, read from the world as it is now.
+   * The terrain, the paths and the ride list are in it only when asked for; the park, the guests
+   * and the ride status are in every one, read from the world as it is now. `versions` are the
+   * versions the frame says it holds.
    */
-  private buildSnapshot(withTerrain: boolean, withPaths: boolean): Uint8Array {
+  private buildSnapshot(layers: Layers, versions: LayerVersions): Uint8Array {
     const { tick, terrain, finance, park, guests } = this.sim.world;
+    const rides = ridesById(this.sim.world.rides);
     const section = guestSection(guests);
-    const parts: SnapshotParts = { guests: section };
-    if (withTerrain) parts.terrain = terrain;
-    if (withPaths) parts.paths = terrain.path;
+    const parts: SnapshotParts = { guests: section, rideStatus: rideStatusSection(rides) };
+    if (layers.terrain) parts.terrain = terrain;
+    if (layers.paths) parts.paths = terrain.path;
     return encodeSnapshot(
       {
         tick,
@@ -531,10 +636,14 @@ export class SimHostServer {
         loan: finance.loan,
         monthStartCash: finance.monthStart.cash,
         date: formatDate(dateOf(tick)),
-        terrainVersion: this.terrainVersion,
-        hasTerrain: withTerrain,
-        pathVersion: this.pathVersion,
-        hasPaths: withPaths,
+        terrainVersion: versions.terrain,
+        hasTerrain: layers.terrain,
+        pathVersion: versions.paths,
+        hasPaths: layers.paths,
+        rideVersion: versions.rides,
+        hasRides: layers.rides,
+        ...(layers.rides ? { rides: rides.map(ridePublic) } : {}),
+        rideCount: rides.length,
         guestCount: section.count,
         width: terrain.width,
         height: terrain.height,
@@ -555,34 +664,35 @@ export class SimHostServer {
     );
   }
 
-  /** Sends one client a full snapshot, terrain and paths included. */
+  /** Sends one client a full snapshot, terrain, paths and rides included. */
   private sendSnapshot(client: ClientState): void {
-    this.trackPaths();
-    const versions = { terrain: this.terrainVersion, paths: this.pathVersion };
-    this.deliverSnapshot(client, this.buildSnapshot(true, true), versions, true, true);
+    const versions = this.currentVersions();
+    this.deliverSnapshot(client, this.buildSnapshot(ALL_LAYERS, versions), versions, ALL_LAYERS);
   }
 
   /**
-   * Sends every client a snapshot, with the terrain and the paths only for those that are behind.
-   * Clients that need the same layers are sent the same frame, which is built once.
+   * Sends every client a snapshot, with the terrain, the paths and the rides only for those that
+   * are behind. Clients that need the same layers are sent the same frame, which is built once.
    */
   private broadcastSnapshot(): void {
-    this.trackPaths();
     // The versions as they are now, before any frame goes out: a client's handler can run while
     // its frame is delivered and change the world, and a client sent a frame built before that
     // must not be recorded as holding what came after (it is sent the layers again instead).
-    const versions = { terrain: this.terrainVersion, paths: this.pathVersion };
+    const versions = this.currentVersions();
     const frames = new Map<number, Uint8Array>();
     for (const client of this.helloClients()) {
-      const withTerrain = client.lastTerrainVersion < versions.terrain;
-      const withPaths = client.lastPathVersion < versions.paths;
-      const kind = (withTerrain ? 1 : 0) + (withPaths ? 2 : 0);
+      const layers: Layers = {
+        terrain: client.lastTerrainVersion < versions.terrain,
+        paths: client.lastPathVersion < versions.paths,
+        rides: client.lastRideVersion < versions.rides,
+      };
+      const kind = (layers.terrain ? 1 : 0) + (layers.paths ? 2 : 0) + (layers.rides ? 4 : 0);
       let frame = frames.get(kind);
       if (!frame) {
-        frame = this.buildSnapshot(withTerrain, withPaths);
+        frame = this.buildSnapshot(layers, versions);
         frames.set(kind, frame);
       }
-      this.deliverSnapshot(client, frame, versions, withTerrain, withPaths);
+      this.deliverSnapshot(client, frame, versions, layers);
     }
     if (this.timers) this.lastSnapshotAt = this.timers.now();
   }
@@ -595,14 +705,15 @@ export class SimHostServer {
   private deliverSnapshot(
     client: ClientState,
     frame: Uint8Array,
-    versions: { terrain: number; paths: number },
-    withTerrain: boolean,
-    withPaths: boolean,
+    versions: LayerVersions,
+    layers: Layers,
   ): void {
     if (!this.send(client, frame)) return;
-    if (withTerrain)
+    if (layers.terrain) {
       client.lastTerrainVersion = Math.max(client.lastTerrainVersion, versions.terrain);
-    if (withPaths) client.lastPathVersion = Math.max(client.lastPathVersion, versions.paths);
+    }
+    if (layers.paths) client.lastPathVersion = Math.max(client.lastPathVersion, versions.paths);
+    if (layers.rides) client.lastRideVersion = Math.max(client.lastRideVersion, versions.rides);
   }
 
   private helloClients(): ClientState[] {

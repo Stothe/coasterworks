@@ -1,3 +1,4 @@
+import type { RidePublic } from "@coasterworks/protocol";
 import type { TerrainData } from "@coasterworks/render";
 import { useMemo } from "react";
 import type { ExecResult } from "@coasterworks/sim";
@@ -11,6 +12,7 @@ import { useParkState } from "../state/useParkState";
 import { EntranceInspector } from "./inspector/EntranceInspector";
 import { GuestInspector, type QueryFn } from "./inspector/GuestInspector";
 import { ParkOverview } from "./inspector/ParkOverview";
+import { RideInspector } from "./inspector/RideInspector";
 import { TileInspector } from "./inspector/TileInspector";
 import { tileInfo } from "./inspector/tileInfo";
 import { IconButton, Panel, Tabs } from "./kit";
@@ -38,6 +40,8 @@ export interface InspectorProps {
   timeline?: readonly TimelineEntry[];
   /** Looks at an area of the map: what a timeline entry with an area does when clicked. */
   focusTile?(rect: TileRect): void;
+  /** The rides and stalls, which the overview counts; null before the first snapshot. */
+  rides?: readonly RidePublic[] | null;
 }
 
 const NO_ENTRIES: readonly TimelineEntry[] = [];
@@ -80,6 +84,8 @@ export function Inspector(props: InspectorProps) {
         <TilePanel {...props} x={selection.x} y={selection.y} />
       ) : selection?.kind === "guest" ? (
         <GuestPanel {...props} id={selection.id} />
+      ) : selection?.kind === "ride" ? (
+        <RidePanel {...props} id={selection.id} />
       ) : selection?.kind === "entrance" ? (
         <EntrancePanel {...props} />
       ) : (
@@ -132,6 +138,25 @@ function GuestPanel({ ctx, id }: InspectorProps & { id: number }) {
   );
 }
 
+function RidePanel({ ctx, source, execute, notify, id }: InspectorProps & { id: number }) {
+  const client = ctx?.client ?? null;
+  const query = useMemo<QueryFn | null>(
+    () => (client ? (name, input) => client.query(name, input) : null),
+    [client],
+  );
+  return (
+    <RideInspector
+      id={id}
+      query={query}
+      execute={execute}
+      notify={notify}
+      source={source}
+      actions={closeButton}
+      disabled={ctx === null}
+    />
+  );
+}
+
 function EntrancePanel({ source, ctx, execute, notify }: InspectorProps) {
   const park = useParkState(source);
   return (
@@ -150,6 +175,7 @@ function ParkPanel({
   notify,
   timeline = NO_ENTRIES,
   focusTile = NOWHERE,
+  rides,
 }: InspectorProps) {
   const tab = useUiStore((state) => state.inspector.tab);
   // The tile's tab is no tab of the park's: a park that is shown while it is current shows Overview.
@@ -166,7 +192,11 @@ function ParkPanel({
         value={shown}
         onValueChange={(next) => uiStore.getState().openInspector(next as ParkTab)}
         tabs={[
-          { id: "overview", label: "Overview", content: <ParkOverview info={info} park={park} /> },
+          {
+            id: "overview",
+            label: "Overview",
+            content: <ParkOverview info={info} park={park} rides={rides ?? null} />,
+          },
           {
             id: "finances",
             label: "Finances",

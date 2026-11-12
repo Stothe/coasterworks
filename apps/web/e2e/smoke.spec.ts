@@ -4,9 +4,9 @@ import { fileURLToPath } from "node:url";
 
 /**
  * What a fresh sample park starts with, in cents. The park opens already open and running at 1x, so
- * by the time the test has paused it some guests may have paid at the gate: the cash it shows is
- * this plus those entry fees, at `ENTRY_FEE` a guest, and nothing else (there is no ride or shop
- * yet to take or cost anything).
+ * by the time the test has paused it some guests may have paid at the gate (at `ENTRY_FEE` a
+ * guest), and on its rides and at its stalls, and a day or two of its rides' and stalls' running
+ * costs may have been charged: the cash it shows is this plus those takings, less those costs.
  */
 const START_CENTS = 10_000_00;
 const ENTRY_FEE = 5_00;
@@ -45,6 +45,7 @@ interface ParkStatus {
   open: boolean;
   totalAdmissions: number;
   income: { entry: number; rides: number; shops: number };
+  expenses: { running: number; wages: number };
 }
 
 /** Integer cents from a pill's text, such as `$9,800.00` or `-$5.00`. */
@@ -85,11 +86,13 @@ test("opens a park, shapes terrain, undoes it, pauses, and draws", async ({ page
   expect(status?.ok).toBe(true);
   const park = status?.result as ParkStatus;
   expect(park.open).toBe(true);
-  expect(park.income).toEqual({ entry: park.totalAdmissions * ENTRY_FEE, rides: 0, shops: 0 });
+  expect(park.income.entry).toBe(park.totalAdmissions * ENTRY_FEE);
+  expect(park.expenses.wages).toBe(0);
 
-  // Cash is the $10,000.00 the park starts with plus exactly those entry fees, and the pill shows
-  // what the sim has. Paused, it holds still from here on.
-  const opening = START_CENTS + park.income.entry;
+  // Cash is the $10,000.00 the park starts with plus exactly those takings, less those running
+  // costs, and the pill shows what the sim has. Paused, it holds still from here on.
+  const opening =
+    START_CENTS + park.income.entry + park.income.rides + park.income.shops - park.expenses.running;
   expect(park.cash).toBe(opening);
   await expect.poll(async () => cents(await cash.innerText())).toBe(opening);
 

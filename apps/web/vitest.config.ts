@@ -7,6 +7,7 @@ export default defineConfig({
   resolve: {
     // Test the code as it is in `src`, not a `dist` that may be stale or not built yet.
     alias: {
+      "@coasterworks/content": source("../../packages/content/src/index.ts"),
       "@coasterworks/sim": source("../../packages/sim/src/index.ts"),
       "@coasterworks/protocol": source("../../packages/protocol/src/index.ts"),
       "@coasterworks/render": source("../../packages/render/src/index.ts"),

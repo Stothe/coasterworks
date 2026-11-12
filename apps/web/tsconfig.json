@@ -14,6 +14,7 @@
   },
   "include": ["src"],
   "references": [
+    { "path": "../../packages/content" },
     { "path": "../../packages/sim" },
     { "path": "../../packages/protocol" },
     { "path": "../../packages/render" }

@@ -17,6 +17,8 @@ export interface GuestView {
   nausea: number;
   cash: number;
   thought: { id: number; text: string } | null;
+  /** The ride or stall the guest is busy with, or null (absent from a sim that has none). */
+  ride?: { id: number; name: string; doing: string } | null;
 }
 
 /** How often an open guest panel asks after the guest, in milliseconds. */
@@ -34,7 +36,26 @@ const DOING: Record<string, string> = {
   heading: "Heading somewhere",
   leaving: "Leaving the park",
   lost: "Lost",
+  queuing: "Queuing",
+  riding: "On a ride",
+  buying: "Buying something",
 };
+
+/** What the guest is doing with a ride or stall, by the `doing` the sim gives, and its name. */
+const WITH_RIDE: Record<string, (name: string) => string> = {
+  heading: (name) => `Heading for ${name}`,
+  queuing: (name) => `Queuing for ${name}`,
+  riding: (name) => `On ${name}`,
+  buying: (name) => `At ${name}`,
+};
+
+/** What the guest is doing, in words: with the ride or stall they are busy with, if any. */
+export function doingOf(guest: Pick<GuestView, "state" | "ride">): string {
+  const ride = guest.ride;
+  const withRide = ride ? WITH_RIDE[ride.doing] : undefined;
+  if (ride && withRide) return withRide(ride.name);
+  return DOING[guest.state] ?? guest.state;
+}
 
 /**
  * The needs, each with its label and whether a high value is good (energy) or bad (hunger and the
@@ -148,7 +169,7 @@ export function GuestInspector({ id, query }: { id: number; query: QueryFn | nul
       <Rows label="Guest">
         <Row label="Name">{guest.name}</Row>
         <Row label="Doing" {...(guest.state === "lost" && { tone: "bad" as const })}>
-          {gone ? "Has left the park" : (DOING[guest.state] ?? guest.state)}
+          {gone ? "Has left the park" : doingOf(guest)}
         </Row>
         <Row label="Cash">{formatCents(guest.cash)}</Row>
       </Rows>

@@ -7,7 +7,11 @@ interface Hook {
     client?: {
       query(name: string, input: unknown): Promise<{ ok: boolean; result?: unknown }>;
     };
-    uiState?(): { tool: string; placement: { command: string } | null };
+    uiState?(): {
+      tool: string;
+      placement: { command: string } | null;
+      placementCheck: { ok: boolean; reason: string | null } | null;
+    };
   };
 }
 
@@ -134,15 +138,23 @@ test("a right click on a tile offers Raise terrain, and it is paid for", async (
   await expect.poll(async () => cents(await cashOf(page).innerText())).toBeLessThan(before);
 });
 
-test("3 is Rides, whose tray is empty until the next update", async ({ page }) => {
+test("3 is Rides, whose tray lists the rides to build; Scenery is still to come", async ({
+  page,
+}) => {
   await openPark(page);
 
   await page.keyboard.press("3");
   const rides = page.getByRole("region", { name: "Rides tray" });
   await expect(rides).toBeVisible();
-  await expect(rides.getByText("Coming with the next update")).toBeVisible();
+  await expect(rides.getByRole("button", { name: /^Carousel/ })).toBeVisible();
+  await expect(rides.getByRole("button", { name: /^Big Wheel/ })).toBeVisible();
+  await expect(rides.getByText("Coming with the next update")).toHaveCount(0);
   await expect(page.getByRole("region", { name: "Terrain tray" })).toHaveCount(0);
   expect((await uiState(page))?.tool).toBe("ride");
+
+  await page.keyboard.press("4");
+  const scenery = page.getByRole("region", { name: "Scenery tray" });
+  await expect(scenery.getByText("Coming with the next update")).toBeVisible();
 });
 
 test("? shows the keyboard map and Esc puts it away", async ({ page }) => {
@@ -163,14 +175,16 @@ test("? shows the keyboard map and Esc puts it away", async ({ page }) => {
 test("Esc returns to Select, with nothing in hand", async ({ page }) => {
   await openPark(page);
   // The park opens that way.
-  expect(await uiState(page)).toEqual({ tool: "select", placement: null });
+  expect(await uiState(page)).toEqual({ tool: "select", placement: null, placementCheck: null });
 
   await page.keyboard.press("1");
   await page.getByRole("button", { name: "Water", exact: true }).click();
   expect((await uiState(page))?.placement).not.toBeNull();
 
   await page.keyboard.press("Escape");
-  await expect.poll(() => uiState(page)).toEqual({ tool: "select", placement: null });
+  await expect
+    .poll(() => uiState(page))
+    .toEqual({ tool: "select", placement: null, placementCheck: null });
   const dock = page.getByRole("group", { name: "Tools" });
   await expect(dock.getByRole("button", { pressed: true })).toHaveCount(1);
   await expect(dock.getByRole("button", { name: "Select" })).toHaveAttribute(
@@ -243,6 +257,46 @@ test.describe("at the desktop minimum, 1100 by 700", () => {
         expect(overlaps(a, b), `${a} overlaps ${b}`).toBe(false);
       }
     }
+  });
+});
+
+test.describe("the status pill row at 1100 by 700", () => {
+  test.use({ viewport: { width: 1100, height: 700 } });
+
+  test("stays on one line and clear of the top-right buttons, rides pill and widest text included", async ({
+    page,
+  }) => {
+    await openPark(page);
+    await expect(page.getByRole("button", { name: /^\d+ rides? and \d+ stalls?$/ })).toBeVisible();
+    await settled(page);
+    // The widest the pills get: the longest date, a cash figure with a month's change, and four
+    // digits of guests, rating and rides.
+    await page.evaluate(() => {
+      const set = (selector: string, text: string) => {
+        const el = document.querySelector(selector);
+        if (el) el.textContent = text;
+      };
+      set('[aria-label^="Open park overview"] span:last-child', "September 30, Year 99");
+      set('[aria-label="Cash"] b', "$9,999,999.99");
+      set('[data-testid="month-change"]', "+$999,999.99");
+      set('[data-testid="guest-count"]', "9999");
+      set('[data-testid="ride-count"]', "999 · 999");
+    });
+    const row = await page.getByRole("group", { name: "Cash" }).evaluate((el) => {
+      const parent = el.parentElement;
+      if (!parent) throw new Error("no row");
+      const box = parent.getBoundingClientRect();
+      // Centres, not tops: the pills differ in height and align by their middles.
+      const tops = [...parent.children].map((c) => {
+        const r = c.getBoundingClientRect();
+        return Math.round(r.top + r.height / 2);
+      });
+      return { x: box.x, y: box.y, width: box.width, height: box.height, tops };
+    });
+    const cluster = await page.getByRole("group", { name: "Quick actions" }).boundingBox();
+    if (!cluster) throw new Error("no cluster");
+    expect(new Set(row.tops).size, "one line").toBe(1);
+    expect(row.x + row.width, "row ends before the top-right group").toBeLessThan(cluster.x);
   });
 });
 

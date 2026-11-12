@@ -27,7 +27,7 @@ function checkDimension(label: string, value: number): void {
 }
 
 /**
- * Creates an empty park: flat grass at corner height 8, no water, no paths, a closed park with no
+ * Creates an empty park: flat grass at corner height 8, no water, no paths, no rides, a closed park with no
  * entrance, no guests, nothing logged.
  */
 export function createWorld(opts: CreateWorldOptions): World {
@@ -58,11 +58,15 @@ export function createWorld(opts: CreateWorldOptions): World {
       surface: new Uint8Array(width * height),
       water: new Uint8Array(width * height),
       path: new Uint8Array(width * height),
+      occupant: new Uint16Array(width * height),
     },
     finance: { cash, loan: 0, monthStart: { cash } },
     park: createParkState(opts.name),
     guests: createGuestStore(),
+    rides: [],
+    nextRideId: 1,
     pathVersion: 0,
+    rideVersion: 0,
     rng,
     // Forked straight after seeding, while the root generator is still untouched.
     rngStreams: { guests: rng.fork("guests") },

@@ -66,6 +66,7 @@ describe("guest_list", () => {
       nausea: 7,
       cash: 4321,
       thought: null,
+      ride: null,
     });
   });
 
@@ -109,6 +110,22 @@ describe("guest_list", () => {
     expect(ids("lost")).toEqual([3]);
     expect(ids("leaving")).toEqual([4]);
     expect(ids("entering")).toEqual([5]);
+  });
+
+  it("names and filters guests queuing for or riding a ride", () => {
+    const sim = makePark();
+    const { world } = sim;
+    placeGuest(world, { x: 8, y: 12 }, GuestState.WANDERING);
+    const queuing = placeGuest(world, { x: 8, y: 13 }, GuestState.QUEUING);
+    const riding = placeGuest(world, { x: 8, y: 14 }, GuestState.RIDING);
+    world.guests.ride[queuing] = 1;
+    world.guests.ride[riding] = 1;
+    const ids = (state: string) =>
+      (ok(sim, "guest_list", { state }) as Array<{ id: number }>).map((g) => g.id);
+    expect(ids("queuing")).toEqual([2]);
+    expect(ids("riding")).toEqual([3]);
+    expect(ok(sim, "guest_get", { id: 2 })).toMatchObject({ state: "queuing" });
+    expect(ok(sim, "guest_get", { id: 3 })).toMatchObject({ state: "riding" });
   });
 
   it("returns 100 by default and at most the limit", () => {

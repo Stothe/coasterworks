@@ -16,7 +16,8 @@
 //
 //   --port <n>      Port the app is served on. Required.
 //   --out <file>    Where to write the PNG. Default: apps/web/e2e/__screenshots__/park.png.
-//   --walk <ms>     How long the park runs at 8x before it is paused. Default 9000.
+//   --walk <ms>     How long the park runs at 8x before it is paused. Default 18000: about two
+//                   game weeks, so there are guests about and in the rides' queues.
 //
 // Prints {"out":..., "gl":..., "errors":[...]}. Exits 1, writing nothing, if the page painted in
 // software (no GPU) or logged an error.
@@ -36,7 +37,7 @@ function fail(message) {
 
 const args = {
   out: fileURLToPath(new URL("../e2e/__screenshots__/park.png", import.meta.url)),
-  walk: "9000",
+  walk: "18000",
 };
 const argv = process.argv.slice(2);
 for (let i = 0; i < argv.length; i++) {

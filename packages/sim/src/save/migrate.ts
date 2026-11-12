@@ -1,8 +1,9 @@
+import { intensityPrefForId } from "../guests/guests.js";
 import { GUEST_ARRAYS, GUEST_CAP } from "../guests/types.js";
 import { createParkState } from "../park/types.js";
 import { Rng } from "../rng.js";
 import { MAX_MAP, SCHEMA_VERSION } from "../world/types.js";
-import { toBase64 } from "./base64.js";
+import { fromBase64, toBase64 } from "./base64.js";
 import { CORRUPT_MESSAGE, SaveError } from "./error.js";
 
 /** Upgrades a document by one schema version. */
@@ -11,6 +12,15 @@ export type Migration = (doc: unknown) => unknown;
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+/** Guest arrays added after schema 3: `lostTicks` in schema 4, the ride arrays in schema 6. */
+const LATER_GUEST_ARRAYS: ReadonlySet<string> = new Set([
+  "lostTicks",
+  "ride",
+  "intensityPref",
+  "lastRide",
+  "queueTicks",
+]);
 
 /** A usable map side, or the schema check later will say what is wrong with it. */
 function isDimension(value: unknown): value is number {
@@ -58,9 +68,9 @@ const migrateV2ToV3: Migration = (doc) => {
     throw new SaveError(CORRUPT_MESSAGE, { cause: error });
   }
   const guests: Record<string, unknown> = { count: 0, nextGuestId: 1 };
-  // The arrays schema 3 had; `lostTicks` came in schema 4, and the step from 3 adds it.
+  // The arrays schema 3 had; the later ones are added by the steps that brought them in.
   for (const [name, kind] of GUEST_ARRAYS) {
-    if (name !== "lostTicks") guests[name] = { $t: kind, $b64: "" };
+    if (!LATER_GUEST_ARRAYS.has(name)) guests[name] = { $t: kind, $b64: "" };
   }
   return { ...doc, guests, rngStreams: { guests: guestStream } };
 };
@@ -88,6 +98,77 @@ const migrateV3ToV4: Migration = (doc) => {
 };
 
 /**
+ * Schema 4 to 5: parks gained rides and stalls. The new occupant layer (which ride stands on each
+ * tile) starts empty, the park has no rides, and the first ride to be built gets id 1. A document
+ * whose terrain is missing or has unusable dimensions gets no occupant layer, so the schema check
+ * refuses it with the reason.
+ */
+const migrateV4ToV5: Migration = (doc) => {
+  if (!isRecord(doc)) throw new SaveError(CORRUPT_MESSAGE);
+  const terrain =
+    isRecord(doc.terrain) && isDimension(doc.terrain.width) && isDimension(doc.terrain.height)
+      ? {
+          ...doc.terrain,
+          occupant: {
+            $t: "Uint16Array",
+            $b64: toBase64(new Uint8Array(doc.terrain.width * doc.terrain.height * 2)),
+          },
+        }
+      : doc.terrain;
+  return { ...doc, terrain, rides: [], nextRideId: 1 };
+};
+
+/** `count` zero bytes per guest, `width` bytes each, as an encoded array of type `kind`. */
+function zeros(kind: string, count: number, width: number): { $t: string; $b64: string } {
+  return { $t: kind, $b64: toBase64(new Uint8Array(count * width)) };
+}
+
+/**
+ * Schema 5 to 6: guests gained rides. Each guest gets no ride it is going to (`ride` 0), no last
+ * ride, no time queued, and the intensity preference worked out from its id
+ * (`intensityPrefForId`), exactly as a guest arriving now gets one, so a migrated park is the one
+ * this build would have made. A document with no guest section, or whose id array does not hold
+ * `count` guests, is refused as corrupt; one whose count or id array is missing or unusable gets no
+ * new arrays, so the schema check refuses it with the reason.
+ */
+const migrateV5ToV6: Migration = (doc) => {
+  if (!isRecord(doc) || !isRecord(doc.guests)) throw new SaveError(CORRUPT_MESSAGE);
+  const { count, id } = doc.guests;
+  if (
+    !Number.isInteger(count) ||
+    (count as number) < 0 ||
+    (count as number) > GUEST_CAP ||
+    !isRecord(id) ||
+    typeof id.$b64 !== "string"
+  ) {
+    // Left without the new arrays, so the schema check refuses it and says why.
+    return doc;
+  }
+  const n = count as number;
+  const idBytes = fromBase64(id.$b64);
+  if (idBytes.length !== n * 4) throw new SaveError(CORRUPT_MESSAGE);
+  const prefs = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const guestId =
+      ((idBytes[4 * i + 3] as number) << 24) |
+      ((idBytes[4 * i + 2] as number) << 16) |
+      ((idBytes[4 * i + 1] as number) << 8) |
+      (idBytes[4 * i] as number);
+    prefs[i] = intensityPrefForId(guestId);
+  }
+  return {
+    ...doc,
+    guests: {
+      ...doc.guests,
+      ride: zeros("Int32Array", n, 4),
+      intensityPref: { $t: "Uint8Array", $b64: toBase64(prefs) },
+      lastRide: zeros("Int32Array", n, 4),
+      queueTicks: zeros("Int32Array", n, 4),
+    },
+  };
+};
+
+/**
  * Migrations keyed by the schema version they upgrade FROM, so `MIGRATIONS[1]` turns a schema 1
  * document into a schema 2 one. When `SCHEMA_VERSION` goes up, add the entry for the version it
  * left behind.
@@ -96,6 +177,8 @@ export const MIGRATIONS: Record<number, Migration> = {
   1: migrateV1ToV2,
   2: migrateV2ToV3,
   3: migrateV3ToV4,
+  4: migrateV4ToV5,
+  5: migrateV5ToV6,
 };
 
 /** The document's schema version. Throws `SaveError` if it has none. */

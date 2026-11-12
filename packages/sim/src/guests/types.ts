@@ -15,12 +15,21 @@ export const GuestState = {
   LOST: 4,
   /** Left the park. A removed guest holds this until its slot is reused. */
   GONE: 5,
+  /** In the queue of the ride `ride`, walking up to its place in the line or standing in it. */
+  QUEUING: 6,
+  /** On the ride `ride`, out of sight at the middle of its footprint until the ride unloads. */
+  RIDING: 7,
+  /**
+   * At the stall `ride`, standing on its service tile while it is served (for the stall type's
+   * `serveTicks`, counted in `queueTicks`), then paying and going back to WANDERING.
+   */
+  BUYING: 8,
 } as const;
 
 export type GuestState = (typeof GuestState)[keyof typeof GuestState];
 
 /** Highest value of `GuestState`. */
-export const MAX_GUEST_STATE = GuestState.GONE;
+export const MAX_GUEST_STATE = GuestState.BUYING;
 
 /** The value of both `tx` and `ty` when a guest has no tile it is walking to. */
 export const NO_TILE = -1;
@@ -69,6 +78,10 @@ export const GUEST_ARRAYS = [
   ["thoughtTick", "Int32Array"],
   ["sinceAction", "Int32Array"],
   ["lostTicks", "Int32Array"],
+  ["ride", "Int32Array"],
+  ["intensityPref", "Uint8Array"],
+  ["lastRide", "Int32Array"],
+  ["queueTicks", "Int32Array"],
 ] as const;
 
 export type GuestArrayName = (typeof GUEST_ARRAYS)[number][0];
@@ -137,6 +150,23 @@ export interface GuestStore {
    * gives up and goes home. 0 for a guest that is not lost.
    */
   lostTicks: Int32Array;
+  /**
+   * Id of the ride the guest is heading for, queuing for, or riding, or of the stall it is heading
+   * for or buying at; 0 for none.
+   */
+  ride: Int32Array;
+  /**
+   * The ride intensity the guest likes, in units of 4 rating points: the preference is
+   * `intensityPref * 4`, so a byte covers the 0 to 999 ratings.
+   */
+  intensityPref: Uint8Array;
+  /** Id of the last ride the guest got off; 0 for none yet. */
+  lastRide: Int32Array;
+  /**
+   * Ticks the guest has spent in its current queue, or (BUYING) being served at its stall; 0 when it
+   * is doing neither.
+   */
+  queueTicks: Int32Array;
 }
 
 /** A set of path tiles the guests choose their walks from. Runtime only. */

@@ -430,6 +430,8 @@ describe("finance_summary", () => {
         thisMonth: { entry: 9_00, rides: 1_00, shops: 2_00, running: 5_00, wages: 3_00, net: 4_00 },
         lastMonth: null,
         history: [],
+        allTime: { entry: 0, rides: 0, shops: 0, running: 0, wages: 0 },
+        rides: [],
       },
     });
   });

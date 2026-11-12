@@ -60,6 +60,8 @@ function setup(extra: CatalogEntry[] = [], tweak?: (actions: Action[]) => Action
     cancel: vi.fn(),
     terrain: vi.fn(),
     brush: vi.fn(),
+    rotate: vi.fn(),
+    canRotate: () => false,
   };
   const deps: UiActionDeps = {
     startPlacement: (command, defaults) => uiStore.getState().startPlacement(command, defaults),
@@ -98,7 +100,7 @@ describe("CommandBar: opening", () => {
 });
 
 describe("CommandBar: the list", () => {
-  it("groups the actions Terrain, Finance, Park, View, Speed, History, Time and Other", () => {
+  it("groups the actions Terrain, Finance, Park, Rides, Shops, View, Speed, History, Time and Other", () => {
     setup([entry("park_close_gates", {})]);
     open();
     const headings = [...document.querySelectorAll("[cmdk-group-heading]")].map(
@@ -108,6 +110,8 @@ describe("CommandBar: the list", () => {
       "Terrain",
       "Finance",
       "Park",
+      "Rides",
+      "Shops",
       "View",
       "Speed",
       "History",
@@ -149,6 +153,15 @@ describe("CommandBar: the list", () => {
       "ui.speed.up",
       "ui.speed.down",
     ]);
+    expect(inGroup("Rides")).toEqual([
+      "ride_build",
+      "ride_demolish",
+      "ride_open",
+      "ride_close",
+      "ride_set_price",
+      "ride_rename",
+    ]);
+    expect(inGroup("Shops")).toEqual(["stall_build"]);
     expect(inGroup("History")).toEqual(["ui.undo", "ui.redo"]);
     expect(inGroup("Time")).toEqual(["sim_advance"]);
     // The path commands have no group of their own until the Paths tray arrives.
@@ -299,6 +312,8 @@ describe("CommandBar: the list", () => {
         cancel: noop,
         terrain: noop,
         brush: noop,
+        rotate: noop,
+        canRotate: () => false,
       },
     };
     const actions = buildActions(catalog, deps);

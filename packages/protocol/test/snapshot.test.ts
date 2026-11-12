@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   ProtocolError,
+  RidePublicSchema,
   decodeSnapshot,
+  emptyRideStatus,
   encodeSnapshot,
   type GuestSection,
   type ParkPublic,
+  type RidePublic,
+  type RideStatusSection,
   type SnapshotHeader,
   type SnapshotParts,
   type SnapshotTerrain,
@@ -39,6 +43,9 @@ function header(over: Partial<SnapshotHeader> = {}): SnapshotHeader {
     hasTerrain: true,
     pathVersion: 5,
     hasPaths: false,
+    rideVersion: 3,
+    hasRides: false,
+    rideCount: 0,
     guestCount: 0,
     width: WIDTH,
     height: HEIGHT,
@@ -116,7 +123,7 @@ function parts(over: Partial<SnapshotParts> = {}): SnapshotParts {
 }
 
 /** A snapshot frame around the given header text, with no bytes after it. */
-function frameWithHeader(json: string, magic = [0x43, 0x57, 0x53, 0x32]): Uint8Array {
+function frameWithHeader(json: string, magic = [0x43, 0x57, 0x53, 0x33]): Uint8Array {
   const body = Uint8Array.from(json, (char) => char.charCodeAt(0));
   const out = new Uint8Array(8 + body.length);
   out.set(magic);
@@ -193,8 +200,8 @@ describe("snapshot encoding", () => {
     ]) {
       expect(array).toHaveLength(0);
     }
-    // Nothing follows the header: an empty section takes no bytes.
-    expect(bytes.length).toBe(8 + headerLengthOf(bytes));
+    // Nothing follows the header but the ride count: an empty guest section takes no bytes.
+    expect(bytes.length).toBe(8 + headerLengthOf(bytes) + 2);
     expect(decoded.guests.id).toBeInstanceOf(Int32Array);
     expect(decoded.guests.state).toBeInstanceOf(Uint8Array);
   });
@@ -204,7 +211,7 @@ describe("snapshot encoding", () => {
     const bytes = encodeSnapshot(header({ hasTerrain: false, guestCount: 2000 }), {
       guests: original,
     });
-    expect(bytes.length - 8 - headerLengthOf(bytes)).toBe(2000 * 15);
+    expect(bytes.length - 8 - headerLengthOf(bytes)).toBe(2000 * 15 + 2);
     const decoded = decodeSnapshot(bytes);
     expect(decoded.guests.count).toBe(2000);
     expect(decoded.guests.id).toEqual(original.id);
@@ -265,7 +272,7 @@ describe("snapshot encoding", () => {
       header({ hasPaths: true, guestCount: 3 }),
       parts({ paths: paths(), guests: threeGuests() }),
     );
-    expect(Array.from(bytes.subarray(0, 4))).toEqual([0x43, 0x57, 0x53, 0x32]);
+    expect(Array.from(bytes.subarray(0, 4))).toEqual([0x43, 0x57, 0x53, 0x33]);
     const headerLength = headerLengthOf(bytes);
     expect(JSON.parse(String.fromCharCode(...bytes.subarray(8, 8 + headerLength)))).toEqual(
       header({ hasPaths: true, guestCount: 3 }),
@@ -273,7 +280,7 @@ describe("snapshot encoding", () => {
     const corners = 8 + headerLength;
     const pathsAt = corners + 2 * 12 + 6 + 6;
     const guestsAt = pathsAt + 6;
-    expect(bytes.length).toBe(guestsAt + 3 * 15);
+    expect(bytes.length).toBe(guestsAt + 3 * 15 + 2);
     // Corner 0 is 63, corner 5 is 0x0102: low byte first.
     expect(Array.from(bytes.subarray(corners, corners + 2))).toEqual([63, 0]);
     expect(Array.from(bytes.subarray(corners + 10, corners + 12))).toEqual([0x02, 0x01]);
@@ -293,7 +300,11 @@ describe("snapshot encoding", () => {
       0xff, 0xff, 0xff, 0x7f,
     ]);
     // Then one byte a guest for state, color and happiness, in that order.
-    expect(Array.from(bytes.subarray(guestsAt + 36))).toEqual([0, 2, 5, 8, 0, 3, 255, 17, 0]);
+    expect(Array.from(bytes.subarray(guestsAt + 36, guestsAt + 45))).toEqual([
+      0, 2, 5, 8, 0, 3, 255, 17, 0,
+    ]);
+    // Then the ride status: a count of 0 and nothing else.
+    expect(Array.from(bytes.subarray(guestsAt + 45))).toEqual([0, 0]);
   });
 
   it("omits the terrain and paths when the header says there are none", () => {
@@ -303,7 +314,10 @@ describe("snapshot encoding", () => {
     expect(decoded.header.hasPaths).toBe(false);
     expect(decoded).not.toHaveProperty("terrain");
     expect(decoded).not.toHaveProperty("paths");
-    expect(bytes.length).toBe(8 + headerLengthOf(bytes));
+    expect(decoded.header).not.toHaveProperty("rides");
+    // Only the ride status count, 0, follows the header.
+    expect(bytes.length).toBe(8 + headerLengthOf(bytes) + 2);
+    expect(Array.from(bytes.subarray(-2))).toEqual([0, 0]);
   });
 
   it("round-trips a header with text outside ASCII", () => {
@@ -443,9 +457,27 @@ describe("snapshot decoding", () => {
       new ProtocolError("Unsupported snapshot version"),
     );
     // So is a version that has not been written yet.
-    const v3 = encodeSnapshot(header(), parts());
-    v3[3] = 0x33;
-    expect(() => decodeSnapshot(v3)).toThrow("Unsupported snapshot version");
+    const v4 = encodeSnapshot(header(), parts());
+    v4[3] = 0x34;
+    expect(() => decodeSnapshot(v4)).toThrow("Unsupported snapshot version");
+  });
+
+  it("refuses a v2 frame as an unsupported version", () => {
+    const v2 = encodeSnapshot(header(), parts());
+    v2[3] = 0x32; // "CWS2"
+    expect(() => decodeSnapshot(v2)).toThrow(new ProtocolError("Unsupported snapshot version"));
+    // A real v2 frame: a header with no ride fields, then the guests, and no ride status.
+    const {
+      rideVersion: _v,
+      hasRides: _h,
+      rideCount: _c,
+      ...header2
+    } = header({
+      hasTerrain: false,
+    });
+    expect(() =>
+      decodeSnapshot(frameWithHeader(JSON.stringify(header2), [0x43, 0x57, 0x53, 0x32])),
+    ).toThrow(new ProtocolError("Unsupported snapshot version"));
   });
 
   it("throws ProtocolError on truncated bytes", () => {
@@ -594,5 +626,197 @@ describe("snapshot decoding", () => {
       JSON.stringify(header({ hasTerrain: false, hasPaths: true, width: 65_535, height: 65_535 })),
     );
     expect(() => decodeSnapshot(pathLie)).toThrow(/length mismatch/);
+  });
+});
+
+/** A ride as the header lists it, with id `id`; even ids are stalls. */
+function ridePublic(id: number): RidePublic {
+  const stall = id % 2 === 0;
+  return {
+    id,
+    type: stall ? "snack_stand" : "carousel",
+    kind: stall ? "stall" : "ride",
+    x: id % 50,
+    y: (id * 3) % 50,
+    rot: (id % 4) as 0 | 1 | 2 | 3,
+    name: `Ride ${id} ✨`,
+    open: id % 3 === 0,
+    price: (id * 7) % 2001,
+    entrance: stall ? null : { x: id % 50, y: -1 },
+    exit: stall ? null : { x: -1, y: id % 50 },
+    service: stall ? { x: 3, y: id % 50 } : null,
+  };
+}
+
+/** A ride status section for rides with these ids, with values that differ from ride to ride. */
+function statusOf(ids: number[]): RideStatusSection {
+  const count = ids.length;
+  const status: RideStatusSection = {
+    count,
+    id: Int32Array.from(ids),
+    phase: new Uint8Array(count),
+    phaseTicks: new Uint16Array(count),
+    riders: new Uint8Array(count),
+    queue: new Uint16Array(count),
+  };
+  ids.forEach((id, i) => {
+    status.phase[i] = id % 4;
+    status.phaseTicks[i] = (id * 257) % 65536;
+    status.riders[i] = (id * 13) % 256;
+    status.queue[i] = (id * 1031) % 65536;
+  });
+  return status;
+}
+
+/** A snapshot of `ids` rides without terrain, with the ride list when `listed`. */
+function rideFrame(ids: number[], listed = true) {
+  const rides = listed ? { rides: ids.map(ridePublic) } : {};
+  const head = header({ hasTerrain: false, hasRides: listed, rideCount: ids.length, ...rides });
+  const status = statusOf(ids);
+  return { head, status, bytes: encodeSnapshot(head, { guests: noGuests(), rideStatus: status }) };
+}
+
+describe("rides in snapshots", () => {
+  it.each([0, 1, 255])("round-trips %i rides, listed and not", (count) => {
+    const ids = Array.from({ length: count }, (_, i) => i * 3 + 1);
+    for (const listed of [true, false]) {
+      const { head, status, bytes } = rideFrame(ids, listed);
+      const decoded = decodeSnapshot(bytes);
+      expect(decoded.header).toEqual(head);
+      expect(decoded.header.rideCount).toBe(count);
+      if (listed) expect(decoded.header.rides).toEqual(ids.map(ridePublic));
+      else expect(decoded.header).not.toHaveProperty("rides");
+      expect(decoded.rideStatus).toEqual(status);
+      expect(decoded.rideStatus.id).toBeInstanceOf(Int32Array);
+      expect(decoded.rideStatus.phase).toBeInstanceOf(Uint8Array);
+      expect(decoded.rideStatus.phaseTicks).toBeInstanceOf(Uint16Array);
+      expect(decoded.rideStatus.riders).toBeInstanceOf(Uint8Array);
+      expect(decoded.rideStatus.queue).toBeInstanceOf(Uint16Array);
+      // The status takes a two-byte count and ten bytes a ride, after everything else.
+      expect(bytes.length).toBe(8 + headerLengthOf(bytes) + 2 + count * 10);
+    }
+  });
+
+  it("decodes an empty ride status when none was given", () => {
+    const decoded = decodeSnapshot(encodeSnapshot(header(), parts()));
+    expect(decoded.rideStatus).toEqual(emptyRideStatus());
+  });
+
+  it("writes each ride as ten bytes, little-endian: id, phase, ticks, riders, queue", () => {
+    const status: RideStatusSection = {
+      count: 2,
+      id: Int32Array.from([7, 0x01020304]),
+      phase: Uint8Array.from([2, 3]),
+      phaseTicks: Uint16Array.from([0x0405, 65_535]),
+      riders: Uint8Array.from([12, 255]),
+      queue: Uint16Array.from([0x0607, 300]),
+    };
+    const bytes = encodeSnapshot(header({ hasTerrain: false, rideCount: 2 }), {
+      guests: noGuests(),
+      rideStatus: status,
+    });
+    const at = 8 + headerLengthOf(bytes);
+    expect(Array.from(bytes.subarray(at))).toEqual([
+      ...[2, 0],
+      ...[7, 0, 0, 0, 2, 0x05, 0x04, 12, 0x07, 0x06],
+      ...[0x04, 0x03, 0x02, 0x01, 3, 0xff, 0xff, 255, 0x2c, 0x01],
+    ]);
+  });
+
+  it("puts the ride list in the header, checked against the schema", () => {
+    const { bytes } = rideFrame([1, 2]);
+    const json = JSON.parse(new TextDecoder().decode(bytes.subarray(8, 8 + headerLengthOf(bytes))));
+    expect(json.rides).toEqual([ridePublic(1), ridePublic(2)]);
+    expect(RidePublicSchema.parse(ridePublic(2))).toEqual(ridePublic(2));
+    for (const bad of [
+      { ...ridePublic(1), kind: "shop" },
+      { ...ridePublic(1), rot: 4 },
+      { ...ridePublic(1), price: -1 },
+      { ...ridePublic(1), entrance: undefined },
+    ]) {
+      expect(RidePublicSchema.safeParse(bad).success).toBe(false);
+      const head = { ...header({ hasRides: true, rideCount: 1 }), rides: [bad] };
+      expect(() => decodeSnapshot(frameWithHeader(JSON.stringify(head)))).toThrow(
+        /header is invalid/,
+      );
+    }
+  });
+
+  it("rejects a header whose hasRides and rides disagree", () => {
+    const listedNoFlag = { ...header({ rideCount: 1 }), rides: [ridePublic(1)] };
+    const flagNoList = header({ hasRides: true });
+    for (const head of [listedNoFlag, flagNoList]) {
+      expect(() => decodeSnapshot(frameWithHeader(JSON.stringify(head)))).toThrow(
+        /header is invalid/,
+      );
+      expect(() => encodeSnapshot(head, parts())).toThrow(ProtocolError);
+    }
+  });
+
+  it("rejects a truncated or overlong ride status", () => {
+    const { bytes } = rideFrame([1, 2, 3]);
+    // One byte, part of a ride, a whole ride, and the count itself.
+    for (const cut of [1, 5, 9, 10, 11, 20, 30, 31, 32]) {
+      expect(() => decodeSnapshot(bytes.subarray(0, bytes.length - cut)), `cut ${cut}`).toThrow(
+        /length mismatch/,
+      );
+    }
+    const longer = new Uint8Array(bytes.length + 10);
+    longer.set(bytes);
+    expect(() => decodeSnapshot(longer)).toThrow(/length mismatch/);
+  });
+
+  it("rejects a ride count in the body that disagrees with the header's", () => {
+    const { bytes } = rideFrame([1, 2, 3], false);
+    const countAt = 8 + headerLengthOf(bytes);
+    for (const lie of [2, 4, 0xffff]) {
+      const copy = Uint8Array.from(bytes);
+      new DataView(copy.buffer).setUint16(countAt, lie, true);
+      expect(() => decodeSnapshot(copy)).toThrow(/ride status count mismatch/);
+    }
+  });
+
+  it("rejects ride ids that do not ascend, or that are not the listed rides'", () => {
+    const { bytes } = rideFrame([1, 2, 3], false);
+    const first = 8 + headerLengthOf(bytes) + 2;
+    const swapped = Uint8Array.from(bytes);
+    new DataView(swapped.buffer).setInt32(first, 5, true); // 5, 2, 3
+    expect(() => decodeSnapshot(swapped)).toThrow(/not in ascending id order/);
+    const twice = Uint8Array.from(bytes);
+    new DataView(twice.buffer).setInt32(first + 10, 1, true); // 1, 1, 3
+    expect(() => decodeSnapshot(twice)).toThrow(/not in ascending id order/);
+
+    const listed = rideFrame([1, 2, 3]).bytes;
+    const listedFirst = 8 + headerLengthOf(listed) + 2;
+    const other = Uint8Array.from(listed);
+    new DataView(other.buffer).setInt32(listedFirst + 20, 4, true); // 1, 2, 4 against 1, 2, 3
+    expect(() => decodeSnapshot(other)).toThrow(/does not match the header's rides/);
+  });
+
+  it("refuses to encode a ride status that disagrees with the header", () => {
+    const head = header({ hasTerrain: false, rideCount: 2 });
+    expect(() => encodeSnapshot(head, { guests: noGuests() })).toThrow(/rideCount/);
+    expect(() =>
+      encodeSnapshot(head, { guests: noGuests(), rideStatus: statusOf([1, 2, 3]) }),
+    ).toThrow(/rideCount/);
+    const short = statusOf([1, 2]);
+    short.queue = new Uint16Array(1);
+    expect(() => encodeSnapshot(head, { guests: noGuests(), rideStatus: short })).toThrow(
+      /rideCount/,
+    );
+    expect(() =>
+      encodeSnapshot(head, { guests: noGuests(), rideStatus: statusOf([2, 1]) }),
+    ).toThrow(/ascending id order/);
+    const listed = { ...header({ hasRides: true, rideCount: 2 }), rides: [ridePublic(1)] };
+    expect(() => encodeSnapshot(listed, parts({ rideStatus: statusOf([1, 2]) }))).toThrow(
+      /does not match the header's rides/,
+    );
+  });
+
+  it("does not allocate what a lying ride count claims", () => {
+    const lie = frameWithHeader(JSON.stringify(header({ hasTerrain: false, rideCount: 65_535 })));
+    expect(() => decodeSnapshot(lie)).toThrow(/length mismatch/);
+    const over = frameWithHeader(JSON.stringify(header({ hasTerrain: false, rideCount: 65_536 })));
+    expect(() => decodeSnapshot(over)).toThrow(/header is invalid/);
   });
 });

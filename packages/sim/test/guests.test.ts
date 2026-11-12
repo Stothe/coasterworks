@@ -91,6 +91,9 @@ describe("the guest store", () => {
       LEAVING: 3,
       LOST: 4,
       GONE: 5,
+      QUEUING: 6,
+      RIDING: 7,
+      BUYING: 8,
     });
   });
 });
@@ -370,8 +373,21 @@ describe("thoughts", () => {
       NICE_VIEW: 9,
       GOING_HOME: 10,
       PARK_CLOSED: 11,
+      RIDE_FUN: 12,
+      RIDE_SICK: 13,
+      QUEUE_TOO_LONG: 14,
+      CANT_AFFORD_RIDE: 15,
+      TOO_INTENSE: 16,
+      GOOD_FOOD: 17,
+      REFRESHING: 18,
+      BETTER_NOW: 19,
+      NOTHING_TO_EAT: 20,
+      NOTHING_TO_DRINK: 21,
+      NO_TOILETS: 22,
     });
     expect(thoughtText(THOUGHT.HUNGRY)).toBe("I'm hungry");
+    expect(thoughtText(THOUGHT.QUEUE_TOO_LONG)).toBe("This queue is too long");
+    expect(thoughtText(THOUGHT.CANT_AFFORD_RIDE)).toBe("I can't afford this");
     expect(thoughtText(THOUGHT.TOO_EXPENSIVE)).toBe("This park is too expensive");
     expect(thoughtText(THOUGHT.LOST)).toBe("I can't find my way");
     expect(thoughtText(THOUGHT.GOING_HOME)).toBe("I'm going home");

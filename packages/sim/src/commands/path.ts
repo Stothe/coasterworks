@@ -33,7 +33,7 @@ function checkPathRect(world: World, rect: Rect): string | null {
 export const pathBuild = defineCommand({
   name: "path_build",
   description:
-    "Lays a footpath (`foot`) or a queue (`queue`) on every tile of a rectangle, replacing a path of the other kind. Costs $10 for each tile that changes. The whole rectangle is refused if any tile is off the map, on water, on a slope steeper than 2 steps across the tile, or the park entrance.",
+    "Lays a footpath (`foot`) or a queue (`queue`) on every tile of a rectangle, replacing a path of the other kind. Costs $10 for each tile that changes. The whole rectangle is refused if any tile is off the map, on water, on a slope steeper than 2 steps across the tile, the park entrance, or under a ride or stall (a ride's entrance and exit tiles, and a stall's service tile, do take paths).",
   category: "path",
   input: rectSchema.extend({ kind: z.enum(["foot", "queue"]) }),
   undoable: true,
@@ -119,7 +119,7 @@ function checkTilesOnMap(world: World, tiles: TileList): string | null {
 export const pathBuildTiles = defineCommand({
   name: "path_build_tiles",
   description:
-    "Lays a footpath (`foot`) or a queue (`queue`) on each tile of a list, as one command: one charge and one undo step for the whole stroke (what dragging the path tool sends). Costs $10 for each tile that changes. The whole list is refused, naming the first tile, if any tile could not take a path (off the map, water, too steep, the entrance); `path_check_tiles` says which tiles those are beforehand. A tile listed twice counts once.",
+    "Lays a footpath (`foot`) or a queue (`queue`) on each tile of a list, as one command: one charge and one undo step for the whole stroke (what dragging the path tool sends). Costs $10 for each tile that changes. The whole list is refused, naming the first tile, if any tile could not take a path (off the map, water, too steep, the entrance, under a ride or stall); `path_check_tiles` says which tiles those are beforehand. A tile listed twice counts once.",
   category: "path",
   input: z.object({ tiles: tileListSchema, kind: z.enum(["foot", "queue"]) }),
   undoable: true,

@@ -48,6 +48,8 @@ const PRESETS = {
   night: "tod=0&demo=1&cam=32,34,60,0.785,0.65",
   // Right down among the guests on the plaza.
   closeup: "tod=0.4&demo=1&cam=32,39,8,0.785,0.5",
+  // One of every ride and stall type, built by the sim on the sample park, the rides running.
+  rides: "tod=0.4&rides=1&cam=34,45,24,0.785,0.6",
 };
 
 function fail(message) {

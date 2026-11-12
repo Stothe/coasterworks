@@ -24,6 +24,8 @@ export function inertDeps(): UiActionDeps {
       cancel: noop,
       terrain: noop,
       brush: noop,
+      rotate: noop,
+      canRotate: () => false,
     },
   };
 }

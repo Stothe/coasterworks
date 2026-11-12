@@ -367,6 +367,110 @@ describe("useHost", () => {
     });
   });
 
+  describe("the rides", () => {
+    const CAROUSEL = { type: "carousel", x: 2, y: 2, rot: 0 };
+
+    it("have nothing before the first snapshot, then an empty list and an empty status", async () => {
+      const rig = makeRig();
+      const { result } = renderHook(() => useHost(rig.connect));
+      expect(result.current.rides).toBeNull();
+      expect(result.current.getRideStatus()).toBeNull();
+      await waitFor(() => expect(result.current.status).toBe("ready"));
+      expect(result.current.rides).toEqual([]);
+      expect(result.current.getRideStatus()).toMatchObject({ count: 0 });
+      expect(result.current.snapshot?.header.hasRides).toBe(true);
+    });
+
+    it("keep the old list when a snapshot comes without it, and replace it when a ride changes", async () => {
+      const rig = makeRig();
+      const { result } = renderHook(() => useHost(rig.connect));
+      await waitFor(() => expect(result.current.rides).not.toBeNull());
+      const first = result.current.rides;
+
+      act(() => {
+        rig.advance(1000);
+        rig.runLoop();
+      });
+      await act(async () => {
+        await result.current.client?.command("path_build", {
+          x: 1,
+          y: 6,
+          w: 2,
+          h: 1,
+          kind: "foot",
+        });
+      });
+      await waitFor(() => expect(result.current.paths?.[6 * 8 + 1]).toBe(1));
+      expect(result.current.snapshot?.header.hasRides).toBe(false);
+      expect(result.current.rides).toBe(first);
+
+      await act(async () => {
+        await result.current.client?.command("ride_build", CAROUSEL);
+      });
+      await waitFor(() => expect(result.current.rides).toHaveLength(1));
+      const id = rig.sim.world.rides[0]!.id;
+      expect(result.current.rides?.[0]).toMatchObject({
+        id,
+        type: "carousel",
+        kind: "ride",
+        x: 2,
+        y: 2,
+        open: false,
+        entrance: { x: 3, y: 5 },
+      });
+      expect(Array.from(result.current.getRideStatus()?.id ?? [])).toEqual([id]);
+      const built = result.current.rides;
+
+      await act(async () => {
+        await result.current.client?.command("ride_open", { id });
+      });
+      await waitFor(() => expect(result.current.rides?.[0]?.open).toBe(true));
+      expect(result.current.rides).not.toBe(built);
+
+      await act(async () => {
+        await result.current.client?.command("ride_demolish", { id });
+      });
+      await waitFor(() => expect(result.current.rides).toEqual([]));
+      expect(result.current.getRideStatus()?.count).toBe(0);
+    });
+
+    it("give the latest status from the same state, without committing a render of their own", async () => {
+      const rig = makeRig();
+      let commits = 0;
+      const { result } = renderHook(() => useHost(rig.connect), {
+        wrapper: ({ children }) => (
+          <Profiler id="host" onRender={() => commits++}>
+            {children}
+          </Profiler>
+        ),
+      });
+      await waitFor(() => expect(result.current.status).toBe("ready"));
+      await act(async () => {
+        await result.current.client?.command("ride_build", CAROUSEL);
+      });
+      await waitFor(() => expect(result.current.rides).toHaveLength(1));
+      act(() => {
+        rig.advance(1000);
+        rig.runLoop();
+      });
+      const state = result.current;
+      const settled = commits;
+      const before = state.getRideStatus();
+
+      rig.sim.world.rides[0]!.phase = 2;
+      rig.sim.world.rides[0]!.phaseTicks = 99;
+      act(() => {
+        rig.advance(1000);
+        rig.runLoop();
+      });
+      await waitFor(() => expect(state.getRideStatus()).not.toBe(before));
+      expect(result.current).toBe(state);
+      expect(commits).toBe(settled);
+      expect(state.getRideStatus()?.phase[0]).toBe(rig.sim.world.rides[0]!.phase);
+      expect(state.getRideStatus()?.phaseTicks[0]).toBe(rig.sim.world.rides[0]!.phaseTicks);
+    });
+  });
+
   describe("the snapshots", () => {
     it("are read from the state as the latest, and a snapshot that only moves time on commits nothing", async () => {
       const rig = makeRig();

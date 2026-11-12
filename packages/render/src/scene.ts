@@ -1,4 +1,4 @@
-import type { GuestSection } from "@coasterworks/protocol";
+import type { GuestSection, RideStatusSection } from "@coasterworks/protocol";
 import { fnv1a64 } from "@coasterworks/sim";
 import {
   BufferAttribute,
@@ -30,6 +30,12 @@ import { createGuests, type GuestsModule } from "./guests.js";
 import { groundHeightAt, sceneGroundAt } from "./heightfield.js";
 import { pickTile, rayFromCamera, type Ray } from "./picker.js";
 import { createPost, glRendererString, type PostModule, type RenderInfo } from "./post.js";
+import {
+  createRides,
+  type PlacementGhost,
+  type RidePlace,
+  type RidesModule,
+} from "./rides/rides.js";
 import {
   SOFTWARE,
   createFrameMeter,
@@ -104,6 +110,27 @@ export interface SceneHandle {
    * Every module that takes an entrance is told, and `ctx.entrance()` answers with it.
    */
   setEntrance(e: { x: number; y: number; side: 0 | 1 | 2 | 3 } | null): void;
+  /**
+   * The park's rides and stalls, from the latest snapshot that carried them, or null for none.
+   * Matched by id: a ride already drawn keeps its place in its turn.
+   */
+  setRides(rides: readonly RidePlace[] | null): void;
+  /**
+   * What every ride is doing, from the latest snapshot (ascending id order), or null. Looked up
+   * by id each frame: a status for a ride the scene does not have, or a ride with no status, is
+   * fine (the two may disagree for a frame).
+   */
+  setRideStatus(status: RideStatusSection | null): void;
+  /**
+   * How fast the sim runs: 0 paused, 1, 2, 4 or 8. Rides move in sim time, so they hold still
+   * while paused and run faster with the sim. 1 until told.
+   */
+  setSimSpeed(speed: number): void;
+  /**
+   * Draws a ride of `type` see-through on its footprint at (`x`, `y`) turned `rot` (quarter turns
+   * clockwise), tinted green when `ok` and red when the sim would refuse it; null hides it.
+   */
+  setPlacementGhost(ghost: PlacementGhost | null): void;
   /** Shows or hides the build grid. Hidden by default. */
   setGridVisible(on: boolean): void;
   /** The quality to draw at, or "auto" (the default) to let the renderer choose and adjust. */
@@ -117,8 +144,14 @@ export interface SceneHandle {
   resize(): void;
   /** The tile under a client-space point, or `null` over nothing. */
   pickAt(clientX: number, clientY: number): { x: number; y: number } | null;
-  /** The guest under a client-space point, or `null` over none. */
+  /** The guest under a client-space point, or `null` over none (or one behind a ride). */
   pickGuestAt(clientX: number, clientY: number): { id: number } | null;
+  /**
+   * The ride or stall under a client-space point, or `null`. A ride is hit by its box (its
+   * footprint and height), so it wins over the tile under it; a guest nearer along the ray wins
+   * over it (and this answers null), and so does ground in front of it.
+   */
+  pickRideAt(clientX: number, clientY: number): { id: number } | null;
   /**
    * Whether the guests drawn stand where the sim has them and nobody is moving (see
    * `GuestsModule.atRest`); true with no guests.
@@ -255,6 +288,7 @@ export function createScene(canvas: HTMLCanvasElement, opts: SceneOptions = {}):
   add("water", createWater);
   add("surroundings", createSurroundings);
   add("entrance", createEntrance);
+  const rides: RidesModule | null = add("rides", createRides);
   const guests: GuestsModule | null = add("guests", createGuests);
   const post: PostModule | null = add("post", createPost);
   post?.request(requested);
@@ -467,6 +501,22 @@ export function createScene(canvas: HTMLCanvasElement, opts: SceneOptions = {}):
   /** How far past the ground a guest's hit may be and still count: a foot's width. */
   const GUEST_PICK_SLACK = 0.15;
 
+  /**
+   * How far along `ray` (unit length) something may be and still be seen: the ground it meets
+   * first, with a little slack for what stands on it; without terrain, any distance.
+   */
+  function groundReach(ray: Ray): number {
+    const ground = terrain ? pickTile(ray, terrain) : null;
+    if (!ground) return Infinity;
+    return (
+      Math.hypot(
+        ground.point.x - ray.origin.x,
+        ground.point.y - ray.origin.y,
+        ground.point.z - ray.origin.z,
+      ) + GUEST_PICK_SLACK
+    );
+  }
+
   function pickAt(clientX: number, clientY: number): { x: number; y: number } | null {
     if (!terrain) return null;
     const ray = rayAt(clientX, clientY);
@@ -539,6 +589,18 @@ export function createScene(canvas: HTMLCanvasElement, opts: SceneOptions = {}):
       // The paths module (the lane), the gate, and whoever else keeps clear of the entrance.
       for (const module of modules) module.setEntrance?.(entrancePlace);
     },
+    setRides(list: readonly RidePlace[] | null): void {
+      rides?.setRides(list);
+    },
+    setRideStatus(status: RideStatusSection | null): void {
+      rides?.setRideStatus(status);
+    },
+    setPlacementGhost(ghost: PlacementGhost | null): void {
+      rides?.setPlacementGhost(ghost);
+    },
+    setSimSpeed(speed: number): void {
+      rides?.setSimSpeed(speed);
+    },
     setGridVisible(on: boolean): void {
       overlay?.setGridVisible(on);
     },
@@ -560,17 +622,20 @@ export function createScene(canvas: HTMLCanvasElement, opts: SceneOptions = {}):
     pickGuestAt(clientX: number, clientY: number): { id: number } | null {
       const ray = guests ? rayAt(clientX, clientY) : null;
       if (!ray || !guests) return null;
-      // A guest behind a hill or past the ground the ray meets is out of sight: only those
-      // nearer than the ground (with a little slack for feet on it) can be picked.
-      const ground = terrain ? pickTile(ray, terrain) : null;
-      const reach = ground
-        ? Math.hypot(
-            ground.point.x - ray.origin.x,
-            ground.point.y - ray.origin.y,
-            ground.point.z - ray.origin.z,
-          ) + GUEST_PICK_SLACK
-        : Infinity;
-      return guests.pickAt(ray, reach);
+      // A guest behind a hill, past the ground the ray meets or behind a ride is out of sight:
+      // only those nearer than both can be picked.
+      const reach = groundReach(ray);
+      const ride = rides?.pickAt(ray, reach) ?? null;
+      return guests.pickAt(ray, ride ? ride.distance : reach);
+    },
+    pickRideAt(clientX: number, clientY: number): { id: number } | null {
+      const ray = rides ? rayAt(clientX, clientY) : null;
+      if (!ray || !rides) return null;
+      const ride = rides.pickAt(ray, groundReach(ray));
+      if (!ride) return null;
+      // A guest in front of the ride is what the player points at.
+      if (guests?.pickAt(ray, ride.distance)) return null;
+      return { id: ride.id };
     },
     highlightTile,
     info,

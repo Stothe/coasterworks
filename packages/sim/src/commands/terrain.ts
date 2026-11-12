@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { MAX_PATH_SLOPE, PATH_NONE } from "../paths/paths.js";
+import { accessIndexes } from "../rides/rides.js";
 import { forEachCornerInRect, inBounds, tileBase } from "../terrain/terrain.js";
 import { MAX_HEIGHT, type Rect, type World } from "../world/types.js";
 import { defineCommand } from "./define.js";
@@ -88,6 +89,8 @@ export function checkPathSlopes(world: World, changes: readonly HeightChange[]):
     return after.get(index) ?? (t.corners[index] as number);
   };
   const checked = new Set<number>();
+  // A ride's entrance, exit or service tile must stay able to take the path that reaches it.
+  const access = world.rides.length > 0 ? accessIndexes(world) : null;
   for (const [index] of changes) {
     const cx = index % stride;
     const cy = (index - cx) / stride;
@@ -97,7 +100,9 @@ export function checkPathSlopes(world: World, changes: readonly HeightChange[]):
         const tile = ty * t.width + tx;
         if (checked.has(tile)) continue;
         checked.add(tile);
-        if (t.path[tile] === PATH_NONE) continue;
+        // A ride stands on level ground: the ground under it is not to be reshaped.
+        if ((t.occupant[tile] as number) !== 0) return RIDE_IN_THE_WAY;
+        if (t.path[tile] === PATH_NONE && !access?.has(tile)) continue;
         const hs = [height(tx, ty), height(tx + 1, ty), height(tx + 1, ty + 1), height(tx, ty + 1)];
         if (Math.max(...hs) - Math.min(...hs) > MAX_PATH_SLOPE) return PATH_TOO_STEEP;
       }
@@ -107,6 +112,7 @@ export function checkPathSlopes(world: World, changes: readonly HeightChange[]):
 }
 
 export const PATH_TOO_STEEP = "A path here would be too steep";
+export const RIDE_IN_THE_WAY = "A ride or stall stands here";
 
 /** `checkRect`, then `checkPathSlopes` on the corners `plan` would change. */
 function checkHeights<I extends Rect>(plan: (world: World, input: I) => HeightChange[]) {
@@ -131,7 +137,7 @@ const planRaise = (world: World, input: { steps: number } & Rect) =>
 export const terrainRaise = defineCommand({
   name: "terrain_raise",
   description:
-    "Raises every corner in a rectangle of tiles by a number of steps (default 1), up to the maximum height. Costs $50 for each corner that changes. Refused if it would leave a path steeper than 2 steps across a tile.",
+    "Raises every corner in a rectangle of tiles by a number of steps (default 1), up to the maximum height. Costs $50 for each corner that changes. Refused if it would leave a path steeper than 2 steps across a tile, or move the ground under a ride or stall.",
   category: "terrain",
   input: stepsSchema,
   undoable: true,
@@ -147,7 +153,7 @@ const planLower = (world: World, input: { steps: number } & Rect) =>
 export const terrainLower = defineCommand({
   name: "terrain_lower",
   description:
-    "Lowers every corner in a rectangle of tiles by a number of steps (default 1), down to zero. Costs $50 for each corner that changes. Refused if it would leave a path steeper than 2 steps across a tile.",
+    "Lowers every corner in a rectangle of tiles by a number of steps (default 1), down to zero. Costs $50 for each corner that changes. Refused if it would leave a path steeper than 2 steps across a tile, or move the ground under a ride or stall.",
   category: "terrain",
   input: stepsSchema,
   undoable: true,
@@ -163,7 +169,7 @@ const planLevel = (world: World, input: { height: number } & Rect) =>
 export const terrainLevel = defineCommand({
   name: "terrain_level",
   description:
-    "Sets every corner in a rectangle of tiles to one height (0 to 63). Costs $50 for each corner that changes. Refused if it would leave a path steeper than 2 steps across a tile.",
+    "Sets every corner in a rectangle of tiles to one height (0 to 63). Costs $50 for each corner that changes. Refused if it would leave a path steeper than 2 steps across a tile, or move the ground under a ride or stall.",
   category: "terrain",
   input: rectSchema.extend({ height: heightSchema }),
   undoable: true,
@@ -198,7 +204,7 @@ const planSmooth = (world: World, rect: Rect) =>
 export const terrainSmooth = defineCommand({
   name: "terrain_smooth",
   description:
-    "Sets each corner in a rectangle of tiles to the rounded average height of itself and its neighbors, in one pass. Costs $50 for each corner that changes. Refused if it would leave a path steeper than 2 steps across a tile.",
+    "Sets each corner in a rectangle of tiles to the rounded average height of itself and its neighbors, in one pass. Costs $50 for each corner that changes. Refused if it would leave a path steeper than 2 steps across a tile, or move the ground under a ride or stall.",
   category: "terrain",
   input: rectSchema,
   undoable: true,
@@ -278,7 +284,7 @@ export const terrainSetSurface = defineCommand({
 export const terrainSetWater = defineCommand({
   name: "terrain_set_water",
   description:
-    "Sets the water level of every tile in a rectangle (0 to 63). A level above 0 must be higher than the lowest corner of every tile; level 0 drains the tiles. Water cannot cover a path or the park entrance. Costs $20 for each tile that changes.",
+    "Sets the water level of every tile in a rectangle (0 to 63). A level above 0 must be higher than the lowest corner of every tile; level 0 drains the tiles. Water cannot cover a path, a ride or stall, or the park entrance. Costs $20 for each tile that changes.",
   category: "terrain",
   input: rectSchema.extend({ level: heightSchema }),
   undoable: true,
@@ -291,12 +297,15 @@ export const terrainSetWater = defineCommand({
     let aboveGround = true;
     let blocked = false;
     const { entrance } = world.park;
+    const access = world.rides.length > 0 ? accessIndexes(world) : null;
     forEachTileInRect(world, input, (x, y, index) => {
+      if (access?.has(index)) blocked = true;
       if (input.level <= tileBase(world.terrain, x, y)) aboveGround = false;
       if (world.terrain.path[index] !== PATH_NONE) blocked = true;
+      if ((world.terrain.occupant[index] as number) !== 0) blocked = true;
       if (entrance !== null && entrance.x === x && entrance.y === y) blocked = true;
     });
-    if (blocked) return "Cannot flood a path or the park entrance";
+    if (blocked) return "Cannot flood a path, a ride or the park entrance";
     return aboveGround ? null : "Water must be above the ground";
   },
   apply: (world, input) =>

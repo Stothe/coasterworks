@@ -30,6 +30,8 @@ function makeDeps() {
     cancel: vi.fn(),
     terrain: vi.fn(),
     brush: vi.fn(),
+    rotate: vi.fn(),
+    canRotate: () => false,
   };
   const deps = {
     startPlacement: vi.fn(),
@@ -103,6 +105,37 @@ describe("buildActions: commands", () => {
         query.name,
       ).toBe(false);
     }
+  });
+
+  it("puts a ride or stall build from the bar in hand like the trays do, not in a form", () => {
+    const { get, deps } = setup();
+    expect(get("ride_build").title).toBe("Build ride");
+    expect(get("stall_build").title).toBe("Build shop or stall");
+    get("ride_build").run(ctx);
+    expect(deps.startPlacement).toHaveBeenLastCalledWith("ride_build", {
+      type: "carousel",
+      rot: 0,
+    });
+    get("stall_build").run(ctx);
+    expect(deps.startPlacement).toHaveBeenLastCalledWith("stall_build", {
+      type: "snack_stand",
+      rot: 0,
+    });
+    expect(deps.openForm).not.toHaveBeenCalled();
+    // The other ride commands take a ride's id, which a form asks for.
+    get("ride_set_price").run(ctx);
+    expect(deps.openForm).toHaveBeenCalledExactlyOnceWith(get("ride_set_price"));
+  });
+
+  it("turns the ride in hand with Rotate, only while there is one", () => {
+    const { get, ui } = setup();
+    let inHand = false;
+    ui.canRotate = () => inHand;
+    expect(get("ui.rotate").enabled?.(ctx)).toBe(false);
+    inHand = true;
+    expect(get("ui.rotate").enabled?.(ctx)).toBe(true);
+    get("ui.rotate").run(ctx);
+    expect(ui.rotate).toHaveBeenCalledTimes(1);
   });
 
   it("gives every action a unique id", () => {
@@ -288,7 +321,7 @@ describe("buildActions: commands", () => {
 describe("humanizeName", () => {
   it("capitalizes the first word and lowercases the rest", () => {
     expect(humanizeName("park_close_gates")).toBe("Park close gates");
-    expect(humanizeName("ride_build")).toBe("Ride build");
+    expect(humanizeName("ride_list_all")).toBe("Ride list all");
   });
 
   it("uses the friendlier names for the commands that have one", () => {
@@ -392,7 +425,7 @@ describe("buildActions: interface actions", () => {
           (a) => a.hidden && !a.id.startsWith("ui.terrain.") && !a.id.startsWith("ui.brush."),
         )
         .map((a) => a.id),
-    ).toEqual(["ui.commandBar", "ui.cancel"]);
+    ).toEqual(["ui.rotate", "ui.commandBar", "ui.cancel"]);
     get("ui.commandBar").run(ctx);
     get("ui.cancel").run(ctx);
     expect(ui.commandBar).toHaveBeenCalledTimes(1);
@@ -463,6 +496,8 @@ describe("buildActions: interface actions", () => {
     expect(gated.sort()).toEqual(
       [
         "ui.pause",
+        // Only with a ride or stall in hand.
+        "ui.rotate",
         "ui.speed.1",
         "ui.speed.2",
         "ui.speed.4",
@@ -480,7 +515,7 @@ describe("buildActions: interface actions", () => {
         .filter((a) => a.offline)
         .map((a) => a.id)
         .sort(),
-    ).toEqual(["ui.cancel", "ui.classicView", "ui.help"]);
+    ).toEqual(["ui.cancel", "ui.classicView", "ui.help", "ui.rotate"]);
   });
 
   it("gives each a title, a description and keywords", () => {
