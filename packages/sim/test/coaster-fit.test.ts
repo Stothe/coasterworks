@@ -440,6 +440,9 @@ const STAIRCASE = Array.from({ length: 64 }, (_, i) => {
   return i === 0 ? { x, y } : { x, y, height: i % 2 === 1 ? 16 : 12 };
 });
 
+/** Expansions the staircase's fit took when its work bound was set (see the test). */
+const STAIRCASE_SEARCHED = 12_206;
+
 /** The staircase after its station point, as `fitPoints` takes points. */
 const STAIRS: FitPoint[] = STAIRCASE.slice(1).map((p) => ({
   x: p.x,
@@ -500,28 +503,44 @@ describe("fitting long and awkward courses", () => {
     started = performance.now();
     ok(fresh, "coaster_build_from_points", input);
     const buildMs = performance.now() - started;
-    console.log(
-      `64-point staircase: preview ${previewMs.toFixed(0)} ms, build ${buildMs.toFixed(0)} ms`,
-    );
     expect(fresh.world.tracks[0]!.pieces).toEqual(plan.pieces);
     return { previewMs, buildMs };
   }
 
-  // Every CI machine runs this one. Its bound only catches a fit gone badly wrong (the three
-  // fits per build it replaced took about 0.8 s on a fast Mac); the work itself is bounded
-  // exactly by MAX_FIT_EXPANSIONS, which the tests below check.
-  it("previews and builds a 64-point staircase", () => {
+  // The regression guard every machine runs: the search work is deterministic, so it is checked
+  // exactly rather than timed. The staircase took STAIRCASE_SEARCHED expansions when this was
+  // written (the three fits per build this replaced took far more); the bound leaves 25% for a
+  // change to the heuristic, and a fit that grows past it should be looked at, not waved through.
+  it("fits a 64-point staircase within a fixed amount of search work", () => {
+    const world = makeSim(256).world;
+    const fit = fitPoints(world, stationStart(world, 8, 8), STAIRS, false);
+    expect(fit.ok).toBe(true);
+    expect(fit.work.capped).toBe(0);
+    expect(fit.work.searched).toBeLessThanOrEqual(Math.floor(STAIRCASE_SEARCHED * 1.25));
+    // A catastrophe guard only: a fit gone badly wrong takes seconds.
     const { previewMs, buildMs } = timeStaircase();
     expect(previewMs + buildMs, `${(previewMs + buildMs).toFixed(1)} ms`).toBeLessThan(2_000);
   });
 
-  // Run with PERF=1, as the guest benchmark is (CI runs both on one known kind of runner): a
-  // timed bound is a benchmark, not something every machine can promise.
+  // Run with PERF=1, on CI's macOS runner beside the guest benchmark. Measured: about 65 ms for
+  // each on an M4 Max; one cold run on the shared macOS runner took 208 ms to preview (Nov 2026),
+  // about 3x slower. So: a warm-up, the best of five runs, and bounds with room for a machine
+  // three to four times slower than the Mac: 250 ms to preview, 250 ms to build.
   it.skipIf(process.env["PERF"] !== "1")(
-    "previews a 64-point staircase in under 150 ms and builds it in under 250 ms",
+    "previews and builds a 64-point staircase in under 250 ms each (best of five, warm)",
     () => {
-      const { previewMs, buildMs } = timeStaircase();
-      expect(previewMs, `${previewMs.toFixed(1)} ms`).toBeLessThan(150);
+      timeStaircase();
+      let previewMs = Infinity;
+      let buildMs = Infinity;
+      for (let run = 0; run < 5; run++) {
+        const times = timeStaircase();
+        previewMs = Math.min(previewMs, times.previewMs);
+        buildMs = Math.min(buildMs, times.buildMs);
+      }
+      console.log(
+        `64-point staircase, best of 5: preview ${previewMs.toFixed(0)} ms, build ${buildMs.toFixed(0)} ms`,
+      );
+      expect(previewMs, `${previewMs.toFixed(1)} ms`).toBeLessThan(250);
       expect(buildMs, `${buildMs.toFixed(1)} ms`).toBeLessThan(250);
     },
   );
