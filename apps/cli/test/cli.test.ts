@@ -330,6 +330,29 @@ describe("run", () => {
     expect(parseOut(await cli("inspect", file)).status.date).toBe("March 1, Year 1");
   });
 
+  it("reports how many rides and stalls the park has", async () => {
+    let file = await makePark();
+    const empty = parseOut(await cli("run", "--save", file, "--days", "1"));
+    expect(empty).toMatchObject({ rides: 0, stalls: 0 });
+    const builds: Array<[string, unknown]> = [
+      ["ride_build", { type: "carousel", x: 4, y: 5, rot: 0 }],
+      ["stall_build", { type: "snack_stand", x: 10, y: 10, rot: 0 }],
+      ["stall_build", { type: "drinks_stand", x: 12, y: 10, rot: 0 }],
+    ];
+    for (const [i, [command, input]] of builds.entries()) {
+      const next = join(dir, `built-${i}.park`);
+      const done = await cli(
+        ...["exec", "--save", file, "--command", command],
+        ...["--input", JSON.stringify(input), "--out", next],
+      );
+      expect(done.code, done.stderr).toBe(0);
+      file = next;
+    }
+    const status = parseOut(await cli("run", "--save", file, "--days", "1"));
+    expect(status).toMatchObject({ rides: 1, stalls: 2 });
+    expect(parseOut(await cli("inspect", file)).status).toMatchObject({ rides: 1, stalls: 2 });
+  });
+
   it.each(["0", "3651", "1.5", "abc"])("rejects --days %s with exit 1", async (days) => {
     const file = await makePark();
     const done = await cli("run", "--save", file, "--days", days);

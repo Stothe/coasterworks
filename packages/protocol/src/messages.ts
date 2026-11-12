@@ -3,9 +3,10 @@ import type { ExecResult } from "@coasterworks/sim";
 
 /**
  * Version of the wire protocol. The host refuses a `hello` that names any other. Version 2 added
- * paths, the entrance and guests to the snapshot (`CWS2`).
+ * paths, the entrance and guests to the snapshot (`CWS2`); version 3 added rides and stalls, and
+ * their status in every snapshot (`CWS3`).
  */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /** Thrown for anything wrong on the wire: a bad frame, a refused request, a closed connection. */
 export class ProtocolError extends Error {

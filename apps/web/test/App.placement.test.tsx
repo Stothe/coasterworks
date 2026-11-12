@@ -77,6 +77,8 @@ function host(): HostState {
     snapshot: snapshotOf({ terrainVersion: 1, hasTerrain: true }),
     terrain: terrain(),
     paths: null,
+    rides: null,
+    getRideStatus: () => null,
     guests: null,
     park: null,
     events: [],

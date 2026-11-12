@@ -2,9 +2,9 @@ import { z } from "zod";
 import { ProtocolError, SpeedSchema, type Speed } from "./messages.js";
 
 /**
- * Binary snapshot frame, version 2, all integers little-endian:
+ * Binary snapshot frame, version 3, all integers little-endian:
  *
- *   bytes 0..3   magic "CWS2"
+ *   bytes 0..3   magic "CWS3"
  *   bytes 4..7   uint32 length of the header, in bytes
  *   next         the header: UTF-8 JSON, a `SnapshotHeader`
  *   then, only when the header says `hasTerrain`:
@@ -20,13 +20,30 @@ import { ProtocolError, SpeedSchema, type Speed } from "./messages.js";
  *     state      one byte per guest
  *     color      one byte per guest
  *     happiness  one byte per guest
+ *   then, always, the ride status: a uint16 count, which must equal the header's `rideCount`,
+ *   then 10 bytes per ride or stall, in ascending id order:
+ *     id         int32
+ *     phase      one byte (0 idle, 1 loading, 2 running, 3 unloading)
+ *     phaseTicks uint16, clamped to 65535
+ *     riders     one byte, clamped to 255
+ *     queue      uint16, the queue length, clamped to 65535
  *
- * A v1 frame (magic "CWS1") has no guests or paths and is refused.
+ * The rides themselves (where they stand, their names, prices and whether they are open) are in
+ * the header's `rides`, only when the header says `hasRides`.
+ *
+ * A v1 frame (magic "CWS1") has no guests or paths, and a v2 frame ("CWS2") no rides; both are
+ * refused.
  */
-const MAGIC = [0x43, 0x57, 0x53, 0x32]; // "CWS2"
+const MAGIC = [0x43, 0x57, 0x53, 0x33]; // "CWS3"
 const PREFIX_BYTES = 8;
 /** Bytes one guest takes across the six guest arrays: three int32s and three bytes. */
 const GUEST_BYTES = 3 * 4 + 3;
+/** Bytes the ride status count takes. */
+const RIDE_COUNT_BYTES = 2;
+/** Bytes one ride takes in the ride status: int32 id, byte phase, uint16 ticks, byte riders, uint16 queue. */
+const RIDE_STATUS_BYTES = 4 + 1 + 2 + 1 + 2;
+/** The most rides a ride status section can count. */
+const MAX_RIDE_STATUS = 0xffff;
 
 const EdgeSideSchema = z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]);
 
@@ -44,6 +61,32 @@ export const ParkPublicSchema = z.object({
   totalAdmissions: z.number().int().nonnegative(),
 });
 export type ParkPublic = z.infer<typeof ParkPublicSchema>;
+
+const TileSchema = z.object({ x: z.number().int(), y: z.number().int() });
+
+/**
+ * A ride or stall as every client sees it: what it is and where, not what it is doing (that is in
+ * the ride status, every snapshot). `x`, `y` is the top-left tile of its footprint as turned by
+ * `rot` (quarter turns clockwise). A ride has an `entrance` and an `exit` tile and no `service`; a
+ * stall has a `service` tile and neither of the others.
+ */
+export const RidePublicSchema = z.object({
+  id: z.number().int().positive(),
+  /** The content type's id, such as `carousel`. */
+  type: z.string(),
+  kind: z.enum(["ride", "stall"]),
+  x: z.number().int(),
+  y: z.number().int(),
+  rot: z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]),
+  name: z.string(),
+  open: z.boolean(),
+  /** Integer cents, per ride or per item. */
+  price: z.number().int().nonnegative(),
+  entrance: TileSchema.nullable(),
+  exit: TileSchema.nullable(),
+  service: TileSchema.nullable(),
+});
+export type RidePublic = z.infer<typeof RidePublicSchema>;
 
 export interface SnapshotHeader {
   tick: number;
@@ -64,6 +107,13 @@ export interface SnapshotHeader {
   /** Changes whenever the path layer or the entrance may have; see `terrainVersion`. */
   pathVersion: number;
   hasPaths: boolean;
+  /** Changes whenever a ride or stall is built, demolished, opened, closed, priced or renamed. */
+  rideVersion: number;
+  hasRides: boolean;
+  /** Every ride and stall in ascending id order: given exactly when `hasRides` is true. */
+  rides?: RidePublic[];
+  /** How many rides and stalls the ride status section holds. */
+  rideCount: number;
   /** How many guests the guest section holds. */
   guestCount: number;
   width: number;
@@ -94,6 +144,35 @@ export interface GuestSection {
   happiness: Uint8Array;
 }
 
+/**
+ * What every ride and stall is doing, as parallel arrays in ascending id order, `count` long. A
+ * value too big for its array is clamped by whoever fills it (the host), never wrapped.
+ */
+export interface RideStatusSection {
+  count: number;
+  id: Int32Array;
+  /** 0 idle, 1 loading, 2 running, 3 unloading. */
+  phase: Uint8Array;
+  /** Ticks into the phase, up to 65535. */
+  phaseTicks: Uint16Array;
+  /** Guests on the ride, up to 255. */
+  riders: Uint8Array;
+  /** Guests queuing, up to 65535. */
+  queue: Uint16Array;
+}
+
+/** A ride status section with no rides in it. */
+export function emptyRideStatus(): RideStatusSection {
+  return {
+    count: 0,
+    id: new Int32Array(0),
+    phase: new Uint8Array(0),
+    phaseTicks: new Uint16Array(0),
+    riders: new Uint8Array(0),
+    queue: new Uint16Array(0),
+  };
+}
+
 /** What goes into a snapshot frame besides its header. */
 export interface SnapshotParts {
   /** Given exactly when `header.hasTerrain` is true. */
@@ -101,6 +180,8 @@ export interface SnapshotParts {
   /** Given exactly when `header.hasPaths` is true: one byte per tile, `width * height`. */
   paths?: Uint8Array;
   guests: GuestSection;
+  /** `header.rideCount` long; may be left out when that is 0. */
+  rideStatus?: RideStatusSection;
 }
 
 export interface DecodedSnapshot {
@@ -111,25 +192,33 @@ export interface DecodedSnapshot {
   paths?: Uint8Array;
   /** Always present; `header.guestCount` long, and empty when there are no guests. */
   guests: GuestSection;
+  /** Always present; `header.rideCount` long, and empty when there are no rides. */
+  rideStatus: RideStatusSection;
 }
 
-const SnapshotHeaderSchema = z.object({
-  tick: z.number().int().nonnegative(),
-  speed: SpeedSchema,
-  halted: z.boolean(),
-  cash: z.number().int(),
-  loan: z.number().int(),
-  monthStartCash: z.number().int(),
-  date: z.string(),
-  terrainVersion: z.number().int().nonnegative(),
-  hasTerrain: z.boolean(),
-  pathVersion: z.number().int().nonnegative(),
-  hasPaths: z.boolean(),
-  guestCount: z.number().int().nonnegative(),
-  width: z.number().int().positive(),
-  height: z.number().int().positive(),
-  park: ParkPublicSchema,
-});
+const SnapshotHeaderSchema = z
+  .object({
+    tick: z.number().int().nonnegative(),
+    speed: SpeedSchema,
+    halted: z.boolean(),
+    cash: z.number().int(),
+    loan: z.number().int(),
+    monthStartCash: z.number().int(),
+    date: z.string(),
+    terrainVersion: z.number().int().nonnegative(),
+    hasTerrain: z.boolean(),
+    pathVersion: z.number().int().nonnegative(),
+    hasPaths: z.boolean(),
+    rideVersion: z.number().int().nonnegative(),
+    hasRides: z.boolean(),
+    rides: z.array(RidePublicSchema).optional(),
+    rideCount: z.number().int().nonnegative().max(MAX_RIDE_STATUS),
+    guestCount: z.number().int().nonnegative(),
+    width: z.number().int().positive(),
+    height: z.number().int().positive(),
+    park: ParkPublicSchema,
+  })
+  .refine((header) => header.hasRides === (header.rides !== undefined));
 
 /**
  * Encodes a string as UTF-8, matching what `TextEncoder` produces (lone surrogates become
@@ -232,13 +321,32 @@ function readInt32s(view: DataView, at: number, count: number): Int32Array {
 }
 
 /**
+ * Whether the ride ids of a status section, and of the header's ride list if it has one, are the
+ * same ascending ids. Throws `ProtocolError` with `what` if not.
+ */
+function checkRideIds(header: SnapshotHeader, ids: Int32Array, what: string): void {
+  for (let i = 1; i < ids.length; i++) {
+    if ((ids[i] as number) <= (ids[i - 1] as number)) {
+      throw new ProtocolError(`${what} is not in ascending id order`);
+    }
+  }
+  const { rides } = header;
+  if (rides === undefined) return;
+  if (rides.length !== ids.length || rides.some((ride, i) => ride.id !== ids[i])) {
+    throw new ProtocolError(`${what} does not match the header's rides`);
+  }
+}
+
+/**
  * Builds a snapshot frame. `parts.terrain` must be given exactly when `header.hasTerrain` is true,
  * `parts.paths` exactly when `header.hasPaths` is, and every array must match the header's size
- * (`width` by `height` for the map, `guestCount` for the guests); otherwise this throws
+ * (`width` by `height` for the map, `guestCount` for the guests, `rideCount` for the ride status,
+ * whose ids must ascend and, when the header lists the rides, be theirs); otherwise this throws
  * `ProtocolError`.
  */
 export function encodeSnapshot(header: SnapshotHeader, parts: SnapshotParts): Uint8Array {
   const { terrain, paths, guests } = parts;
+  const rideStatus = parts.rideStatus ?? emptyRideStatus();
   if (header.hasTerrain !== (terrain !== undefined)) {
     throw new ProtocolError("Snapshot terrain must be given exactly when hasTerrain is true");
   }
@@ -270,12 +378,36 @@ export function encodeSnapshot(header: SnapshotHeader, parts: SnapshotParts): Ui
   ) {
     throw new ProtocolError("Snapshot guests do not match the header's guestCount");
   }
+  if (header.hasRides !== (header.rides !== undefined)) {
+    throw new ProtocolError("Snapshot rides must be given exactly when hasRides is true");
+  }
+  const rideCount = header.rideCount;
+  if (
+    !Number.isInteger(rideCount) ||
+    rideCount < 0 ||
+    rideCount > MAX_RIDE_STATUS ||
+    rideStatus.count !== rideCount ||
+    rideStatus.id.length !== rideCount ||
+    rideStatus.phase.length !== rideCount ||
+    rideStatus.phaseTicks.length !== rideCount ||
+    rideStatus.riders.length !== rideCount ||
+    rideStatus.queue.length !== rideCount
+  ) {
+    throw new ProtocolError("Snapshot ride status does not match the header's rideCount");
+  }
+  checkRideIds(header, rideStatus.id, "Snapshot ride status");
 
   const json = utf8Encode(JSON.stringify(header));
   const terrainSize = terrain ? cornerCount * 2 + tiles * 2 : 0;
   const pathsSize = paths ? tiles : 0;
   const out = new Uint8Array(
-    PREFIX_BYTES + json.length + terrainSize + pathsSize + count * GUEST_BYTES,
+    PREFIX_BYTES +
+      json.length +
+      terrainSize +
+      pathsSize +
+      count * GUEST_BYTES +
+      RIDE_COUNT_BYTES +
+      rideCount * RIDE_STATUS_BYTES,
   );
   const view = new DataView(out.buffer);
   out.set(MAGIC, 0);
@@ -301,6 +433,16 @@ export function encodeSnapshot(header: SnapshotHeader, parts: SnapshotParts): Ui
   out.set(guests.state, at);
   out.set(guests.color, at + count);
   out.set(guests.happiness, at + count * 2);
+  at += count * 3;
+  view.setUint16(at, rideCount, true);
+  at += RIDE_COUNT_BYTES;
+  for (let i = 0; i < rideCount; i++, at += RIDE_STATUS_BYTES) {
+    view.setInt32(at, rideStatus.id[i] as number, true);
+    view.setUint8(at + 4, rideStatus.phase[i] as number);
+    view.setUint16(at + 5, rideStatus.phaseTicks[i] as number, true);
+    view.setUint8(at + 7, rideStatus.riders[i] as number);
+    view.setUint16(at + 8, rideStatus.queue[i] as number, true);
+  }
   return out;
 }
 
@@ -336,7 +478,8 @@ export function decodeSnapshot(bytes: Uint8Array): DecodedSnapshot {
   }
   const parsed = SnapshotHeaderSchema.safeParse(raw);
   if (!parsed.success) throw new ProtocolError("Snapshot header is invalid");
-  const header = parsed.data;
+  const { rides, ...rest } = parsed.data;
+  const header: SnapshotHeader = rides === undefined ? rest : { ...rest, rides };
 
   // Every section's size comes from the header, and the whole frame must be exactly that long.
   // Nothing is allocated before this, so a header that lies cannot make the decoder allocate.
@@ -346,7 +489,9 @@ export function decodeSnapshot(bytes: Uint8Array): DecodedSnapshot {
     headerEnd +
     (header.hasTerrain ? cornerCount * 2 + tiles * 2 : 0) +
     (header.hasPaths ? tiles : 0) +
-    count * GUEST_BYTES;
+    count * GUEST_BYTES +
+    RIDE_COUNT_BYTES +
+    header.rideCount * RIDE_STATUS_BYTES;
   if (bytes.length !== expected) {
     throw new ProtocolError(`Snapshot length mismatch: expected ${expected}, got ${bytes.length}`);
   }
@@ -376,7 +521,31 @@ export function decodeSnapshot(bytes: Uint8Array): DecodedSnapshot {
     color: new Uint8Array(bytes.subarray(at + count * 13, at + count * 14)),
     happiness: new Uint8Array(bytes.subarray(at + count * 14, at + count * 15)),
   };
-  const decoded: DecodedSnapshot = { header, guests };
+  at += count * GUEST_BYTES;
+  const rideCount = view.getUint16(at, true);
+  if (rideCount !== header.rideCount) {
+    throw new ProtocolError(
+      `Snapshot ride status count mismatch: header says ${header.rideCount}, body says ${rideCount}`,
+    );
+  }
+  at += RIDE_COUNT_BYTES;
+  const rideStatus: RideStatusSection = {
+    count: rideCount,
+    id: new Int32Array(rideCount),
+    phase: new Uint8Array(rideCount),
+    phaseTicks: new Uint16Array(rideCount),
+    riders: new Uint8Array(rideCount),
+    queue: new Uint16Array(rideCount),
+  };
+  for (let i = 0; i < rideCount; i++, at += RIDE_STATUS_BYTES) {
+    rideStatus.id[i] = view.getInt32(at, true);
+    rideStatus.phase[i] = view.getUint8(at + 4);
+    rideStatus.phaseTicks[i] = view.getUint16(at + 5, true);
+    rideStatus.riders[i] = view.getUint8(at + 7);
+    rideStatus.queue[i] = view.getUint16(at + 8, true);
+  }
+  checkRideIds(header, rideStatus.id, "Snapshot ride status");
+  const decoded: DecodedSnapshot = { header, guests, rideStatus };
   if (terrain) decoded.terrain = terrain;
   if (paths) decoded.paths = paths;
   return decoded;

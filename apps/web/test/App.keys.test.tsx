@@ -17,6 +17,8 @@ function hostAt(speed: Speed, halted: boolean): HostState {
     snapshot: snapshotOf({ speed, halted }),
     terrain: null,
     paths: null,
+    rides: null,
+    getRideStatus: () => null,
     guests: null,
     park: null,
     events: [],

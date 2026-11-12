@@ -125,6 +125,74 @@ describe("tools", () => {
     expect(byName.get("undo")?.annotations).toMatchObject({ readOnlyHint: false });
   });
 
+  it("lists the ride, stall, content and path-stroke tools, each with its input schema", async () => {
+    const tools = (await (await connect(makeSim())).listTools()).tools;
+    const byName = new Map(tools.map((t) => [t.name, t]));
+    const expected: Record<string, string[]> = {
+      ride_build: ["type", "x", "y", "rot"],
+      stall_build: ["type", "x", "y", "rot"],
+      ride_demolish: ["id"],
+      ride_open: ["id"],
+      ride_close: ["id"],
+      ride_set_price: ["id", "cents"],
+      ride_rename: ["id", "name"],
+      ride_list: [],
+      ride_get: ["id"],
+      content_list: [],
+      path_build_tiles: ["tiles", "kind"],
+      path_remove_tiles: ["tiles"],
+      path_check_tiles: ["tiles", "kind"],
+    };
+    for (const [name, required] of Object.entries(expected)) {
+      const tool = byName.get(name);
+      expect(tool, name).toBeDefined();
+      expect(tool?.description?.length, name).toBeGreaterThan(0);
+      expect(tool?.inputSchema.type, name).toBe("object");
+      expect(Object.keys(tool?.inputSchema.properties ?? {}), name).toEqual(
+        expect.arrayContaining(required),
+      );
+      expect(tool?.inputSchema.required ?? [], name).toEqual(expect.arrayContaining(required));
+    }
+    expect(Object.keys(byName.get("content_list")?.inputSchema.properties ?? {})).toEqual(["kind"]);
+    for (const name of ["ride_list", "ride_get", "content_list", "path_check_tiles"]) {
+      expect(byName.get(name)?.annotations, name).toMatchObject({ readOnlyHint: true });
+    }
+    for (const name of ["ride_build", "stall_build", "ride_demolish", "path_build_tiles"]) {
+      expect(byName.get(name)?.annotations, name).toMatchObject({ readOnlyHint: false });
+    }
+  });
+
+  it("lists the same ride, stall and path-stroke tools in catalog_list, with their schemas", async () => {
+    const client = await connect(makeSim());
+    const catalog = (await call(client, "catalog_list")).json.result as Array<{
+      name: string;
+      kind: string;
+      inputSchema: { type?: string; properties?: Record<string, unknown> };
+    }>;
+    const byName = new Map(catalog.map((entry) => [entry.name, entry]));
+    for (const name of [
+      "ride_build",
+      "stall_build",
+      "ride_demolish",
+      "ride_open",
+      "ride_close",
+      "ride_set_price",
+      "ride_rename",
+      "path_build_tiles",
+      "path_remove_tiles",
+    ]) {
+      expect(byName.get(name), name).toMatchObject({ kind: "command" });
+      expect(byName.get(name)?.inputSchema.type, name).toBe("object");
+    }
+    for (const name of ["ride_list", "ride_get", "content_list", "path_check_tiles"]) {
+      expect(byName.get(name), name).toMatchObject({ kind: "query" });
+      expect(byName.get(name)?.inputSchema.type, name).toBe("object");
+    }
+    expect(Object.keys(byName.get("ride_build")?.inputSchema.properties ?? {})).toEqual(
+      expect.arrayContaining(["type", "x", "y", "rot"]),
+    );
+  });
+
   it("names the server and version it was given", async () => {
     const client = await connect(makeSim(), { name: "park-test", version: "9.9.9" });
     expect(client.getServerVersion()).toMatchObject({ name: "park-test", version: "9.9.9" });
@@ -198,6 +266,71 @@ describe("commands", () => {
     expect(advanced.error).toBe(false);
     const status = await call(client, "park_status");
     expect(status.json.result.date).toBe("April 1, Year 1");
+  });
+});
+
+describe("rides and stalls", () => {
+  it("builds a ride with a queue and a stall beside a path, opens them, and earns from both", async () => {
+    const sim = new Sim(
+      createWorld({ width: 16, height: 24, seed: 1, name: "Ride Park", cash: 1_000_000_00 }),
+    );
+    const client = await connect(sim);
+    const ok = async (name: string, args: Record<string, unknown> = {}) => {
+      const done = await call(client, name, args);
+      expect(done.error, `${name}: ${JSON.stringify(done.json)}`).toBe(false);
+      return done.json;
+    };
+
+    // A gate on the south edge and a footpath up the middle of the map.
+    await ok("park_set_entrance", { x: 8, y: 23 });
+    await ok("path_build", { x: 8, y: 4, w: 1, h: 19, kind: "foot" });
+    // A carousel west of the path: its exit (7, 6) joins the path, and a queue runs from its
+    // entrance (5, 8) round to the path at (8, 10).
+    const carousels = await ok("content_list", { kind: "ride" });
+    expect(carousels.result.map((type: { id: string }) => type.id)).toContain("carousel");
+    const built = await ok("ride_build", { type: "carousel", x: 4, y: 5, rot: 0 });
+    expect(built.cost).toBeGreaterThan(0);
+    await ok("path_build_tiles", { tiles: [{ x: 7, y: 6 }], kind: "foot" });
+    const queue = [
+      { x: 5, y: 8 },
+      { x: 5, y: 9 },
+      { x: 5, y: 10 },
+      { x: 6, y: 10 },
+      { x: 7, y: 10 },
+    ];
+    expect((await ok("path_check_tiles", { tiles: queue, kind: "queue" })).result.refused).toEqual(
+      [],
+    );
+    await ok("path_build_tiles", { tiles: queue, kind: "queue" });
+    // A snack stand east of the path, serving onto it.
+    await ok("stall_build", { type: "snack_stand", x: 9, y: 12, rot: 1 });
+
+    const list = (await ok("ride_list")).result;
+    expect(list).toMatchObject([
+      { kind: "ride", type: "carousel", open: false },
+      { kind: "stall", type: "snack_stand", open: false },
+    ]);
+    const [ride, stall] = list.map((item: { id: number }) => item.id);
+    const got = (await ok("ride_get", { id: ride })).result;
+    expect(got).toMatchObject({ entrance: { x: 5, y: 8 }, exit: { x: 7, y: 6 } });
+    expect((await ok("ride_get", { id: stall })).result.service).toEqual({ x: 8, y: 12 });
+
+    await ok("ride_open", { id: ride });
+    await ok("ride_open", { id: stall });
+    await ok("park_open");
+    // Guests come as the park's rating rises; two months is plenty for both to take money.
+    await ok("sim_advance", { days: 62 });
+
+    const finance = (await ok("finance_summary")).result;
+    expect(finance.allTime.entry).toBeGreaterThan(0);
+    expect(finance.allTime.rides).toBeGreaterThan(0);
+    expect(finance.allTime.shops).toBeGreaterThan(0);
+    expect(finance.allTime.running).toBeGreaterThan(0);
+    const byId = new Map(finance.rides.map((r: { id: number }) => [r.id, r]));
+    expect(byId.get(ride)).toMatchObject({ kind: "ride" });
+    expect((byId.get(ride) as { income: number }).income).toBe(finance.allTime.rides);
+    expect((byId.get(stall) as { income: number }).income).toBe(finance.allTime.shops);
+    expect(sim.world.park.income.rides).toBe(finance.allTime.rides);
   });
 });
 

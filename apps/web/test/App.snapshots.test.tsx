@@ -59,6 +59,8 @@ function liveHost(snapshot = true): LiveHost {
     name: "Queryland",
     terrain: null,
     paths: null,
+    rides: null,
+    getRideStatus: () => null,
     guests: null,
     park: null,
     events: [],

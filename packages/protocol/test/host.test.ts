@@ -1217,12 +1217,12 @@ function admit(sim: Sim, guests: number): void {
   expect(sim.world.guests.count).toBeGreaterThanOrEqual(guests);
 }
 
-describe("protocol 2", () => {
-  it("is protocol 2", () => {
-    expect(PROTOCOL_VERSION).toBe(2);
+describe("protocol 3", () => {
+  it("is protocol 3", () => {
+    expect(PROTOCOL_VERSION).toBe(3);
   });
 
-  it("welcomes with protocol 2 and the park's name, not the world's", () => {
+  it("welcomes with protocol 3 and the park's name, not the world's", () => {
     const sim = makeSim();
     expect(sim.execute("park_rename", { name: "Renamed Park" }, "agent").ok).toBe(true);
     expect(sim.world.meta.name).toBe("Test Park");
@@ -1230,7 +1230,7 @@ describe("protocol 2", () => {
     peer.hello();
     expect(peer.messages("welcome")[0]).toMatchObject({
       t: "welcome",
-      protocol: 2,
+      protocol: 3,
       name: "Renamed Park",
     });
   });
@@ -1245,14 +1245,17 @@ describe("protocol 2", () => {
     expect(late.lastSnapshot().header.park.name).toBe("Wonderland");
   });
 
-  it("refuses protocol 1, as the host that spoke it would refuse protocol 2", () => {
-    const { host } = setup();
-    const peer = connectPeer(host);
-    peer.send({ t: "hello", protocol: 1 });
-    expect(peer.kinds()).toEqual(["error"]);
-    expect(peer.messages("error")[0]?.message).toBe("Unsupported protocol version");
-    expect(peer.closed).toBe(true);
-  });
+  it.each([1, 2])(
+    "refuses protocol %i, as the host that spoke it would refuse protocol 3",
+    (protocol) => {
+      const { host } = setup();
+      const peer = connectPeer(host);
+      peer.send({ t: "hello", protocol });
+      expect(peer.kinds()).toEqual(["error"]);
+      expect(peer.messages("error")[0]?.message).toBe("Unsupported protocol version");
+      expect(peer.closed).toBe(true);
+    },
+  );
 
   it("describes the park in every snapshot", () => {
     const { sim, clock, host } = setup();
@@ -1747,20 +1750,23 @@ describe("guests in snapshots", () => {
   });
 });
 
-describe("a protocol 1 host", () => {
-  it("is refused by SimClient.connect through the existing error path", async () => {
-    const [hostSide, clientSide] = createLinkedTransports();
-    // What a protocol 1 host does with a hello that names protocol 2.
-    hostSide.onMessage((frame) => {
-      const hello = JSON.parse(frame as string) as { protocol: number };
-      if (hello.protocol !== 1) {
-        hostSide.send(JSON.stringify({ t: "error", message: "Unsupported protocol version" }));
-        hostSide.close();
-      }
-    });
-    const client = new SimClient(clientSide);
-    await expect(client.connect()).rejects.toThrow("Unsupported protocol version");
-  });
+describe("an older host", () => {
+  it.each([1, 2])(
+    "speaking protocol %i is refused by SimClient.connect through the existing error path",
+    async (spoken) => {
+      const [hostSide, clientSide] = createLinkedTransports();
+      // What an older host does with a hello that names a newer protocol.
+      hostSide.onMessage((frame) => {
+        const hello = JSON.parse(frame as string) as { protocol: number };
+        if (hello.protocol !== spoken) {
+          hostSide.send(JSON.stringify({ t: "error", message: "Unsupported protocol version" }));
+          hostSide.close();
+        }
+      });
+      const client = new SimClient(clientSide);
+      await expect(client.connect()).rejects.toThrow("Unsupported protocol version");
+    },
+  );
 });
 
 describe("a client that changes the world while its own snapshot is delivered", () => {
@@ -1816,5 +1822,291 @@ describe("a client that changes the world while its own snapshot is delivered", 
     });
     host.setSpeed(1); // another broadcast: B must be sent the paths again
     expect(Array.from(bPaths!)).toEqual(Array.from(sim.world.terrain.path));
+  });
+});
+
+describe("rides in snapshots", () => {
+  /** A carousel at (2, 2) to (4, 4): entrance (3, 5), exit (5, 3). */
+  const CAROUSEL = { type: "carousel", x: 2, y: 2, rot: 0 };
+  /** A snack stand at (6, 5), serving (6, 6). */
+  const STALL = { type: "snack_stand", x: 6, y: 5, rot: 0 };
+
+  it("sends the rides with the first snapshot, then only when they change", () => {
+    const { host } = setup();
+    const peer = connectPeer(host);
+    peer.hello();
+    const first = peer.lastSnapshot();
+    expect(first.header).toMatchObject({ hasRides: true, rideVersion: 0, rides: [], rideCount: 0 });
+    expect(first.rideStatus.count).toBe(0);
+
+    for (const [name, input] of [
+      ["finance_take_loan", LOAN],
+      ["terrain_raise", { x: 6, y: 1, w: 1, h: 1 }],
+      ["path_build", { x: 1, y: 6, w: 2, h: 1, kind: "foot" }],
+      ["park_rename", { name: "Quiet" }],
+    ] as const) {
+      peer.clear();
+      peer.send({ t: "command", id: 1, name, input });
+      expect(peer.lastSnapshot().header, name).toMatchObject({ hasRides: false, rideVersion: 0 });
+      expect(peer.lastSnapshot().header).not.toHaveProperty("rides");
+    }
+  });
+
+  it("sends the rides after each ride command, with the record as the sim holds it", () => {
+    const { sim, host } = setup();
+    const peer = joined(host);
+    peer.send({ t: "command", id: 1, name: "ride_build", input: CAROUSEL });
+    let snapshot = peer.lastSnapshot();
+    expect(snapshot.header).toMatchObject({ hasRides: true, rideVersion: 1, rideCount: 1 });
+    const ride = sim.world.rides[0]!;
+    expect(snapshot.header.rides).toEqual([
+      {
+        id: ride.id,
+        type: "carousel",
+        kind: "ride",
+        x: 2,
+        y: 2,
+        rot: 0,
+        name: ride.name,
+        open: false,
+        price: ride.price,
+        entrance: { x: 3, y: 5 },
+        exit: { x: 5, y: 3 },
+        service: null,
+      },
+    ]);
+    expect(Array.from(snapshot.rideStatus.id)).toEqual([ride.id]);
+
+    const steps: Array<[string, unknown]> = [
+      ["stall_build", STALL],
+      ["ride_open", { id: ride.id }],
+      ["ride_set_price", { id: ride.id, cents: 150 }],
+      ["ride_rename", { id: ride.id, name: "Spinner" }],
+      ["ride_close", { id: ride.id }],
+    ];
+    let version = 1;
+    for (const [name, input] of steps) {
+      peer.clear();
+      peer.send({ t: "command", id: 2, name, input });
+      expect(peer.messages("result")[0]?.result, name).toMatchObject({ ok: true });
+      snapshot = peer.lastSnapshot();
+      expect(snapshot.header, name).toMatchObject({ hasRides: true, rideVersion: ++version });
+    }
+    expect(snapshot.header.rides).toMatchObject([
+      { id: ride.id, name: "Spinner", price: 150, open: false },
+      { kind: "stall", type: "snack_stand", service: { x: 6, y: 6 }, entrance: null, exit: null },
+    ]);
+    expect(snapshot.header.rideCount).toBe(2);
+
+    peer.send({ t: "undo", id: 3 });
+    expect(peer.lastSnapshot().header).toMatchObject({ hasRides: true, rideVersion: ++version });
+    expect(peer.lastSnapshot().header.rides?.[0]?.open).toBe(true);
+    peer.send({ t: "redo", id: 4 });
+    expect(peer.lastSnapshot().header).toMatchObject({ hasRides: true, rideVersion: ++version });
+    expect(peer.lastSnapshot().header.rides?.[0]?.open).toBe(false);
+  });
+
+  it("drops a demolished ride from the next status block and the list, and brings it back on undo", () => {
+    const { sim, clock, host } = setup();
+    const peer = joined(host);
+    peer.send({ t: "command", id: 1, name: "ride_build", input: CAROUSEL });
+    peer.send({ t: "command", id: 2, name: "stall_build", input: STALL });
+    const [carousel, stall] = sim.world.rides.map((ride) => ride.id);
+    clock.advance(50);
+    host.tick();
+    expect(Array.from(peer.lastSnapshot().rideStatus.id)).toEqual([carousel, stall]);
+
+    peer.send({ t: "command", id: 3, name: "ride_demolish", input: { id: carousel } });
+    const after = peer.lastSnapshot();
+    expect(after.header.rideCount).toBe(1);
+    expect(Array.from(after.rideStatus.id)).toEqual([stall]);
+    expect(after.header.rides?.map((ride) => ride.id)).toEqual([stall]);
+    // And in a periodic snapshot, which carries no list.
+    peer.clear();
+    clock.advance(50);
+    host.tick();
+    expect(peer.lastSnapshot().header).toMatchObject({ hasRides: false, rideCount: 1 });
+    expect(Array.from(peer.lastSnapshot().rideStatus.id)).toEqual([stall]);
+
+    peer.send({ t: "undo", id: 4 });
+    expect(Array.from(peer.lastSnapshot().rideStatus.id)).toEqual([carousel, stall]);
+    expect(peer.lastSnapshot().header.rides?.map((ride) => ride.id)).toEqual([carousel, stall]);
+  });
+
+  it("lists the rides and their status in ascending id order whatever order the world keeps", () => {
+    const { sim, host } = setup();
+    expect(sim.execute("ride_build", CAROUSEL, "agent").ok).toBe(true);
+    expect(sim.execute("stall_build", STALL, "agent").ok).toBe(true);
+    sim.world.rides.reverse();
+    const peer = connectPeer(host);
+    peer.hello();
+    const ids = sim.world.rides.map((ride) => ride.id).sort((a, b) => a - b);
+    expect(Array.from(peer.lastSnapshot().rideStatus.id)).toEqual(ids);
+    expect(peer.lastSnapshot().header.rides?.map((ride) => ride.id)).toEqual(ids);
+  });
+
+  it("carries each ride's phase, ticks, riders and queue length, clamped to fit", () => {
+    const { sim, host } = setup();
+    expect(sim.execute("ride_build", CAROUSEL, "agent").ok).toBe(true);
+    expect(sim.execute("stall_build", STALL, "agent").ok).toBe(true);
+    const peer = joined(host);
+    const [ride, stall] = sim.world.rides;
+    // Set by hand: the status block shows what the record says, however it got there.
+    ride!.phase = 2;
+    ride!.phaseTicks = 123;
+    ride!.riders = [1, 2, 3];
+    ride!.queue = [4, 5];
+    stall!.phaseTicks = 70_000;
+    stall!.riders = Array.from({ length: 300 }, (_, i) => i + 10);
+    stall!.queue = Array.from({ length: 70_000 }, (_, i) => i + 400);
+    // Asked for, so no tick runs between setting the values and sending them.
+    peer.send({ t: "snapshot", id: 1 });
+    const status = peer.lastSnapshot().rideStatus;
+    expect(status.count).toBe(2);
+    expect(Array.from(status.phase)).toEqual([2, 0]);
+    expect(Array.from(status.phaseTicks)).toEqual([123, 65_535]);
+    expect(Array.from(status.riders)).toEqual([3, 255]);
+    expect(Array.from(status.queue)).toEqual([2, 65_535]);
+  });
+
+  it("shows a running ride's status moving between periodic snapshots", () => {
+    const { sim, clock, host } = setup();
+    const peer = joined(host);
+    peer.send({ t: "command", id: 1, name: "ride_build", input: CAROUSEL });
+    const id = sim.world.rides[0]!.id;
+    sim.world.rides[0]!.phase = 2; // running, as if a cycle had begun
+    clock.advance(50);
+    host.tick();
+    const before = peer.lastSnapshot().rideStatus.phaseTicks[0]!;
+    sim.world.rides[0]!.phaseTicks += 7;
+    clock.advance(50);
+    host.tick();
+    const after = peer.lastSnapshot();
+    expect(after.header.hasRides).toBe(false);
+    expect(after.rideStatus.id[0]).toBe(id);
+    expect(after.rideStatus.phaseTicks[0]).not.toBe(before);
+    expect(after.rideStatus.phaseTicks[0]).toBe(sim.world.rides[0]!.phaseTicks);
+  });
+
+  it("sends the rides to a client that is behind and to nobody else", () => {
+    const { clock, host } = setup();
+    const a = joined(host);
+    const b = joined(host);
+    a.send({ t: "command", id: 1, name: "ride_build", input: CAROUSEL });
+    expect(a.lastSnapshot().header.hasRides).toBe(true);
+    expect(b.lastSnapshot().header.hasRides).toBe(true);
+
+    const c = connectPeer(host);
+    c.hello();
+    expect(c.lastSnapshot().header).toMatchObject({ hasRides: true, rideVersion: 1, rideCount: 1 });
+    for (const peer of [a, b, c]) peer.clear();
+    clock.advance(50);
+    host.tick();
+    for (const peer of [a, b, c]) {
+      expect(peer.lastSnapshot().header).toMatchObject({ hasRides: false, rideVersion: 1 });
+    }
+    b.send({ t: "snapshot", id: 7 });
+    expect(b.lastSnapshot().header).toMatchObject({ hasRides: true, hasPaths: true });
+  });
+
+  it("builds one frame per combination of layers a client needs", () => {
+    const { host } = setup();
+    const a = joined(host);
+    const b = joined(host);
+    a.send({ t: "command", id: 1, name: "ride_build", input: CAROUSEL });
+    // Both were behind on the rides only, so both were sent the same frame.
+    expect(a.frames.at(-1)).toBe(b.frames.at(-1));
+    const c = connectPeer(host);
+    c.hello();
+    a.send({ t: "command", id: 2, name: "finance_take_loan", input: LOAN });
+    const frames = [a, b, c].map((peer) => peer.frames.at(-1));
+    expect(frames[0]).toBe(frames[1]);
+    expect(frames[0]).toBe(frames[2]);
+  });
+
+  it("sends the rides again after a different world, though its version matches", () => {
+    const { sim, clock, host } = setup();
+    const peer = joined(host);
+    const other = new Sim(createWorld({ width: 8, height: 8, seed: 3, name: "Other" }));
+    expect(other.execute("ride_build", CAROUSEL, "agent").ok).toBe(true);
+    other.world.rideVersion = 0; // the same version the client was sent
+    sim.replaceWorld(other.world);
+    clock.advance(25);
+    host.tick();
+    const snapshot = peer.lastSnapshot();
+    expect(snapshot.header).toMatchObject({ hasRides: true, rideCount: 1 });
+    expect(snapshot.header.rides?.[0]?.type).toBe("carousel");
+    peer.clear();
+    peer.send({ t: "command", id: 1, name: "finance_take_loan", input: LOAN });
+    expect(peer.lastSnapshot().header).toMatchObject({ hasRides: false });
+  });
+
+  it("sends the rides after an MCP-style ride command, and notices one on the next tick", () => {
+    const { sim, clock, host } = setup();
+    const peer = joined(host);
+    sim.execute("ride_build", CAROUSEL, "agent");
+    host.notifyExternalMutation();
+    expect(peer.lastSnapshot().header).toMatchObject({ hasRides: true, rideVersion: 1 });
+    peer.clear();
+    sim.execute("stall_build", STALL, "agent");
+    clock.advance(25);
+    host.tick();
+    expect(peer.lastSnapshot().header).toMatchObject({ hasRides: true, rideVersion: 2 });
+    expect(peer.lastSnapshot().header.rides).toHaveLength(2);
+  });
+});
+
+describe("a client that builds a ride while its own snapshot is delivered", () => {
+  function syncPeer(onFrame: (frame: Frame) => void) {
+    let handler: ((frame: Frame) => void) | null = null;
+    const transport: MessageTransport = {
+      send: (frame) => onFrame(frame),
+      onMessage: (h) => {
+        handler = h;
+      },
+      onClose: () => {},
+      close: () => {},
+    };
+    return { transport, toHost: (message: unknown) => handler!(JSON.stringify(message)) };
+  }
+
+  it("does not leave another client marked as holding a ride list it was never sent", () => {
+    const sim = new Sim(
+      createWorld({ width: 8, height: 8, seed: 1, name: "T", cash: 1_000_000_00 }),
+    );
+    const host = new SimHostServer(sim);
+    let armed = false;
+    let nextId = 100;
+    const a = syncPeer((frame) => {
+      if (typeof frame === "string" || !armed) return;
+      armed = false;
+      a.toHost({
+        t: "command",
+        id: nextId++,
+        name: "stall_build",
+        input: { type: "snack_stand", x: 6, y: 5, rot: 0 },
+      });
+      a.toHost({ t: "snapshot", id: nextId++ });
+    });
+    const seen: { rides: Array<{ id: number }> | null } = { rides: null };
+    const b = syncPeer((frame) => {
+      if (typeof frame === "string") return;
+      const decoded = decodeSnapshot(frame);
+      if (decoded.header.rides) seen.rides = decoded.header.rides;
+    });
+    host.attach(a.transport);
+    host.attach(b.transport);
+    a.toHost({ t: "hello", id: 1, protocol: PROTOCOL_VERSION });
+    b.toHost({ t: "hello", id: 2, protocol: PROTOCOL_VERSION });
+    armed = true;
+    a.toHost({
+      t: "command",
+      id: 3,
+      name: "ride_build",
+      input: { type: "carousel", x: 2, y: 2, rot: 0 },
+    });
+    host.setSpeed(1); // another broadcast: B must be sent the rides again
+    expect(seen.rides).toHaveLength(2);
+    expect(seen.rides?.map((ride) => ride.id)).toEqual(sim.world.rides.map((ride) => ride.id));
   });
 });

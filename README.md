@@ -77,16 +77,18 @@ node apps/cli/dist/index.js undo --save my.park --out my.park
 node apps/cli/dist/index.js redo --save my.park --out my.park
 ```
 
-An agent can run a park end to end with no window at all. The sample park comes with an entrance, paths and a $5 entry fee; open it, let a week pass, and ask the guests what they think (`scripts/demo-headless.sh` does exactly this, and CI runs it):
+An agent can run a park end to end with no window at all. The sample park comes with an entrance, paths and a $5 entry fee; open it, let a week pass, and ask the guests what they think (`scripts/demo-headless.sh` does exactly this, then builds a carousel with a short queue and a snack stand beside the main path, opens them, runs a month and prints what they took; CI runs it):
 
 ```bash
 node apps/cli/dist/index.js new --out demo.park --sample
 node apps/cli/dist/index.js exec --save demo.park --command park_open --out demo.park
 node apps/cli/dist/index.js run --save demo.park --days 7 --out demo.park
 node apps/cli/dist/index.js query --save demo.park --name guest_thoughts
+node apps/cli/dist/index.js query --save demo.park --name content_list --input '{"kind":"ride"}'
+node apps/cli/dist/index.js exec --save demo.park --command ride_build --input '{"type":"carousel","x":37,"y":60,"rot":2}' --out demo.park
 ```
 
-Command names such as `terrain_raise` come from `packages/sim/src/commands`, and query names such as `park_status` and `terrain_get` from `packages/sim/src/queries`. A failed command or query exits 1 and still prints its result.
+`run` prints the park's status, including how many `rides` and `stalls` it has. Command names such as `terrain_raise` come from `packages/sim/src/commands`, and query names such as `park_status` and `terrain_get` from `packages/sim/src/queries`. A failed command or query exits 1 and still prints its result.
 
 ## Connect Claude Code
 
@@ -96,7 +98,15 @@ The same commands are available to an agent over MCP. Build first (`pnpm build`)
 claude mcp add coasterworks -- node /absolute/path/to/apps/cli/dist/index.js mcp --save /absolute/path/my.park --out /absolute/path/my.park
 ```
 
-Claude can then build in the park with the tools the sim exposes (`terrain_raise`, `park_status`, `undo`, and so on). `--out` writes every change back to the file; without it the park lives in memory and `--save` is never modified.
+Claude can then build in the park with the tools the sim exposes, one per command and query plus `undo` and `redo`:
+
+- terrain: `terrain_raise`, `terrain_lower`, and the rest of the terrain tools
+- paths: `path_build`, `path_remove`, and the stroke tools `path_build_tiles`, `path_remove_tiles` and `path_check_tiles`
+- rides and stalls: `content_list` (what can be built), `ride_build`, `stall_build`, `ride_demolish`, `ride_open`, `ride_close`, `ride_set_price`, `ride_rename`, `ride_list` and `ride_get`
+- the park and its money: `park_status`, `park_open`, `park_set_entry_fee`, `finance_summary`, `finance_take_loan`, and more
+- time: `sim_advance`
+
+Every tool describes its own input, so an agent can list them and read the schemas. `--out` writes every change back to the file; without it the park lives in memory and `--save` is never modified.
 
 For a client that cannot start a process, serve it over HTTP instead:
 

@@ -45,6 +45,8 @@ function host(over: Partial<HostState> = {}): HostState {
     snapshot: snapshotOf(),
     terrain: null,
     paths: null,
+    rides: null,
+    getRideStatus: () => null,
     guests: null,
     park: null,
     events: [],
