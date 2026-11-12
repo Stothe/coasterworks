@@ -9,6 +9,7 @@ import {
   type MessageTransport,
   type SimHostOptions,
   type Speed,
+  decodeSnapshot,
 } from "../src/index.js";
 import { RAISE, connectPeer, fakeTimers, makeSim, type Peer } from "./helpers.js";
 
@@ -1759,5 +1760,61 @@ describe("a protocol 1 host", () => {
     });
     const client = new SimClient(clientSide);
     await expect(client.connect()).rejects.toThrow("Unsupported protocol version");
+  });
+});
+
+describe("a client that changes the world while its own snapshot is delivered", () => {
+  // A transport that hands frames over synchronously, so a client's handler runs inside the
+  // host's delivery loop, before the other clients have been sent theirs.
+  function syncPeer(onFrame: (frame: Frame) => void) {
+    let handler: ((frame: Frame) => void) | null = null;
+    const transport: MessageTransport = {
+      send: (frame) => onFrame(frame),
+      onMessage: (h) => {
+        handler = h;
+      },
+      onClose: () => {},
+      close: () => {},
+    };
+    return { transport, toHost: (message: unknown) => handler!(JSON.stringify(message)) };
+  }
+
+  it("does not leave another client marked as holding a path layer it was never sent", () => {
+    const sim = new Sim(
+      createWorld({ width: 8, height: 8, seed: 1, name: "T", cash: 1_000_000_00 }),
+    );
+    const host = new SimHostServer(sim);
+    let armed = false;
+    let nextId = 100;
+    const a = syncPeer((frame) => {
+      if (typeof frame === "string" || !armed) return;
+      armed = false;
+      a.toHost({
+        t: "command",
+        id: nextId++,
+        name: "path_build",
+        input: { x: 3, y: 3, w: 1, h: 1, kind: "foot" },
+      });
+      a.toHost({ t: "snapshot", id: nextId++ });
+    });
+    let bPaths: Uint8Array | null = null;
+    const b = syncPeer((frame) => {
+      if (typeof frame === "string") return;
+      const decoded = decodeSnapshot(frame);
+      if (decoded.paths) bPaths = decoded.paths;
+    });
+    host.attach(a.transport);
+    host.attach(b.transport);
+    a.toHost({ t: "hello", id: 1, protocol: PROTOCOL_VERSION });
+    b.toHost({ t: "hello", id: 2, protocol: PROTOCOL_VERSION });
+    armed = true;
+    a.toHost({
+      t: "command",
+      id: 3,
+      name: "path_build",
+      input: { x: 1, y: 1, w: 1, h: 1, kind: "foot" },
+    });
+    host.setSpeed(1); // another broadcast: B must be sent the paths again
+    expect(Array.from(bPaths!)).toEqual(Array.from(sim.world.terrain.path));
   });
 });
