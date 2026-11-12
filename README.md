@@ -2,9 +2,9 @@
 
 Coasterworks is an open-source theme-park builder in the spirit of RollerCoaster Tycoon: the depth of the original with a UI built for 2026, playable without any original game files, and MCP native so Claude or any agent can build and run a park through the same commands the player uses. Mac first; other platforms later.
 
-Status: pre-alpha. You can fly around a park, shape terrain, borrow money, and drive it all from a labeled dock, a ⌘K command bar or an MCP agent, in the browser (`pnpm dev:web`) or the Mac app (`pnpm dev:desktop`). Paths, rides and guests are next.
+Status: pre-alpha. You can fly around a park, shape terrain, lay footpaths and queues, place the entrance, set the entry fee and open the gates, then watch guests arrive, wander your paths, think, pay and go home. Click a guest to see their needs and thoughts. Drive it all from a labeled dock, a ⌘K command bar or an MCP agent, in the browser (`pnpm dev:web`) or the Mac app (`pnpm dev:desktop`). Rides and shops are next.
 
-![Coasterworks in the browser: a 64 by 64 tile park with a hill and a sandy pond, the cash, date and speed controls at the top left, the dock and the terrain tray at the bottom, and the inspector open on the park finances at the right](apps/web/e2e/__screenshots__/park.png)
+![Coasterworks in the browser: a 64 by 64 tile park of rolling grass with a hill ringed by a footpath and a sandy pond, guests walking up the path from the gate, woods beyond the hedge, the cash, date, guest count, park rating and speed controls at the top left, the dock and the terrain tray at the bottom, and the inspector open on the park finances at the right](apps/web/e2e/__screenshots__/park.png)
 
 ## Run it in the browser
 
@@ -77,6 +77,15 @@ node apps/cli/dist/index.js undo --save my.park --out my.park
 node apps/cli/dist/index.js redo --save my.park --out my.park
 ```
 
+An agent can run a park end to end with no window at all. The sample park comes with an entrance, paths and a $5 entry fee; open it, let a week pass, and ask the guests what they think (`scripts/demo-headless.sh` does exactly this, and CI runs it):
+
+```bash
+node apps/cli/dist/index.js new --out demo.park --sample
+node apps/cli/dist/index.js exec --save demo.park --command park_open --out demo.park
+node apps/cli/dist/index.js run --save demo.park --days 7 --out demo.park
+node apps/cli/dist/index.js query --save demo.park --name guest_thoughts
+```
+
 Command names such as `terrain_raise` come from `packages/sim/src/commands`, and query names such as `park_status` and `terrain_get` from `packages/sim/src/queries`. A failed command or query exits 1 and still prints its result.
 
 ## Connect Claude Code
@@ -128,9 +137,9 @@ To point the web app at the sidecar, start it with `pnpm dev:web` and open `http
 - `packages/sim`: the deterministic simulation core: world, commands, queries, undo, and the save format (`@coasterworks/sim`)
 - `packages/mcp`: the MCP server that exposes sim commands to agents over stdio and HTTP (`@coasterworks/mcp`)
 - `packages/protocol`: the wire between a running sim and its clients: messages, binary snapshots, `SimHostServer` and `SimClient` (`@coasterworks/protocol`)
-- `packages/render`: the three.js terrain renderer, camera and picking, with no React in it (`@coasterworks/render`)
+- `packages/render`: the three.js renderer (smooth ground, water, paths, guests, sky and the land around the park), camera and picking, with no React in it (`@coasterworks/render`)
 - `apps/cli`: the `coasterworks` command line app: `new`, `run`, `inspect`, `exec`, `query`, `undo`, `redo`, `mcp`, and `serve`
-- `apps/web`: the browser client, built with Vite and React: the park view, status pills, speed control and terrain tools (`@coasterworks/web`)
+- `apps/web`: the browser client, built with Vite and React: the park view, status pills, speed control, the terrain, path and park tools, and the inspector (`@coasterworks/web`)
 - `apps/desktop`: the Mac app, a Tauri 2 shell that starts the `serve` sidecar and opens the web client (`@coasterworks/desktop`)
 
 ## Determinism

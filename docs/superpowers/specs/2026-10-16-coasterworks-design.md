@@ -208,7 +208,7 @@ Undo semantics **(call)**, since time keeps passing:
 
 Fixed tick rate, 40 ticks per second of game time at 1x, scaled by speed. Seeded PRNG, one stream per system to keep changes local. State-affecting math is integer or fixed-point (positions, speeds, money, ratings) with lookup tables for trig, never `Math.sin`, `Math.random`, or floating-point accumulation, so JavaScriptCore in the app and V8 in the CLI produce identical hashes. Floats are fine in the renderer. Systems run in a fixed order each tick: time and weather, finances (monthly), research, ride operation and vehicles, guest decisions and movement, staff, park rating, notifications. The worker sends the renderer a compact snapshot each frame (typed arrays for guest and vehicle transforms, dirty lists for tiles and entities) so a 5,000-guest park does not serialize 5,000 objects per frame.
 
-Save format: a single JSON document, gzipped, extension `.park`, with a schema version and migrations. Scenarios are `.scenario` (a park plus objectives and starting conditions). Track designs are `.track`. All three are plain data a human or agent can read.
+Save format: a single JSON document, gzipped, extension `.park`, with a schema version and migrations. (As of Plan D1: save schema 4, adding the path layer and park state (2), the guest arrays and RNG streams (3), and monthly finance history (4); wire protocol 2, whose `CWS2` snapshots carry a paths section when the path version changes and a guest section in every snapshot.) Scenarios are `.scenario` (a park plus objectives and starting conditions). Track designs are `.track`. All three are plain data a human or agent can read.
 
 ### 5.5 Processes
 
