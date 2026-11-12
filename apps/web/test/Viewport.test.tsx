@@ -778,18 +778,81 @@ describe("Viewport: drawing paths", () => {
     });
   });
 
-  it("lays what the drag began with, and stops if the tool changes mid-drag", async () => {
+  it("lays nothing if the tool is put down or changed mid-drag", async () => {
+    const { props } = mount();
+    act(() => uiStore.getState().setTool("path"));
+    const paint = handlers().paint!;
+    paint.start(0, 0);
+    await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(1));
+    act(() => uiStore.getState().setTool("terrain"));
+    paint.move(1, 0);
+    paint.end(false);
+    await new Promise((done) => setTimeout(done, 20));
+    expect(command).not.toHaveBeenCalled();
+    expect(props.onResult).not.toHaveBeenCalled();
+  });
+
+  it("lays nothing when the pointer is cancelled", async () => {
     mount();
     act(() => uiStore.getState().setTool("path"));
     const paint = handlers().paint!;
     paint.start(0, 0);
-    act(() => uiStore.getState().setTool("terrain"));
-    paint.move(1, 0);
+    paint.move(2, 0);
+    paint.end(true);
+    await new Promise((done) => setTimeout(done, 20));
+    expect(command).not.toHaveBeenCalled();
+  });
+
+  it("checks the stroke again before sending it, and leaves out what changed meanwhile", async () => {
+    const { props } = mount();
+    act(() => uiStore.getState().setTool("path"));
+    let flooded = false;
+    checking((x) => (flooded && x === 1 ? "Cannot build on water" : null));
+    const paint = handlers().paint!;
+    paint.start(0, 0);
+    paint.move(2, 0);
+    await vi.waitFor(() => expect(query).toHaveBeenCalledTimes(2));
+    // Tile (1, 0) is flooded by someone else before the drag ends.
+    flooded = true;
+    command.mockResolvedValue({ ok: true, id: 3, cost: 2000 });
     paint.end(false);
     await vi.waitFor(() => expect(command).toHaveBeenCalledTimes(1));
-    expect(command.mock.calls[0]![0]).toBe("path_build_tiles");
-    expect(sentTiles()).toEqual([[0, 0]]);
-    expect(command).not.toHaveBeenCalledWith("terrain_raise", expect.anything());
+    expect(sentTiles()).toEqual([
+      [0, 0],
+      [2, 0],
+    ]);
+    await vi.waitFor(() =>
+      expect(props.onResult).toHaveBeenCalledWith({
+        ok: false,
+        error: "1 tile skipped: Cannot build on water",
+      }),
+    );
+  });
+
+  it("keeps the first stroke shown while a second is drawn before the first is through", async () => {
+    mount({ paths: new Uint8Array(8 * 8) });
+    act(() => uiStore.getState().setTool("path"));
+    let answer: (result: ExecResult) => void = () => {};
+    command.mockImplementation(() => new Promise((done) => (answer = done)));
+    const paint = handlers().paint!;
+    paint.start(1, 1);
+    paint.end(false);
+    await vi.waitFor(() => expect(command).toHaveBeenCalledTimes(1));
+    // A second stroke begins while the first is still on its way.
+    paint.start(5, 5);
+    await vi.waitFor(() => {
+      const laid = callsTo("setPaths").at(-1)?.[0] as Uint8Array | null;
+      expect(laid?.[1 * 8 + 1]).toBe(1);
+      expect(laid?.[5 * 8 + 5]).toBe(1);
+    });
+    // The first is refused: it goes, the second stays.
+    answer({ ok: false, error: "Not enough cash" });
+    await vi.waitFor(() => {
+      const laid = callsTo("setPaths").at(-1)?.[0] as Uint8Array | null;
+      expect(laid?.[1 * 8 + 1] ?? 0).toBe(0);
+      expect(laid?.[5 * 8 + 5]).toBe(1);
+    });
+    paint.end(false);
   });
 
   it("does not fill in the tiles between leaving the map and coming back", async () => {
