@@ -12,6 +12,7 @@ import { settingsStore, useSettings, type GraphicsQuality } from "../state/setti
 import { uiStore, useUiStore } from "../state/uiStore";
 import { brushRect, planPlacement, timeOfDay } from "./brush";
 import { classicCycle, onClassicViewRequest } from "./classicView";
+import { PathStroke, skippedMessage, type Tile } from "./drawPath";
 import { framingDistance } from "./framing";
 
 /** What the app can ask of the view. */
@@ -154,6 +155,22 @@ function failure(error: unknown): ExecResult {
   return { ok: false, error: error instanceof Error ? error.message : String(error) };
 }
 
+/** One drag of the path tool: the tiles it has covered and what the sim said about each. */
+interface Stroke {
+  path: PathStroke;
+  /** The answers still to come, one per tile sent. */
+  pending: Promise<void>[];
+  /** Why each refused tile was refused. */
+  refused: string[];
+  /** The last tile the sim built, with the cost of all of them so far; null while none was. */
+  built: Extract<ExecResult, { ok: true }> | null;
+}
+
+/** True for a placement that is drawn by dragging over tiles rather than placed click by click. */
+function drawsByDragging(command: string | undefined): boolean {
+  return command === "path_build" || command === "path_remove";
+}
+
 /**
  * The 3D view of the park, and the pointer input that edits it. What a click does is the
  * placement in the UI store, which the dock's trays and the command bar start: with none in
@@ -233,18 +250,80 @@ export function Viewport(props: ViewportProps) {
     };
     outlineRef.current = outline;
 
+    // The path tool lays one tile per command, as the pointer comes over each, so that a tile the
+    // sim refuses (water, too steep) is skipped and the rest of the drag is built. What was
+    // refused is told once, when the drag ends.
+    let stroke: Stroke | null = null;
+    const paintTile = (current: Stroke, tile: Tile) => {
+      const { client, placement } = latest.current;
+      if (!client || !placement) return;
+      const input = { ...placement.defaults, x: tile.x, y: tile.y, w: 1, h: 1 };
+      current.pending.push(
+        client.command(placement.command, input).then(
+          (result) => {
+            if (result.ok) {
+              current.built = { ...result, cost: (current.built?.cost ?? 0) + result.cost };
+            } else {
+              current.refused.push(result.error);
+            }
+          },
+          (error: unknown) => {
+            current.refused.push(error instanceof Error ? error.message : String(error));
+          },
+        ),
+      );
+    };
+
     const detach = attachControls(canvas, scene.rig, {
       pick: (clientX, clientY) => scene.pickAt(clientX, clientY),
+      paint: {
+        active: () => {
+          const { placement, client } = latest.current;
+          return client !== null && drawsByDragging(placement?.command);
+        },
+        start: (x, y) => {
+          stroke = { path: new PathStroke({ x, y }), pending: [], refused: [], built: null };
+          paintTile(stroke, { x, y });
+        },
+        move: (x, y) => {
+          const current = stroke;
+          if (!current) return;
+          for (const tile of current.path.extend({ x, y })) paintTile(current, tile);
+        },
+        end: () => {
+          const done = stroke;
+          stroke = null;
+          if (!done) return;
+          void Promise.all(done.pending).then(() => {
+            const { onResult } = latest.current;
+            if (done.built) onResult(done.built);
+            const skipped = skippedMessage(done.refused);
+            if (skipped) onResult({ ok: false, error: skipped });
+          });
+        },
+      },
+      // With nothing in hand, a click on a guest looks at the guest rather than the tile under them.
+      onPointClick: (clientX, clientY) => {
+        if (latest.current.placement) return false;
+        const guest = scene.pickGuestAt(clientX, clientY);
+        if (!guest) return false;
+        uiStore.getState().inspectGuest(guest.id);
+        return true;
+      },
       onHover: (x, y) => {
         hover.current = x === null || y === null ? null : { x, y };
         outline();
       },
       onTileClick: (x, y, mods) => {
-        const { client, terrain, placement, onResult } = latest.current;
+        const { client, terrain, placement, onResult, getEntrance } = latest.current;
         if (!terrain) return;
         if (!placement) {
-          // Nothing in hand but the pointer, whatever tool the dock is on: a click looks at the tile.
-          uiStore.getState().inspectTile(x, y);
+          // Nothing in hand but the pointer, whatever tool the dock is on: a click looks at the
+          // tile, or at the entrance if that is where it is.
+          const entrance = getEntrance?.();
+          if (entrance && entrance.x === x && entrance.y === y)
+            uiStore.getState().inspectEntrance();
+          else uiStore.getState().inspectTile(x, y);
           return;
         }
         if (!client) return;

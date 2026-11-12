@@ -28,6 +28,10 @@ const fake = vi.hoisted(() => ({
     x: number,
     y: number,
   ) => { x: number; y: number } | null,
+  pickGuestAt: ((_x: number, _y: number) => null) as (
+    x: number,
+    y: number,
+  ) => { id: number } | null,
 }));
 vi.mock("@coasterworks/render", () => ({
   createScene: (_canvas: unknown, options: unknown) => {
@@ -49,6 +53,7 @@ vi.mock("@coasterworks/render", () => ({
       setQuality: record("setQuality"),
       highlightTile: () => {},
       pickAt: (x: number, y: number) => fake.pickAt(x, y),
+      pickGuestAt: (x: number, y: number) => fake.pickGuestAt(x, y),
       resize: () => {},
       render: record("render"),
       dispose: () => {},
@@ -76,6 +81,7 @@ beforeEach(() => {
   settingsStore.setState(settingsStore.getInitialState(), true);
   command.mockResolvedValue(OK);
   fake.pickAt = () => ({ x: 2, y: 5 });
+  fake.pickGuestAt = () => null;
   fake.options = undefined;
   fake.calls = [];
   fake.rig = {
@@ -145,7 +151,8 @@ describe("Viewport: a left click", () => {
 
   it("looks at the tile under every dock tool that holds no placement", () => {
     mount();
-    for (const tool of ["path", "ride", "scenery", "shop", "staff", "park"] as const) {
+    // (Terrain and Paths have a tool in hand as soon as they are chosen.)
+    for (const tool of ["ride", "scenery", "shop", "staff", "park"] as const) {
       act(() => {
         uiStore.getState().select(null);
         uiStore.getState().setTool(tool);
@@ -634,5 +641,110 @@ describe("Viewport: the FPS counter", () => {
     expect(counter()).not.toBeNull();
     act(() => settingsStore.getState().setShowFps(false));
     expect(counter()).toBeNull();
+  });
+});
+
+describe("Viewport: drawing paths", () => {
+  /** Drags the path tool over `tiles`, the first being the press, and lets go. */
+  const drag = (tiles: Array<[number, number]>) => {
+    const paint = handlers().paint;
+    if (!paint) throw new Error("no paint handlers");
+    expect(paint.active()).toBe(true);
+    const [first, ...rest] = tiles;
+    paint.start(first![0], first![1]);
+    for (const [x, y] of rest) paint.move(x, y);
+    paint.end(false);
+  };
+
+  it("is not drawing with nothing in hand, nor with a terrain tool", () => {
+    mount();
+    expect(handlers().paint?.active()).toBe(false);
+    act(() => uiStore.getState().setTool("terrain"));
+    expect(handlers().paint?.active()).toBe(false);
+  });
+
+  it("lays one footpath per tile the drag comes over, the skipped ones included, each once", async () => {
+    const { props } = mount();
+    act(() => uiStore.getState().setTool("path"));
+    command.mockResolvedValue({ ok: true, id: 7, cost: 1000 });
+    drag([
+      [1, 1],
+      [3, 1],
+      [1, 1],
+    ]);
+    await vi.waitFor(() => expect(command).toHaveBeenCalledTimes(3));
+    expect(command.mock.calls).toEqual([
+      ["path_build", { kind: "foot", x: 1, y: 1, w: 1, h: 1 }],
+      ["path_build", { kind: "foot", x: 2, y: 1, w: 1, h: 1 }],
+      ["path_build", { kind: "foot", x: 3, y: 1, w: 1, h: 1 }],
+    ]);
+    // One result for the drag, with what all of it cost.
+    await vi.waitFor(() =>
+      expect(props.onResult).toHaveBeenCalledWith({ ok: true, id: 7, cost: 3000 }),
+    );
+    expect(props.onResult).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the tiles the sim refuses, builds the rest, and says so once at the end", async () => {
+    const { props } = mount();
+    act(() => uiStore.getState().startPlacement("path_build", { kind: "queue" }));
+    command.mockImplementation(async (_name, input) =>
+      (input as { x: number }).x === 2 || (input as { x: number }).x === 3
+        ? { ok: false, error: "Cannot build on water" }
+        : { ok: true, id: 1, cost: 1000 },
+    );
+    drag([
+      [1, 0],
+      [4, 0],
+    ]);
+    await vi.waitFor(() =>
+      expect(props.onResult).toHaveBeenCalledWith({
+        ok: false,
+        error: "2 tiles skipped: Cannot build on water",
+      }),
+    );
+    expect(props.onResult).toHaveBeenCalledWith({ ok: true, id: 1, cost: 2000 });
+    expect(command).toHaveBeenCalledTimes(4);
+  });
+
+  it("removes paths by dragging too", async () => {
+    mount();
+    act(() => uiStore.getState().startPlacement("path_remove", {}));
+    drag([
+      [0, 0],
+      [0, 1],
+    ]);
+    await vi.waitFor(() => expect(command).toHaveBeenCalledTimes(2));
+    expect(command.mock.calls[1]).toEqual(["path_remove", { x: 0, y: 1, w: 1, h: 1 }]);
+  });
+});
+
+describe("Viewport: guests and the entrance", () => {
+  it("looks at a guest clicked with nothing in hand", () => {
+    mount();
+    fake.pickGuestAt = () => ({ id: 42 });
+    expect(handlers().onPointClick?.(100, 100)).toBe(true);
+    expect(uiStore.getState().selection).toEqual({ kind: "guest", id: 42 });
+    expect(uiStore.getState().inspector.open).toBe(true);
+  });
+
+  it("leaves a click with no guest under it to the tile", () => {
+    mount();
+    expect(handlers().onPointClick?.(100, 100)).toBe(false);
+  });
+
+  it("does not pick guests while placing", () => {
+    mount();
+    fake.pickGuestAt = () => ({ id: 42 });
+    act(() => uiStore.getState().setTool("terrain"));
+    expect(handlers().onPointClick?.(100, 100)).toBe(false);
+  });
+
+  it("looks at the entrance when its tile is clicked", () => {
+    mount({ getEntrance: () => ({ x: 4, y: 7, side: 2 }) });
+    click(4, 7);
+    expect(uiStore.getState().selection).toEqual({ kind: "entrance" });
+    click(4, 6);
+    expect(uiStore.getState().selection).toEqual({ kind: "tile", x: 4, y: 6 });
   });
 });

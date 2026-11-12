@@ -217,13 +217,44 @@ describe("buildActions: commands", () => {
 
   it("is not placement when the rectangle is incomplete", () => {
     const int = { type: "integer" };
-    const partial = entry("park_pick_tile", {
+    const partial = entry("park_pick_strip", {
+      type: "object",
+      properties: { x: int, y: int, w: int },
+      required: ["x", "y", "w"],
+    });
+    const { get } = setup([partial]);
+    expect(get("park_pick_strip").placement).toBeUndefined();
+  });
+
+  it("places a command of one tile (just x and y) by a click on the tile", () => {
+    const int = { type: "integer" };
+    const tile = entry("park_pick_tile", {
       type: "object",
       properties: { x: int, y: int },
       required: ["x", "y"],
     });
-    const { get } = setup([partial]);
-    expect(get("park_pick_tile").placement).toBeUndefined();
+    const { get, deps } = setup([tile]);
+    expect(get("park_pick_tile").placement).toBe("tile");
+    get("park_pick_tile").run(ctx);
+    expect(deps.startPlacement).toHaveBeenCalledWith("park_pick_tile", {});
+  });
+
+  it("starts the path tool with footpath, which its schema gives no default for", () => {
+    const int = { type: "integer" };
+    const build = entry("path_build", {
+      type: "object",
+      properties: {
+        x: int,
+        y: int,
+        w: int,
+        h: int,
+        kind: { type: "string", enum: ["foot", "queue"] },
+      },
+      required: ["x", "y", "w", "h", "kind"],
+    });
+    const { get, deps } = setup([build]);
+    get("path_build").run(ctx);
+    expect(deps.startPlacement).toHaveBeenCalledWith("path_build", { kind: "foot" });
   });
 
   it("matches on the words of the name and on the category", () => {

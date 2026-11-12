@@ -12,6 +12,26 @@ export interface ControlHandlers {
   onHover(x: number | null, y: number | null): void;
   /** Maps a client-space point to a tile, normally `scene.pickAt`. */
   pick(clientX: number, clientY: number): PickedTile | null;
+  /**
+   * Asked first on a left click, with where it was: true takes the click (a guest was hit, say),
+   * and then `onTileClick` is not called.
+   */
+  onPointClick?(clientX: number, clientY: number): boolean;
+  /**
+   * Drawing by dragging. While `active()` says so at the press, a left drag paints tiles instead of
+   * panning: `start` with the tile pressed on, `move` with each tile the pointer comes over after
+   * (the tile under it, which may be the same as last time), and `end` at the release, with
+   * `cancelled` true if the browser cancelled the pointer. A press that does not move is a paint
+   * of its one tile, not a click.
+   */
+  paint?: PaintHandlers;
+}
+
+export interface PaintHandlers {
+  active(): boolean;
+  start(x: number, y: number): void;
+  move(x: number, y: number): void;
+  end(cancelled: boolean): void;
 }
 
 export interface ControlOptions {
@@ -26,7 +46,7 @@ const ORBIT_SPEED = 0.005;
 /** Length of the q/e quarter-turn animation. */
 const TURN_MS = 250;
 
-type DragMode = "pan" | "orbit";
+type DragMode = "pan" | "orbit" | "paint";
 
 interface Drag {
   pointerId: number;
@@ -68,7 +88,8 @@ function isTyping(target: EventTarget | null): boolean {
 /**
  * Wires mouse, wheel and key input on `canvas` to the camera `rig` and the tile `handlers`.
  *
- * - Left click picks a tile; left drag past 4 px pans the view instead.
+ * - Left click picks a tile; left drag past 4 px pans the view instead, or paints tiles while
+ *   `handlers.paint` is active.
  * - Right drag (or ctrl + left drag, the Mac right click) orbits.
  * - The wheel zooms by `1.1 ** (deltaY / 100)`.
  * - `q` / `e` turn the view a quarter turn over 250 ms, or at once for a player whose system asks
@@ -152,9 +173,19 @@ export function attachControls(
     if (drag) return;
     const orbit = e.button === 2 || (e.button === 0 && e.ctrlKey);
     if (!orbit && e.button !== 0) return;
+    let mode: DragMode = orbit ? "orbit" : "pan";
+    if (!orbit && handlers.paint?.active()) {
+      const tile = handlers.pick(e.clientX, e.clientY);
+      // A press off the map paints nothing, and pans as any other press.
+      if (tile) {
+        mode = "paint";
+        handlers.onHover(tile.x, tile.y);
+        handlers.paint.start(tile.x, tile.y);
+      }
+    }
     drag = {
       pointerId: e.pointerId,
-      mode: orbit ? "orbit" : "pan",
+      mode,
       startX: e.clientX,
       startY: e.clientY,
       lastX: e.clientX,
@@ -171,6 +202,15 @@ export function attachControls(
       return;
     }
     if (e.pointerId !== drag.pointerId) return;
+    if (drag.mode === "paint") {
+      drag.moved = true;
+      const tile = handlers.pick(e.clientX, e.clientY);
+      if (tile) {
+        handlers.onHover(tile.x, tile.y);
+        handlers.paint?.move(tile.x, tile.y);
+      }
+      return;
+    }
     if (!drag.moved) {
       if (drag.mode === "pan") {
         if (Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) <= DRAG_THRESHOLD) return;
@@ -195,7 +235,12 @@ export function attachControls(
     const finished = drag;
     drag = null;
     capture(e.pointerId, false);
+    if (finished.mode === "paint") {
+      handlers.paint?.end(cancelled);
+      return;
+    }
     if (cancelled || finished.moved || finished.mode !== "pan") return;
+    if (handlers.onPointClick?.(e.clientX, e.clientY)) return;
     const tile = handlers.pick(e.clientX, e.clientY);
     if (tile) handlers.onTileClick(tile.x, tile.y, { shift: e.shiftKey, alt: e.altKey });
   };

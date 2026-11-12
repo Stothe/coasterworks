@@ -328,3 +328,20 @@ describe("the terrain tools", () => {
     }
   });
 });
+
+describe("planPlacement: one-tile commands", () => {
+  const terrain = flat(8, 8);
+  it("gives the entrance its tile, not an area", () => {
+    expect(planPlacement(place("park_set_entrance", {}, 1), none, 0, 3, terrain)).toEqual({
+      name: "park_set_entrance",
+      input: { x: 0, y: 3 },
+    });
+  });
+
+  it("gives a path its one tile as a rectangle, with its kind", () => {
+    expect(planPlacement(place("path_build", { kind: "queue" }, 1), none, 2, 3, terrain)).toEqual({
+      name: "path_build",
+      input: { kind: "queue", x: 2, y: 3, w: 1, h: 1 },
+    });
+  });
+});

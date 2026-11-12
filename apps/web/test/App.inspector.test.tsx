@@ -372,8 +372,8 @@ describe("the tile menu in the app", () => {
       "Set water",
       "Drain",
       "Set surface",
-      "Path build",
-      "Path remove",
+      "Build path",
+      "Remove path",
     ]);
   });
 

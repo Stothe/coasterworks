@@ -20,7 +20,7 @@ export { groundHeightAt, groundNormalAt } from "./ground.js";
 export { GUEST_CAPACITY, createGuests } from "./guests.js";
 export type { GuestsModule } from "./guests.js";
 export { attachControls } from "./input.js";
-export type { ControlHandlers, ControlOptions, PickedTile } from "./input.js";
+export type { ControlHandlers, ControlOptions, PaintHandlers, PickedTile } from "./input.js";
 export { SURFACE_COLORS, WATER_COLOR, srgbToLinear } from "./palette.js";
 export type { Rgb } from "./palette.js";
 export { pickTile, rayFromCamera } from "./picker.js";

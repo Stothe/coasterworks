@@ -13,12 +13,17 @@ export type DockTool = (typeof DOCK_TOOLS)[number];
 
 /**
  * The parts of the inspector: the park's three tabs, and the tile tab, which is the only one a
- * selected tile has.
+ * selected tile has (and the one a selected guest or entrance is shown under).
  */
 export type InspectorTab = "overview" | "finances" | "timeline" | "tile";
 
 /** What is selected on the map or in the park. */
-export type UiSelection = { kind: "tile"; x: number; y: number } | { kind: "park" } | null;
+export type UiSelection =
+  | { kind: "tile"; x: number; y: number }
+  | { kind: "guest"; id: number }
+  | { kind: "entrance" }
+  | { kind: "park" }
+  | null;
 
 /**
  * What an action may read of the interface: the part of the UI store `enabled` needs. The store

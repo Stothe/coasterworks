@@ -96,6 +96,9 @@ export function planPlacement(
           : Math.min(MAX_HEIGHT, lowestCorner(terrain, x, y) + above);
       return { name: command, input: { ...given, ...rect, level: mods.alt ? 0 : level } };
     }
+    // The entrance takes its one tile, not an area.
+    case "park_set_entrance":
+      return { name: command, input: { ...given, x: rect.x, y: rect.y } };
     case "terrain_set_surface":
       return {
         name: command,
