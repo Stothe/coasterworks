@@ -1,4 +1,4 @@
-import { Vector2, Vector4 } from "three";
+import { Texture, Vector2, Vector4 } from "three";
 import { describe, expect, it } from "vitest";
 import { createSharedUniforms, type FrameInfo, type RenderContext } from "../src/context.js";
 import { sunFor } from "../src/sky.js";
@@ -125,7 +125,9 @@ describe("the overlay chunk", () => {
             ? "vec2"
             : value instanceof Vector4
               ? "vec4"
-              : "other";
+              : value instanceof Texture
+                ? "sampler2D"
+                : "other";
       expect(type, name).toBe(types.get(name));
     }
   });

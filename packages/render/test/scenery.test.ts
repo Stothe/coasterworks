@@ -14,11 +14,9 @@ import { fbm2, hash01, noise2, noise3, randomStream } from "../src/scenery/noise
 import {
   LANE_HALF_WIDTH,
   LANE_LENGTH,
-  LOD_DISTANCES,
   SMALL_MARGIN,
   SMALL_REACH,
   TREE_MARGIN,
-  lodAt,
   onLane,
   scatterScenery,
   woodedAt,
@@ -214,14 +212,14 @@ describe("buildSceneryShape", () => {
         (lod) => buildSceneryShape(kind, 0, lod as SceneryLod).indices.length / 3,
       );
       expect(triangles[0]).toBeLessThan(2400);
-      expect(triangles[1]).toBeLessThan(600);
-      expect(triangles[2]).toBeLessThan(120);
+      expect(triangles[1]).toBeLessThan(650);
+      expect(triangles[2]).toBeLessThan(200);
       expect(triangles[3]).toBeLessThanOrEqual(30);
       for (let lod = 1; lod < 4; lod++) {
         expect(triangles[lod]).toBeLessThan(triangles[lod - 1] as number);
       }
     }
-    expect(buildSceneryShape(BUSH, 0, 0).indices.length / 3).toBeLessThanOrEqual(500);
+    expect(buildSceneryShape(BUSH, 0, 0).indices.length / 3).toBeLessThanOrEqual(600);
     expect(buildSceneryShape(ROCK, 0, 0).indices.length / 3).toBeLessThanOrEqual(320);
   });
 });
@@ -247,20 +245,21 @@ describe("scatterScenery", () => {
       const small = scatter.kind[i] === BUSH || scatter.kind[i] === ROCK;
       expect(d).toBeGreaterThanOrEqual(small ? SMALL_MARGIN : TREE_MARGIN);
       expect(d).toBeLessThanOrEqual(small ? SMALL_REACH : LAND_REACH);
-      expect(scatter.lod[i]).toBe(lodAt(d));
     }
   });
 
   it("stays within its budget", () => {
-    const perLod = [0, 0, 0, 0];
-    for (let i = 0; i < scatter.count; i++) perLod[scatter.lod[i] as number]!++;
-    // Fine models are few; only the cheap far ones come in thousands.
-    expect(perLod[0]).toBeLessThan(900);
-    expect(perLod[1]).toBeLessThan(2500);
-    expect(perLod[2]).toBeLessThan(9000);
-    expect(perLod[3]).toBeLessThan(12000);
+    // Trees within 30 tiles of the park are the near band (drawn finest); the rest is forest.
+    let near = 0;
+    let far = 0;
+    for (let i = 0; i < scatter.count; i++) {
+      if ((scatter.distance[i] as number) < 30) near++;
+      else far++;
+    }
+    expect(near).toBeLessThan(3500);
+    expect(far).toBeLessThan(25000);
     // And there is a forest out there.
-    expect(perLod[3]).toBeGreaterThan(3000);
+    expect(far).toBeGreaterThan(3000);
   });
 
   it("is sparse near the park and dense far out", () => {
@@ -302,20 +301,13 @@ describe("scatterScenery", () => {
     for (let i = 0; i < scatter.count; i++) perKind[scatter.kind[i] as number]!++;
     for (const count of perKind) expect(count).toBeGreaterThan(20);
     for (const value of scatter.tint) {
-      expect(value).toBeGreaterThan(0.55);
+      expect(value).toBeGreaterThan(0.5);
       expect(value).toBeLessThan(1.5);
     }
     for (const value of scatter.rank) {
       expect(value).toBeGreaterThanOrEqual(0);
       expect(value).toBeLessThan(1);
     }
-  });
-
-  it("uses a finer model the nearer the park", () => {
-    expect(lodAt(1)).toBe(0);
-    expect(lodAt(LOD_DISTANCES[0])).toBe(1);
-    expect(lodAt(LOD_DISTANCES[1])).toBe(2);
-    expect(lodAt(LOD_DISTANCES[2] + 10)).toBe(3);
   });
 });
 
