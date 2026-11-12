@@ -207,10 +207,12 @@ export interface RingLoop {
  * the park's where the two meet and spends few triangles on the far hills. One loop lies exactly
  * at `EDGE_REACH` and one exactly at `LAND_REACH`.
  */
-export function ringLoops(): RingLoop[] {
+export function ringLoops(subdiv: number = SUBDIV): RingLoop[] {
   const loops: RingLoop[] = [];
   let distance = 0;
-  let cell = FIRST_CELL;
+  // The first loop matches a park mesh of `subdiv` cells a tile (`SUBDIV`, or fewer for a
+  // renderer that cannot afford the vertices).
+  let cell = subdiv === SUBDIV ? FIRST_CELL : 1 / subdiv;
   /** Adds loops up to `end`, the last of them exactly on it. */
   const fill = (end: number, growth: number, largest: number): void => {
     // Stop while there is still room for a last band of a decent width.
@@ -262,6 +264,8 @@ export function buildSurroundingsGeometry(
   const normals: number[] = [];
   const indices: number[] = [];
   const normal: [number, number, number] = [0, 1, 0];
+  // The park mesh's cells per tile edge, which the first loop's cell says.
+  const subdiv = Math.round(1 / (loops[0] as RingLoop).cell);
 
   const vertex = (x: number, z: number, step: number): number => {
     const made = positions.length / 3;
@@ -280,9 +284,9 @@ export function buildSurroundingsGeometry(
     const first = index === 0;
     const d = loop.distance;
     // A loop's vertices are as far apart as the band inside it is wide.
-    const cell = first ? FIRST_CELL : d - (loops[index - 1] as RingLoop).distance;
+    const cell = first ? 1 / subdiv : d - (loops[index - 1] as RingLoop).distance;
     const along = (tiles: number) =>
-      first ? tiles * SUBDIV : Math.max(1, Math.round(tiles / cell));
+      first ? tiles * subdiv : Math.max(1, Math.round(tiles / cell));
     const arc = first ? 0 : Math.max(2, Math.ceil(((Math.PI / 2) * d) / cell));
     const nx = along(width);
     const nz = along(height);
@@ -313,8 +317,8 @@ export function buildSurroundingsGeometry(
           if (first) {
             // On the park's own border the places are whole cells counted from the map's corner,
             // exactly as the park mesh counts them.
-            x = Math.round(x * SUBDIV) / SUBDIV;
-            z = Math.round(z * SUBDIV) / SUBDIV;
+            x = Math.round(x * subdiv) / subdiv;
+            z = Math.round(z * subdiv) / subdiv;
           }
           run.push(vertex(x, z, cell * 0.5));
         }

@@ -83,6 +83,12 @@ const ENVIRONMENT_STEP = 1 / 240;
 /** And never more often than this, in milliseconds, however fast the day runs. */
 const ENVIRONMENT_INTERVAL_MS = 400;
 
+/** The same two, on a software renderer at low. */
+const SOFTWARE_ENVIRONMENT_STEP = 1 / 24;
+const SOFTWARE_ENVIRONMENT_INTERVAL_MS = 10_000;
+/** The cloud octaves of the sky dome on a software renderer at low. */
+const SOFTWARE_CLOUD_DETAIL = 1.5;
+
 /** The visible ground is followed out to this many times the camera's distance, plus a little. */
 const SHADOW_REACH_FACTOR = 3.2;
 const SHADOW_REACH_MIN = 60;
@@ -657,7 +663,13 @@ export function createAtmosphere(ctx: RenderContext): AtmosphereModule {
   // The sun, or the moon.
   const sun = new DirectionalLight(0xffffff, SUN_FULL_INTENSITY);
   sun.name = "cwSun";
-  sun.castShadow = true;
+  // A software renderer at low draws no shadows: the shadow pass and the filtered lookups in every
+  // lit pixel were a large part of its frame.
+  const castsShadow = (quality: Quality) => !(ctx.software === true && quality === "low");
+  const cloudDetail = (quality: Quality) =>
+    ctx.software === true && quality === "low" ? SOFTWARE_CLOUD_DETAIL : TIERS[quality].cloudDetail;
+  skyUniforms.cwSky_view.value.w = cloudDetail(ctx.quality);
+  sun.castShadow = castsShadow(ctx.quality);
   sun.shadow.mapSize.set(tier.shadowMap, tier.shadowMap);
   sun.shadow.radius = tier.shadowRadius;
   scene.add(sun, sun.target);
@@ -781,10 +793,13 @@ export function createAtmosphere(ctx: RenderContext): AtmosphereModule {
   /** Whether the sky has moved on enough since the environment map was made. */
   function environmentDue(nowMs: number): boolean {
     if (environment === null) return true;
-    if (nowMs - environmentAtMs < ENVIRONMENT_INTERVAL_MS) return false;
+    // A software renderer at low makes the map seldom: each one is a dozen passes on the CPU.
+    const cheap = ctx.software === true && ctx.quality === "low";
+    const interval = cheap ? SOFTWARE_ENVIRONMENT_INTERVAL_MS : ENVIRONMENT_INTERVAL_MS;
+    if (nowMs - environmentAtMs < interval) return false;
     if (environmentStale) return true;
     const moved = Math.abs(timeOfDay - environmentTime);
-    return Math.min(moved, 1 - moved) >= ENVIRONMENT_STEP;
+    return Math.min(moved, 1 - moved) >= (cheap ? SOFTWARE_ENVIRONMENT_STEP : ENVIRONMENT_STEP);
   }
 
   /** Fits the sun's shadow box to the ground the camera sees. */
@@ -896,9 +911,15 @@ export function createAtmosphere(ctx: RenderContext): AtmosphereModule {
     },
     setQuality(quality: Quality): void {
       tier = TIERS[quality];
+      sun.castShadow = castsShadow(quality);
+      if (sun.shadow.mapSize.x !== tier.shadowMap) {
+        // three.js keeps the map it made at the old size until it is thrown away.
+        sun.shadow.map?.dispose();
+        sun.shadow.map = null;
+      }
       sun.shadow.mapSize.set(tier.shadowMap, tier.shadowMap);
       sun.shadow.radius = tier.shadowRadius;
-      skyUniforms.cwSky_view.value.w = tier.cloudDetail;
+      skyUniforms.cwSky_view.value.w = cloudDetail(quality);
       atmosphereUniforms.cwAtm_wind.value.w = tier.shadowDetail;
       environmentStale = true;
     },

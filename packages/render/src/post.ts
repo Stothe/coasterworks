@@ -31,6 +31,7 @@ import {
   aoFadeStartFor,
   aoRadiusFor,
   createFrameMeter,
+  documentVisibility,
   createGovernor,
   detectQuality,
   postPlan,
@@ -840,7 +841,9 @@ export function createPost(ctx: RenderContext): PostModule {
   renderer.toneMappingExposure = EXPOSURE;
 
   const gl = glRendererString(renderer);
-  const meter = createFrameMeter();
+  // A long frame on a visible page is a slow frame; only a hidden page has paused.
+  const visibility = documentVisibility();
+  const meter = createFrameMeter({ wasHidden: visibility.wasHidden });
   let governor: GovernorState | null = null;
   let wanted: Quality = ctx.quality;
 
@@ -929,6 +932,7 @@ export function createPost(ctx: RenderContext): PostModule {
       }
     },
     dispose(): void {
+      visibility.dispose();
       if (pipeline) {
         disposePipeline(pipeline);
         pipeline = null;
