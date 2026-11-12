@@ -213,8 +213,7 @@ export function buildWaterGeometry(t: TerrainData): WaterGeometry | null {
             const hSW = ground[cell[2] as number] as number;
             const hSE = ground[cell[3] as number] as number;
             // Corner numbers of the two triangles, as the ground mesh winds them.
-            const split =
-              Math.abs(hNW - hSE) <= Math.abs(hNE - hSW) ? SPLIT_NW_SE : SPLIT_NE_SW;
+            const split = Math.abs(hNW - hSE) <= Math.abs(hNE - hSW) ? SPLIT_NW_SE : SPLIT_NE_SW;
             for (let k = 0; k < 6; k += 3) {
               const c0 = split[k] as number;
               const c1 = split[k + 1] as number;

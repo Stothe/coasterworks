@@ -737,7 +737,8 @@ function createPipeline(
   composer.setPixelRatio(1);
 
   // DEBUG-TEMP
-  if (debugParams.get("aos") !== null) plan = { ...plan, aoSamples: Number(debugParams.get("aos")) };
+  if (debugParams.get("aos") !== null)
+    plan = { ...plan, aoSamples: Number(debugParams.get("aos")) };
   if (debugParams.get("aoscale") !== null)
     plan = { ...plan, aoScale: Number(debugParams.get("aoscale")) };
   const scenePass = new ScenePass(scene, camera, sceneTarget);
@@ -891,7 +892,12 @@ export function createPost(ctx: RenderContext): PostModule {
         wanted = governor.quality;
       }
 
-      if (plan === null || bufferSize.x < 1 || bufferSize.y < 1 || debugParams.get("post") === "direct") {
+      if (
+        plan === null ||
+        bufferSize.x < 1 ||
+        bufferSize.y < 1 ||
+        debugParams.get("post") === "direct"
+      ) {
         renderer.setRenderTarget(null);
         renderer.render(scene, camera);
         return;

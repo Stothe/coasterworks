@@ -483,7 +483,8 @@ function touch(target: Layer, texels: number, tiles: GridRect, reach: number): v
   const y0 = clampTo((tiles.y0 - reach + SURFACE_MARGIN) * texels, height);
   const y1 = clampTo((tiles.y1 + reach + SURFACE_MARGIN) * texels, height);
   if (target.uploaded && x1 > x0) {
-    for (let y = y0; y < y1; y++) target.texture.addUpdateRange((y * width + x0) * 4, (x1 - x0) * 4);
+    for (let y = y0; y < y1; y++)
+      target.texture.addUpdateRange((y * width + x0) * 4, (x1 - x0) * 4);
   }
   target.texture.needsUpdate = true;
 }
@@ -506,7 +507,13 @@ interface Baked {
  * reads (rebaked only where a terrain change reaches), the detail noise and the grain.
  */
 export function createSurface(ctx: RenderContext): SurfaceModule {
-  const blank = { width: 1, height: 1, corners: new Int16Array(4), surface: new Uint8Array(1), water: new Uint8Array(1) };
+  const blank = {
+    width: 1,
+    height: 1,
+    corners: new Int16Array(4),
+    surface: new Uint8Array(1),
+    water: new Uint8Array(1),
+  };
   let weights = layer(buildSurfaceWeights(blank));
   let field = layer(buildGroundField(blank));
   detailNoise ??= buildDetailNoise(DETAIL_SIZE);
@@ -521,7 +528,9 @@ export function createSurface(ctx: RenderContext): SurfaceModule {
     cwSurf_field: { value: field.texture } as IUniform<DataTexture>,
     cwSurf_detail: { value: detail } as IUniform<DataTexture>,
     cwSurf_grain: { value: grain } as IUniform<DataTexture>,
-    cwSurf_rect: { value: new Vector4(-SURFACE_MARGIN, -SURFACE_MARGIN, 1, 1) } as IUniform<Vector4>,
+    cwSurf_rect: {
+      value: new Vector4(-SURFACE_MARGIN, -SURFACE_MARGIN, 1, 1),
+    } as IUniform<Vector4>,
     cwSurf_quality: { value: QUALITY_LEVEL[ctx.quality] } as IUniform<number>,
   };
 

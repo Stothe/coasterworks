@@ -337,7 +337,8 @@ function tileableFbm(
     const scale = frequency / size;
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
-        field[y * size + x]! += amplitude * periodicNoise(x * scale, y * scale, frequency, seed + o);
+        field[y * size + x]! +=
+          amplitude * periodicNoise(x * scale, y * scale, frequency, seed + o);
       }
     }
     amplitude *= gain;
@@ -378,8 +379,12 @@ export function buildDetailNoise(size: number = DETAIL_SIZE): Uint8Array {
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const k = y * size + x;
-      const dx = ((height[y * size + wrap(x + 1)] as number) - (height[y * size + wrap(x - 1)] as number)) / 2;
-      const dy = ((height[wrap(y + 1) * size + x] as number) - (height[wrap(y - 1) * size + x] as number)) / 2;
+      const dx =
+        ((height[y * size + wrap(x + 1)] as number) - (height[y * size + wrap(x - 1)] as number)) /
+        2;
+      const dy =
+        ((height[wrap(y + 1) * size + x] as number) - (height[wrap(y - 1) * size + x] as number)) /
+        2;
       slopeX[k] = dx;
       slopeY[k] = dy;
       variance += dx * dx + dy * dy;
