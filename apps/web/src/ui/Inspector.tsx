@@ -3,7 +3,7 @@ import { useMemo } from "react";
 import type { ExecResult } from "@coasterworks/sim";
 import type { Action, ActionContext, InspectorTab } from "../actions/types";
 import { uiStore, useUiStore } from "../state/uiStore";
-import type { SnapshotSource } from "../state/useSnapshot";
+import { useSnapshot, type SnapshotSource } from "../state/useSnapshot";
 import { useParkInfo } from "../state/useParkInfo";
 import type { TileRect, TimelineEntry } from "../state/useTimeline";
 import { ParkFinances } from "./inspector/ParkFinances";
@@ -22,7 +22,7 @@ export interface InspectorProps {
   terrain: TerrainData | null;
   /** Where the park's money and date are read from, and followed as snapshots arrive. */
   source: SnapshotSource;
-  /** The park's name, from the host's welcome. */
+  /** The park's name from the host's welcome, until a snapshot says what it is called now. */
   parkName?: string | undefined;
   /**
    * Every action: the finances tab's loan forms are the ones that run the finance commands, and the
@@ -154,10 +154,12 @@ function ParkPanel({
   const tab = useUiStore((state) => state.inspector.tab);
   // The tile's tab is no tab of the park's: a park that is shown while it is current shows Overview.
   const shown: ParkTab = tab === "tile" ? "overview" : tab;
-  const info = useParkInfo(source, parkName);
+  // The snapshot has the name as it is now; the welcome's goes stale after a rename.
+  const name = useSnapshot(source, (snapshot) => snapshot?.header.park.name) ?? parkName;
+  const info = useParkInfo(source, name);
   const park = useParkState(source);
   return (
-    <Panel title={parkName ?? "Park"} actions={closeButton}>
+    <Panel title={name ?? "Park"} actions={closeButton}>
       {info && <Status>{info.date}</Status>}
       <Tabs
         label="Park sections"

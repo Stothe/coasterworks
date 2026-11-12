@@ -153,7 +153,8 @@ describe("Inspector: the park", () => {
 
   it("is titled Park until the host has said what the park is called", () => {
     store().openInspector("overview");
-    renderInspector({ parkName: undefined });
+    // Before the welcome and before any snapshot, nothing has named it.
+    renderInspector({ parkName: undefined, source: makeSource(null) });
     expect(within(inspector()).getByRole("heading", { name: "Park" })).toBeTruthy();
   });
 
@@ -375,5 +376,28 @@ describe("Inspector: following the snapshots", () => {
     expect(source.listeners()).toBe(0);
     act(() => store().openInspector("overview"));
     expect(source.listeners()).toBeGreaterThan(0);
+  });
+});
+
+describe("Inspector: the park's name", () => {
+  it("follows a rename: the snapshot's name wins over the welcome's", () => {
+    uiStore.getState().openInspector("overview");
+    const renamed = makeSource({
+      park: {
+        name: "Renamed Park",
+        open: false,
+        entryFee: 0,
+        entrance: null,
+        rating: 0,
+        guestsInPark: 0,
+        totalAdmissions: 0,
+      },
+    });
+    renderInspector({ source: renamed, parkName: "Queryland" });
+    expect(
+      within(screen.getByRole("complementary", { name: "Inspector" })).getByRole("heading", {
+        name: "Renamed Park",
+      }),
+    ).toBeTruthy();
   });
 });

@@ -33,7 +33,7 @@ export function snapshotOf(over: Partial<SnapshotHeader> = {}): DecodedSnapshot 
       width: 16,
       height: 16,
       park: {
-        name: "Test Park",
+        name: "Queryland",
         open: false,
         entryFee: 10_00,
         entrance: null,
