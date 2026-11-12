@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The README's agent demo, headless: a sample park, opened, left to run a week, then asked what its
-# guests think; then a carousel with a short queue and a snack stand are built beside the main path,
-# opened, and left to run a month. It fails unless guests came in and paid at the gate, on the ride
-# and at the stall. Run it from the repository root after `pnpm build`; CI runs it on Linux.
+# guests think; then another carousel with a short queue and another snack stand are built beside
+# the main path near the gate (the sample park has a ride and stall of each kind further up it),
+# opened, and left to run a month. It fails unless guests came in and paid at the gate, and on the
+# new ride and at the new stall themselves. Run it from the repository root after `pnpm build`; CI runs it on Linux.
 set -euo pipefail
 
 cli=(node apps/cli/dist/index.js)
@@ -36,6 +37,12 @@ field() {
 exec_cmd() {
   "${cli[@]}" exec --save "$park" --command "$1" --input "$2" --out "$park"
 }
+
+# What the park has before the demo builds anything: the sample park's own rides and stalls.
+before=$("${cli[@]}" query --save "$park" --name park_status)
+rides_before=$(field "$before" result.rides)
+stalls_before=$(field "$before" result.stalls)
+echo "the sample park has $rides_before ride(s) and $stalls_before stall(s)"
 
 # What there is to build, and what the carousel costs.
 carousel=$("${cli[@]}" query --save "$park" --name content_list --input '{"kind":"ride"}')
@@ -79,13 +86,18 @@ month=$("${cli[@]}" run --save "$park" --days 31 --out "$park")
 finance=$("${cli[@]}" query --save "$park" --name finance_summary)
 rides=$(field "$month" rides)
 stalls=$(field "$month" stalls)
-ride_income=$(field "$finance" result.allTime.rides)
-shop_income=$(field "$finance" result.allTime.shops)
 running=$(field "$finance" result.allTime.running)
+# What the new carousel and the new snack stand took themselves, from the per-ride figures.
+taken() {
+  node -e 'const r = JSON.parse(process.argv[1]).result.rides.find((r) => r.id === Number(process.argv[2])); console.log(r ? r.income : -1)' "$finance" "$1"
+}
+ride_income=$(taken "$ride")
+shop_income=$(taken "$stall")
 
-echo "after a month more: $rides ride(s), $stalls stall(s); ride income $ride_income cents, shop income $shop_income cents, running costs $running cents"
-if [ "$rides" -ne 1 ] || [ "$stalls" -ne 1 ] || [ "$ride_income" -le 0 ] || [ "$shop_income" -le 0 ]; then
-  echo "demo failed: rides and stalls did not take money" >&2
+echo "after a month more: $rides ride(s), $stalls stall(s); the new carousel took $ride_income cents, the new snack stand $shop_income cents; running costs $running cents"
+if [ "$rides" -ne $((rides_before + 1)) ] || [ "$stalls" -ne $((stalls_before + 1)) ] ||
+  [ "$ride_income" -le 0 ] || [ "$shop_income" -le 0 ]; then
+  echo "demo failed: the new ride and stall did not take money" >&2
   exit 1
 fi
-echo "demo ok: $ride_income cents from the carousel, $shop_income cents from the snack stand"
+echo "demo ok: $ride_income cents from the new carousel, $shop_income cents from the new snack stand"

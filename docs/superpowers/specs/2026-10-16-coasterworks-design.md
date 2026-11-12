@@ -324,7 +324,23 @@ For Steve to check while reading. Each is overridable.
 
 Anything not listed here is either decided above or left to the builder.
 
-## 13. References
+## 13. As built (D2: rides and stalls, 2026-11-12)
+
+Plan D2 (`docs/superpowers/plans/2026-11-12-d2-rides-and-stalls.md`, branch `feat/rides-stalls`) delivered the first slice of 4.6's rides, shops, ride operation, guests and finances. The sections above are left as they were written; this is what was built and where it narrows or settles them.
+
+- Six types, all original names and procedural models, as data in `packages/content` (a Zod schema, a recipe id equal to the type id): Carousel (gentle, 3 by 3), Big Wheel (gentle, 2 by 4) and Swing Tower (thrill, 3 by 3); Snack Stand (hunger), Drinks Stand (thirst) and Restrooms (bathroom), 1 by 1. Ratings (excitement, intensity, nausea, 0 to 999 for 0.00 to 9.99) are fixed per type.
+- No breakdowns, reliability, inspection, mechanics, operating modes or wait times yet: every ride runs one fixed cycle, loading, running for its `cycleTicks`, unloading.
+- A ride has one entrance tile and one exit tile, set by its type and turned with it, just outside the footprint; a stall has one service tile in front of its counter. No two rides share one of these tiles, each must be able to take a path, and the terrain tools refuse to reshape or flood under a ride or its tiles. Rides and stalls are a list of plain records (at most 255), with their footprints in a `Terrain.occupant` tile layer that paths and the entrance respect; saves went to schema 5 (rides, occupancy) and 6 (the guests' ride fields).
+- The entrance tile is the loading platform and holds a full load (the ride's capacity, never under four); the queue is the queue path tiles joined to it edge to edge, four guests a tile, strict first come first served, and a guest gives up after 2,400 ticks. Loading boards whoever reaches the platform during the loading time. A stall has no queue: guests stand on its service tile for its serve time, several at once, then pay.
+- Prices are per ride or per item, $0 to $20.00, and coexist with the entry fee (the either/or switch is later). Demolishing refunds half the cost; undoing it restores the ride exactly (id, stats, price) and takes the refund back. Undoing a build or an open lets go of guests as demolishing or closing does. Ride ids are never reused.
+- Running costs are a monthly figure charged a share each day over 31-day months, the remainder carried so a month totals exactly; a ride built and demolished within one day pays none. Ride and shop takings and running costs are their own rows in the month roll-up and `finance_summary`.
+- Guests: a wandering guest whose hunger, thirst or bathroom need is 160 or more goes to the nearest open stall that meets it; otherwise, half the time, to the open ride it can reach that it likes best: excitement, less half the gap between the ride's intensity and its own preference, less four points a tile of distance, among rides within 300 points of its preference, not its last ride and not full. The preference is stored in units of four rating points (0 to 1,020) and comes from the guest's id. Riding raises happiness and nausea; buying meets the need.
+- Protocol 3: the ride list travels in a snapshot's header only when it has changed for that client, and a 10-byte status per ride (phase, ticks into it, riders, queue) on every snapshot. A ride status the client cannot match to a ride yet is drawn idle.
+- The web app's Rides (`3`) and Shops (`5`) trays, a placement ghost that turns with `R` (Raise otherwise) and asks the sim through a new `ride_check` query (green, red, or checking), and a ride inspector (open, close, price, rename, demolish, takings, ratings). Paths are laid and checked as tile lists (`path_build_tiles`, `path_remove_tiles`, `path_check_tiles`), one drag one command.
+- The sample park, Leafy Lake, now opens with a Big Wheel and a Carousel (each with a short queue to the main path), a Snack Stand, a Drinks Stand and Restrooms, all open.
+- Left for later: ride and stall counts in the status pills (they are in the park Overview); cloud shadows on ride models; rechecking placement rules when a save loads.
+
+## 14. References
 
 - OpenRCT2 (behavioral reference only; GPLv3, no code reuse): https://github.com/OpenRCT2/OpenRCT2
 - three.js: https://threejs.org

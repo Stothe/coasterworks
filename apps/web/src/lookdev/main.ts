@@ -7,7 +7,7 @@ import {
 } from "@coasterworks/render";
 import { createSamplePark } from "@coasterworks/sim";
 import { createDemo } from "./demo";
-import { placeEveryRide } from "./rides";
+import { parkRides, placeEveryRide } from "./rides";
 
 /**
  * The look-dev page: the render scene alone, with no interface around it, on the sample park
@@ -29,8 +29,9 @@ import { placeEveryRide } from "./rides";
  * - `grid=1`: the build grid.
  * - `hl=x,y,w,h`: a highlighted tile rectangle.
  * - `seed=7`: the sample park's seed. Default 7, the park the app opens.
- * - `rides=1`: one of every ride and stall type, built on the sample park by the sim, the rides
- *   running.
+ * - `rides=1`: one of every ride and stall type as well, built on the sample park by the sim.
+ *   Either way the park's rides are shown running and its stalls open (the sample park has a Big
+ *   Wheel, a Carousel and three stalls of its own), except with `demo=1`, which shows none.
  * - `ghost=type,x,y,rot,ok`: a placement ghost of that type (`ok` 1 green, 0 red).
  *
  * `window.__lookdev` reports `ready` (true once a few frames of the finished scene are drawn),
@@ -118,7 +119,11 @@ const scene = createScene(canvas, options);
 
 const world = createSamplePark(number("seed") ?? 7);
 // Built before the terrain goes to the scene: the sim may only refuse a spot, never change land.
-const rides = params.get("rides") === "1" ? placeEveryRide(world) : null;
+// Not with the demo, whose made-up paths run where the park's own rides stand.
+const rides =
+  params.get("rides") === "1"
+    ? placeEveryRide(world)
+    : parkRides(params.get("demo") === "1" ? { ...world, rides: [] } : world);
 // The sim's terrain has the arrays the renderer wants, under the same names.
 const terrain: TerrainData = world.terrain;
 scene.setTerrain(terrain);
@@ -135,10 +140,8 @@ if (demo) {
   scene.setGuests(demo.guests);
 }
 
-if (rides) {
-  scene.setRides(rides.rides);
-  scene.setRideStatus(rides.status);
-}
+scene.setRides(rides.rides);
+scene.setRideStatus(rides.status);
 const ghost = params.get("ghost")?.split(",");
 if (ghost && ghost.length >= 4) {
   const [type = "", gx, gy, rot] = ghost;

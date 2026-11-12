@@ -47,7 +47,15 @@ export function placeEveryRide(world: World): LookdevRides {
       if (sim.execute(command, { type, x: tx, y: ty, rot }).ok) break;
     }
   }
-  const rides: RidePlace[] = sim.world.rides.map((r) => ({
+  return parkRides(sim.world);
+}
+
+/**
+ * The rides and stalls `world` has, as the scene wants them: the rides shown running and the
+ * stalls open. The sample park has five of its own; `placeEveryRide` adds one of every type.
+ */
+export function parkRides(world: World): LookdevRides {
+  const rides: RidePlace[] = world.rides.map((r) => ({
     id: r.id,
     type: r.type,
     x: r.x,
@@ -59,7 +67,7 @@ export function placeEveryRide(world: World): LookdevRides {
   const status: RideStatusSection = {
     count,
     id: Int32Array.from(rides, (r) => r.id),
-    phase: Uint8Array.from(sim.world.rides, (r) => (r.kind === "ride" ? 2 : 0)),
+    phase: Uint8Array.from(world.rides, (r) => (r.kind === "ride" ? 2 : 0)),
     phaseTicks: new Uint16Array(count),
     riders: new Uint8Array(count),
     queue: new Uint16Array(count),

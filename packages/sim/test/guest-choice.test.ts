@@ -667,7 +667,8 @@ describe("parks without rides", () => {
     const a = makePark({ rating: 900, seed: 5 });
     a.step(8000);
     expect(a.hash()).toBe("f017af815e91b56e");
-    const b = new Sim(createSamplePark(42));
+    // The sample park as it was before it had rides and stalls of its own.
+    const b = new Sim(createSamplePark(42, { withRides: false }));
     b.step(8000);
     expect(b.hash()).toBe("d201eb6af3f0249e");
   });

@@ -3,7 +3,10 @@ import { MAX_HEIGHT, Sim, createSamplePark, hashWorld, type World } from "../src
 import { forEachGuest, guestTile } from "../src/guests/guests.js";
 import { GuestState } from "../src/guests/types.js";
 import { PATH_FOOT, PATH_NONE, PATH_QUEUE, canBuildPath, pathAt } from "../src/paths/paths.js";
+import { queueInfo } from "../src/rides/queue.js";
+import { validateWorldInvariants } from "../src/save/invariants.js";
 import { tileCorners } from "../src/terrain/terrain.js";
+import { TICKS_PER_DAY } from "../src/time.js";
 
 /** Corner height of a freshly created world; the hill must stand this many steps above it. */
 const GROUND = 8;
@@ -178,7 +181,7 @@ describe("createSamplePark", () => {
     expect(world.log.length).toBeGreaterThan(0);
     for (const entry of world.log) {
       expect(entry.client).toBe("system");
-      expect(/^(terrain|path|park)_/.test(entry.name)).toBe(true);
+      expect(/^(terrain|path|park|ride|stall)_/.test(entry.name)).toBe(true);
     }
   });
 
@@ -246,13 +249,117 @@ describe("createSamplePark", () => {
         if (y === farSide) pastTheHill = true;
       });
     }
-    expect(sim.world.park.guestsInPark).toBeGreaterThan(20);
-    expect(sim.world.park.totalAdmissions).toBeGreaterThan(20);
-    // Nothing else earns or costs money yet, so the purse is the start plus the gate's takings.
-    expect(sim.world.finance.cash).toBe(10_000_00 + sim.world.park.totalAdmissions * 5_00);
+    const { park } = sim.world;
+    expect(park.guestsInPark).toBeGreaterThan(20);
+    expect(park.totalAdmissions).toBeGreaterThan(20);
+    // The purse is the start plus the gate's, the rides' and the stalls' takings, less the rides'
+    // and stalls' running costs: there is no loan, no staff, and nothing else to pay for.
+    expect(park.income.entry).toBe(park.totalAdmissions * 5_00);
+    expect(park.expenses.running).toBeGreaterThan(0);
+    expect(park.expenses.wages).toBe(0);
+    expect(sim.world.finance.cash).toBe(
+      10_000_00 + park.income.entry + park.income.rides + park.income.shops - park.expenses.running,
+    );
     expect(atWaterfront).toBe(true);
     expect(pastTheHill).toBe(true);
     expect(lost).toBe(0);
+  });
+
+  it("has a Big Wheel and a Carousel with queues to the main path, and three stalls, all open", () => {
+    const types = world.rides.map((ride) => ride.type);
+    expect(types).toEqual(["big_wheel", "carousel", "snack_stand", "drinks_stand", "restrooms"]);
+    const reached = reachableFromGate(world);
+    const key = (tile: { x: number; y: number } | null) => (tile ? `${tile.x},${tile.y}` : "none");
+    for (const ride of world.rides) {
+      expect(ride.open, ride.name).toBe(true);
+      expect(ride.price, ride.name).toBeGreaterThan(0);
+      if (ride.kind === "ride") {
+        // A short queue: the entrance tile and one or two queue tiles behind it, the last of them
+        // beside the main path, and a footpath on the exit tile. All are joined to the gate.
+        const info = queueInfo(world, ride);
+        expect(info.tiles.length, ride.name).toBeGreaterThanOrEqual(2);
+        expect(info.tiles.length, ride.name).toBeLessThanOrEqual(4);
+        for (const index of info.tiles) {
+          expect(world.terrain.path[index], ride.name).toBe(PATH_QUEUE);
+        }
+        expect(reached.has(key(ride.entrance)), ride.name).toBe(true);
+        expect(pathAt(world.terrain, ride.exit?.x ?? -1, ride.exit?.y ?? -1), ride.name).toBe(
+          PATH_FOOT,
+        );
+        expect(reached.has(key(ride.exit)), ride.name).toBe(true);
+      } else {
+        // A stall serves onto the main path itself.
+        expect(pathAt(world.terrain, ride.service?.x ?? -1, ride.service?.y ?? -1)).toBe(PATH_FOOT);
+        expect(ride.service?.x, ride.name).toBe(world.park.entrance?.x);
+      }
+    }
+    expect(validateWorldInvariants(world)).toBeNull();
+  });
+
+  it("gets its rides ridden and its stalls used, with every figure adding up", () => {
+    // How soon each is first used, in ticks. The Big Wheel, the more exciting of the two rides, is
+    // most guests' first choice, and is ridden within two days. The Carousel is mostly a second
+    // ride, taken by guests coming off the wheel (a 780 tick cycle), so it takes longer. Stalls
+    // wait on needs: a guest comes in with hunger and thirst under 80 and goes looking for food
+    // or drink at 160, a point every 40 ticks, so not before eight days; and with a bathroom need
+    // under 60 that reaches 160 at a point every 80 ticks, so the restrooms not before twenty.
+    const within: Record<string, number> = {
+      big_wheel: 2 * TICKS_PER_DAY,
+      carousel: 7 * TICKS_PER_DAY,
+      snack_stand: 14 * TICKS_PER_DAY,
+      drinks_stand: 14 * TICKS_PER_DAY,
+      restrooms: 31 * TICKS_PER_DAY,
+    };
+    const sim = new Sim(createSamplePark(7));
+    const first = new Map<string, number>();
+    for (let tick = 0; tick < 31 * TICKS_PER_DAY && first.size < 5; tick += 20) {
+      sim.step(20);
+      for (const ride of sim.world.rides) {
+        if (ride.stats.customers > 0 && !first.has(ride.type)) first.set(ride.type, sim.world.tick);
+      }
+      if (sim.world.tick % TICKS_PER_DAY === 0)
+        expect(validateWorldInvariants(sim.world)).toBeNull();
+    }
+    for (const [type, limit] of Object.entries(within)) {
+      expect(first.get(type), type).toBeLessThanOrEqual(limit);
+    }
+
+    // What guests paid on the rides and at the stalls is what the park took.
+    const { park, rides } = sim.world;
+    const sum = (kind: "ride" | "stall") =>
+      rides.filter((r) => r.kind === kind).reduce((total, r) => total + r.stats.income, 0);
+    expect(park.income.rides).toBe(sum("ride"));
+    expect(park.income.shops).toBe(sum("stall"));
+    expect(park.income.rides).toBeGreaterThan(0);
+    expect(park.income.shops).toBeGreaterThan(0);
+    expect(park.expenses.running).toBe(rides.reduce((total, r) => total + r.stats.runningCost, 0));
+    expect(sim.world.finance.cash).toBe(
+      10_000_00 + park.income.entry + park.income.rides + park.income.shops - park.expenses.running,
+    );
+    expect(validateWorldInvariants(sim.world)).toBeNull();
+  });
+
+  it("can be built without its rides and stalls: the same paths, no rides, no ride commands", () => {
+    const plain = createSamplePark(7, { withRides: false });
+    expect(plain.rides).toEqual([]);
+    expect(plain.terrain.occupant.every((v) => v === 0)).toBe(true);
+    for (const entry of plain.log) expect(/^(terrain|path|park)_/.test(entry.name)).toBe(true);
+    // The rides' queues and exits are the only paths it lacks.
+    const extra: number[] = [];
+    for (let i = 0; i < world.terrain.path.length; i++) {
+      if (plain.terrain.path[i] !== world.terrain.path[i]) {
+        expect(plain.terrain.path[i]).toBe(PATH_NONE);
+        extra.push(i);
+      }
+    }
+    const access = new Set<number>();
+    for (const ride of world.rides) {
+      for (const index of queueInfo(world, ride).tiles) access.add(index);
+      if (ride.exit) access.add(ride.exit.y * world.terrain.width + ride.exit.x);
+    }
+    expect(new Set(extra)).toEqual(access);
+    expect(plain.finance.cash).toBe(10_000_00);
+    expect(plain.park.open).toBe(true);
   });
 
   it("can be built without the park, as an empty field with only terrain work in its log", () => {
@@ -260,6 +367,7 @@ describe("createSamplePark", () => {
     expect(bare.park.entrance).toBeNull();
     expect(bare.park.open).toBe(false);
     expect(countPath(bare, PATH_NONE)).toBe(0);
+    expect(bare.rides).toEqual([]);
     for (const entry of bare.log) expect(entry.name.startsWith("terrain_")).toBe(true);
     expect(hashWorld(bare)).not.toBe(hashWorld(world));
   });
@@ -271,6 +379,9 @@ describe("createSamplePark", () => {
 
   it("is the same park for the same seed, and a different one for another", () => {
     expect(hashWorld(createSamplePark(7))).toBe(hashWorld(world));
+    // Pinned when the sample park got its rides and stalls (Plan D2, Task 8), the same under Bun.
+    // The ride-free park it was before is pinned by the schema 4 and 5 fixtures in save.test.ts.
+    expect(hashWorld(world)).toBe("3e2a5722b781dac7");
     expect(hashWorld(createSamplePark(8))).not.toBe(hashWorld(world));
   });
 
@@ -294,6 +405,17 @@ describe("createSamplePark", () => {
       expect(pathUnderPond(park), hint).toEqual([]);
       expect(waterfront(park).length, hint).toBeGreaterThanOrEqual(3);
       expect(loopGoesRoundTheHill(park), hint).toBe(true);
+      // Its rides and stalls stood where the recipe put them, all open, all joined to the gate.
+      expect(
+        park.rides.map((r) => `${r.kind}:${r.open}`),
+        hint,
+      ).toEqual(["ride:true", "ride:true", "stall:true", "stall:true", "stall:true"]);
+      const reached = reachableFromGate(park);
+      for (const ride of park.rides) {
+        for (const tile of [ride.entrance, ride.exit, ride.service]) {
+          if (tile !== null) expect(reached.has(`${tile.x},${tile.y}`), hint).toBe(true);
+        }
+      }
     }
   });
 });

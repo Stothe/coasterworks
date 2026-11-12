@@ -1639,8 +1639,10 @@ describe("schema 4 saves", () => {
     expect(hashWorld(world)).toBe(V4_FIXTURE_LOADED_HASH);
   });
 
-  it("is the very world the current build makes as the sample park", () => {
-    expect(hashWorld(createSamplePark(7))).toBe(V4_FIXTURE_LOADED_HASH);
+  it("is the very world the current build makes as the sample park without its rides", () => {
+    // The fixture was saved before the sample park had rides and stalls (Plan D2, Task 8 added
+    // them); with `withRides: false` the recipe still makes exactly that park.
+    expect(hashWorld(createSamplePark(7, { withRides: false }))).toBe(V4_FIXTURE_LOADED_HASH);
   });
 
   it("saves again as the current schema and reloads to the same world", () => {
@@ -1748,9 +1750,10 @@ describe("schema 5 saves", () => {
     expect(validateWorldInvariants(world)).toBeNull();
   });
 
-  it("hashes to a pinned value, which is the sample park this build makes", () => {
+  it("hashes to a pinned value, which is the sample park this build makes without its rides", () => {
     expect(hashWorld(deserializeWorld(V5_FIXTURE))).toBe(V5_FIXTURE_LOADED_HASH);
-    expect(hashWorld(createSamplePark(7))).toBe(V5_FIXTURE_LOADED_HASH);
+    // Saved before the sample park had rides and stalls of its own (Plan D2, Task 8).
+    expect(hashWorld(createSamplePark(7, { withRides: false }))).toBe(V5_FIXTURE_LOADED_HASH);
   });
 
   it("saves again as the current schema and reloads to the same world", () => {

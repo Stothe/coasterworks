@@ -1,7 +1,16 @@
 import { typeById } from "@coasterworks/content";
 import { describe, expect, it } from "vitest";
-import { GUEST_CAP, GuestState, PATH_FOOT, Sim, createWorld } from "../src/index.js";
+import {
+  GUEST_CAP,
+  GuestState,
+  PATH_FOOT,
+  Sim,
+  canPlaceRide,
+  createSamplePark,
+  createWorld,
+} from "../src/index.js";
 import { spawnGuest } from "../src/guests/guests.js";
+import { accessTiles } from "../src/rides/rides.js";
 
 /** Rides and stalls in the packed park: type, top-left tile, turn. */
 const ATTRACTIONS = [
@@ -141,6 +150,70 @@ function crowdedBigPark(): Sim {
   return sim;
 }
 
+/** The rides and stalls added to the sample park's own five, to make ten. */
+const MORE_FOR_SAMPLE = ["swing_tower", "big_wheel", "snack_stand", "drinks_stand", "restrooms"];
+
+/**
+ * The sample park, Leafy Lake, as the app opens it, with five more rides and stalls beside its
+ * paths (each on the first free spot, in tile order, whose entrance and exit or service tile is
+ * already path, so guests reach it) for ten in all, open, and 2,000 guests on its paths with their
+ * needs spread over the whole range. Like the packed park, nobody else arrives.
+ */
+function busySamplePark(): Sim {
+  const world = createSamplePark(7);
+  world.finance.cash = 1_000_000_00;
+  world.park.rating = 0;
+  const sim = new Sim(world);
+  const { path, width, height } = world.terrain;
+  const onPath = (tile: { x: number; y: number } | null) =>
+    tile === null || (path[tile.y * width + tile.x] as number) !== 0;
+  for (const id of MORE_FOR_SAMPLE) {
+    const type = typeById(id);
+    if (type === undefined) throw new Error(id);
+    const command = type.kind === "stall" ? "stall_build" : "ride_build";
+    let built = false;
+    for (let y = 1; y < height - 1 && !built; y++) {
+      for (let x = 1; x < width - 1 && !built; x++) {
+        for (const rot of [0, 1, 2, 3] as const) {
+          const access = accessTiles(type, x, y, rot);
+          if (!onPath(access.entrance) || !onPath(access.exit) || !onPath(access.service)) continue;
+          if (canPlaceRide(world, type, x, y, rot) !== null) continue;
+          const result = sim.execute(command, { type: id, x, y, rot });
+          if (!result.ok) throw new Error(result.error);
+          built = true;
+          break;
+        }
+      }
+    }
+    if (!built) throw new Error(`No spot beside the paths for a ${id}`);
+  }
+  for (const ride of world.rides) {
+    const opened = sim.execute("ride_open", { id: ride.id });
+    if (!opened.ok) throw new Error(opened.error);
+  }
+
+  const tiles: number[] = [];
+  for (let i = 0; i < path.length; i++) if ((path[i] as number) !== 0) tiles.push(i);
+  const rng = world.rngStreams.guests;
+  for (let i = 0; i < GUEST_CAP; i++) {
+    const slot = spawnGuest(world, rng);
+    const index = tiles[rng.int(tiles.length)] as number;
+    const g = world.guests;
+    const x = index % width;
+    const y = Math.floor(index / width);
+    g.x[slot] = x * 32 + 16;
+    g.y[slot] = y * 32 + 16;
+    g.tx[slot] = x;
+    g.ty[slot] = y;
+    g.state[slot] = GuestState.WANDERING;
+    g.dest[slot] = -1;
+    g.hunger[slot] = rng.int(256);
+    g.thirst[slot] = rng.int(256);
+    g.bathroom[slot] = rng.int(256);
+  }
+  return sim;
+}
+
 describe("guest performance", () => {
   it("ticks 2,000 guests for 100 ticks in under 500 ms", () => {
     const sim = packedPark();
@@ -190,6 +263,26 @@ describe("guest performance", () => {
       expect(sim.world.guests.count).toBe(GUEST_CAP);
       expect(served).toBeGreaterThan(0);
       expect(perTick).toBeLessThan(2);
+    },
+  );
+
+  it.skipIf(process.env["PERF"] !== "1")(
+    "ticks 2,000 guests in the sample park with 10 rides and stalls for 1,000 ticks in under 2 s",
+    () => {
+      const sim = busySamplePark();
+      expect(sim.world.rides).toHaveLength(10);
+      sim.step(20);
+      const start = performance.now();
+      sim.step(1000);
+      const elapsed = performance.now() - start;
+      console.log(
+        `2,000 guests, sample park, 10 rides and stalls, 1,000 ticks: ${elapsed.toFixed(0)} ms`,
+      );
+      expect(sim.world.guests.count).toBe(GUEST_CAP);
+      // Every ride and stall had customers: the guests really were using them.
+      for (const ride of sim.world.rides)
+        expect(ride.stats.customers, ride.name).toBeGreaterThan(0);
+      expect(elapsed).toBeLessThan(2000);
     },
   );
 });
