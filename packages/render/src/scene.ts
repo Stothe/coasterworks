@@ -119,6 +119,11 @@ export interface SceneHandle {
   pickAt(clientX: number, clientY: number): { x: number; y: number } | null;
   /** The guest under a client-space point, or `null` over none. */
   pickGuestAt(clientX: number, clientY: number): { id: number } | null;
+  /**
+   * Whether the guests drawn stand where the sim has them and nobody is moving (see
+   * `GuestsModule.atRest`); true with no guests.
+   */
+  guestsAtRest(): boolean;
   /** Highlights the tile rectangle at (`x`, `y`) of `w` by `h` tiles, on the ground; `null` clears it. */
   highlightTile(x: number, y: number, w: number, h: number): void;
   highlightTile(rect: null): void;
@@ -549,6 +554,9 @@ export function createScene(canvas: HTMLCanvasElement, opts: SceneOptions = {}):
     render,
     resize,
     pickAt,
+    guestsAtRest(): boolean {
+      return guests ? guests.atRest() : true;
+    },
     pickGuestAt(clientX: number, clientY: number): { id: number } | null {
       const ray = guests ? rayAt(clientX, clientY) : null;
       if (!ray || !guests) return null;

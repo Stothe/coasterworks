@@ -31,7 +31,9 @@ export interface ViewportHandle {
   focusTile(x: number, y: number, w: number, h: number): void;
   /**
    * A point in the window where a guest is drawn, found by trying points across the view a few
-   * pixels apart, or null if no guest is in view. For tests and the console: it is slow.
+   * pixels apart, or null if no guest is in view. For tests and the console: it is slow. It is
+   * also null while guests are still moving on screen (the sim running, or the last moves before
+   * a pause still being drawn), when a point found now would not be on the guest a moment later.
    */
   findGuest(): { clientX: number; clientY: number; id: number } | null;
 }
@@ -290,7 +292,7 @@ export function Viewport(props: ViewportProps) {
       findGuest() {
         const scene = live.current?.scene;
         const canvas = canvasRef.current;
-        if (!scene || !canvas) return null;
+        if (!scene || !canvas || !scene.guestsAtRest()) return null;
         const box = canvas.getBoundingClientRect();
         for (let y = box.top + FIND_STEP; y < box.bottom; y += FIND_STEP) {
           for (let x = box.left + FIND_STEP; x < box.right; x += FIND_STEP) {

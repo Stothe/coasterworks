@@ -32,6 +32,7 @@ const fake = vi.hoisted(() => ({
     x: number,
     y: number,
   ) => { id: number } | null,
+  guestsAtRest: true,
 }));
 vi.mock("@coasterworks/render", () => ({
   createScene: (_canvas: unknown, options: unknown) => {
@@ -54,6 +55,7 @@ vi.mock("@coasterworks/render", () => ({
       highlightTile: () => {},
       pickAt: (x: number, y: number) => fake.pickAt(x, y),
       pickGuestAt: (x: number, y: number) => fake.pickGuestAt(x, y),
+      guestsAtRest: () => fake.guestsAtRest,
       resize: () => {},
       render: record("render"),
       dispose: () => {},
@@ -96,6 +98,7 @@ beforeEach(() => {
   checking();
   fake.pickAt = () => ({ x: 2, y: 5 });
   fake.pickGuestAt = () => null;
+  fake.guestsAtRest = true;
   fake.options = undefined;
   fake.calls = [];
   fake.rig = {
@@ -888,6 +891,36 @@ describe("Viewport: drawing paths", () => {
       },
     ]);
     expect(query.mock.calls[0]![1]).toMatchObject({ kind: "remove" });
+  });
+});
+
+describe("Viewport: findGuest", () => {
+  function mountWithHandle() {
+    const ref = createRef<ViewportHandle>();
+    const view = render(
+      <Viewport terrain={terrain} tick={0} client={client} onResult={vi.fn()} ref={ref} />,
+    );
+    const canvas = view.getByLabelText("Park view") as HTMLCanvasElement;
+    canvas.getBoundingClientRect = () =>
+      ({ left: 0, top: 0, right: 60, bottom: 60, width: 60, height: 60, x: 0, y: 0 }) as DOMRect;
+    return ref;
+  }
+
+  it("finds where a guest is drawn once the guests stand still", () => {
+    const ref = mountWithHandle();
+    fake.pickGuestAt = (x, y) => (x === 30 && y === 24 ? { id: 7 } : null);
+    expect(ref.current?.findGuest()).toEqual({ clientX: 30, clientY: 24, id: 7 });
+  });
+
+  // A pause reaches the drawing a moment late: the last moves are still drawn, and a point found
+  // then is off the guest by the time it is clicked (CI, Nov 2026).
+  it("finds nothing while guests are still moving on screen", () => {
+    const ref = mountWithHandle();
+    fake.pickGuestAt = (x, y) => (x === 30 && y === 24 ? { id: 7 } : null);
+    fake.guestsAtRest = false;
+    expect(ref.current?.findGuest()).toBeNull();
+    fake.guestsAtRest = true;
+    expect(ref.current?.findGuest()).toEqual({ clientX: 30, clientY: 24, id: 7 });
   });
 });
 
