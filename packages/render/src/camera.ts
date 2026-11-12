@@ -52,6 +52,8 @@ export class CameraRig {
    * done and the rig is a plain orbit camera.
    */
   heightAt: ((x: number, z: number) => number) | undefined;
+  /** Where `placeEye()` writes the camera position; never handed out. */
+  private readonly eye: V3 = { x: 0, y: 0, z: 0 };
 
   /**
    * Turns the camera by the given radians; pitch is clamped to the limits, yaw is free. The pitch
@@ -143,7 +145,7 @@ export class CameraRig {
 
   /** How far the eye is above the least height it may have: negative when it is too low. */
   private clearance(ground: (x: number, z: number) => number): number {
-    const eye = this.position();
+    const eye = this.placeEye();
     return eye.y - ground(eye.x, eye.z) - CAMERA_CLEARANCE;
   }
 
@@ -177,25 +179,34 @@ export class CameraRig {
   private raiseDistance(ground: (x: number, z: number) => number): void {
     const lift = Math.sin(this.pitch);
     for (let pass = 0; pass < DISTANCE_PASSES && this.clearance(ground) < 0; pass++) {
-      const eye = this.position();
+      const eye = this.placeEye();
       const wanted = ground(eye.x, eye.z) + CAMERA_CLEARANCE - this.target.y;
       this.distance = Math.max(this.distance, wanted / lift);
     }
   }
 
-  /** The camera position in world space. */
+  /** The camera position in world space, as a new object each call. */
   position(): V3 {
+    const eye = this.placeEye();
+    return { x: eye.x, y: eye.y, z: eye.z };
+  }
+
+  /**
+   * Works out the camera position into the rig's own scratch point and returns that. `settle()`
+   * and `applyTo()` run every frame and ask many times over, so they use this and make nothing.
+   */
+  private placeEye(): V3 {
     const flat = this.distance * Math.cos(this.pitch);
-    return {
-      x: this.target.x + flat * Math.sin(this.yaw),
-      y: this.target.y + this.distance * Math.sin(this.pitch),
-      z: this.target.z + flat * Math.cos(this.yaw),
-    };
+    const eye = this.eye;
+    eye.x = this.target.x + flat * Math.sin(this.yaw);
+    eye.y = this.target.y + this.distance * Math.sin(this.pitch);
+    eye.z = this.target.z + flat * Math.cos(this.yaw);
+    return eye;
   }
 
   /** Points `camera` from `position()` at the target. */
   applyTo(camera: CameraLike): void {
-    const p = this.position();
+    const p = this.placeEye();
     camera.position.set(p.x, p.y, p.z);
     camera.lookAt(this.target.x, this.target.y, this.target.z);
   }

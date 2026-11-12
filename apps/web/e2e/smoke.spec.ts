@@ -2,9 +2,14 @@ import { expect, test } from "@playwright/test";
 import { writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
-/** What a fresh sample park starts with, as the status pills show it. */
-const START_CASH = "$10,000.00";
+/**
+ * What a fresh sample park starts with, in cents. The park opens already open and running at 1x, so
+ * by the time the test has paused it some guests may have paid at the gate: the cash it shows is
+ * this plus those entry fees, at `ENTRY_FEE` a guest, and nothing else (there is no ride or shop
+ * yet to take or cost anything).
+ */
 const START_CENTS = 10_000_00;
+const ENTRY_FEE = 5_00;
 /**
  * The date it starts on is March 1, but the park runs at 1x until the test pauses it, and a slow
  * runner can be some days in by then. Any day of the first March is the park just opened.
@@ -24,8 +29,18 @@ const README_SCREENSHOT = fileURLToPath(new URL("./__screenshots__/park.png", im
 interface Hook {
   __coasterworks?: {
     ready?: boolean;
-    client?: { query(name: string, input: unknown): Promise<{ ok: boolean }> };
+    client?: {
+      query(name: string, input: unknown): Promise<{ ok: boolean; result?: unknown }>;
+    };
   };
+}
+
+/** As much of the sim's `park_status` answer as this test reads. Money is in cents. */
+interface ParkStatus {
+  cash: number;
+  open: boolean;
+  totalAdmissions: number;
+  income: { entry: number; rides: number; shops: number };
 }
 
 /** Integer cents from a pill's text, such as `$9,800.00` or `-$5.00`. */
@@ -58,13 +73,21 @@ test("opens a park, shapes terrain, undoes it, pauses, and draws", async ({ page
   const cash = page.getByRole("group", { name: "Cash" });
   const date = page.getByRole("group", { name: "Date" });
   await expect(date).toContainText(START_DATE);
-  await expect(cash).toContainText(START_CASH);
-
-  // The page really is talking to a sim, whatever the click below lands on.
+  // The page really is talking to a sim, whatever the click below lands on, and the sim says what
+  // the gate has taken: the sample park is open, and guests who came in before the pause paid.
   const status = await page.evaluate(() =>
     (window as unknown as Hook).__coasterworks?.client?.query("park_status", {}),
   );
   expect(status?.ok).toBe(true);
+  const park = status?.result as ParkStatus;
+  expect(park.open).toBe(true);
+  expect(park.income).toEqual({ entry: park.totalAdmissions * ENTRY_FEE, rides: 0, shops: 0 });
+
+  // Cash is the $10,000.00 the park starts with plus exactly those entry fees, and the pill shows
+  // what the sim has. Paused, it holds still from here on.
+  const opening = START_CENTS + park.income.entry;
+  expect(park.cash).toBe(opening);
+  await expect.poll(async () => cents(await cash.innerText())).toBe(opening);
 
   // A click on the middle of the park with Raise in hand is paid for in cash. The park opens with
   // nothing in hand (a click would only look at the tile), and 1 takes up Terrain with Raise.
@@ -75,11 +98,11 @@ test("opens a park, shapes terrain, undoes it, pauses, and draws", async ({ page
   const box = await canvas.boundingBox();
   if (!box) throw new Error("The park view has no size");
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-  await expect.poll(async () => cents(await cash.innerText())).toBeLessThan(START_CENTS);
+  await expect.poll(async () => cents(await cash.innerText())).toBeLessThan(opening);
 
-  // Undo gives it back.
+  // Undo gives it back, to the cent.
   await page.keyboard.press("ControlOrMeta+z");
-  await expect(cash).toContainText(START_CASH);
+  await expect.poll(async () => cents(await cash.innerText())).toBe(opening);
 
   // Space resumes, and the pause button lets go.
   await page.keyboard.press("Space");

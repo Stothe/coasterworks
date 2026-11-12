@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PIXEL_RATIO_KEY, SHOW_FPS_KEY, settingsStore } from "../src/state/settings";
+import { PIXEL_RATIO_KEY, QUALITY_KEY, SHOW_FPS_KEY, settingsStore } from "../src/state/settings";
 import { TopRight, type TopRightProps } from "../src/ui/TopRight";
 
 beforeEach(() => {
@@ -143,6 +143,30 @@ describe("TopRight: settings", () => {
     mount();
     open();
     expect(within(panel()).getByText(/next time the park loads/i)).toBeTruthy();
+  });
+
+  it("offers the graphics quality as Auto, Low, Medium and High, starting at Auto", () => {
+    mount();
+    open();
+    const group = within(panel()).getByRole("group", { name: "Graphics quality" });
+    const buttons = within(group).getAllByRole("button");
+    expect(buttons.map((b) => b.textContent)).toEqual(["Auto", "Low", "Medium", "High"]);
+    expect(within(group).getByRole("button", { name: "Auto" }).getAttribute("aria-pressed")).toBe(
+      "true",
+    );
+  });
+
+  it("stores the graphics quality in localStorage when it is chosen", () => {
+    mount();
+    open();
+    fireEvent.click(within(panel()).getByRole("button", { name: "Medium" }));
+    expect(localStorage.getItem(QUALITY_KEY)).toBe("medium");
+    expect(settingsStore.getState().graphicsQuality).toBe("medium");
+    expect(
+      within(panel()).getByRole("button", { name: "Medium" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    fireEvent.click(within(panel()).getByRole("button", { name: "Auto" }));
+    expect(localStorage.getItem(QUALITY_KEY)).toBe("auto");
   });
 
   it("turns Show FPS on and off", () => {

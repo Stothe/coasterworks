@@ -7,8 +7,11 @@
 /** World units per sim height step. */
 export const HEIGHT_STEP = 0.25;
 
-/** Tiles per chunk edge. Each chunk is one mesh (plus one for its water). */
+/** Tiles per chunk edge. Each chunk is one terrain mesh. */
 export const CHUNK = 16;
+
+/** Mesh cells per tile edge: the smooth ground is drawn at this resolution. */
+export const SUBDIV = 4;
 
 /** How far the water surface sits above its nominal level, so it never fights the terrain. */
 export const WATER_LIFT = 0.01;

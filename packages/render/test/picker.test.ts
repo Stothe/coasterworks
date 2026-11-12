@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { CameraRig } from "../src/camera.js";
 import { pickTile, rayFromCamera } from "../src/picker.js";
-import { tileTriangles, type TerrainData } from "../src/terrain-geometry.js";
+import { tileTriangles, type TerrainData } from "../src/terrain/geometry.js";
 
 function flatTerrain(width: number, height: number, level: number): TerrainData {
   return {

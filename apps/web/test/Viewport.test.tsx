@@ -1,4 +1,4 @@
-import type { SimClient } from "@coasterworks/protocol";
+import type { GuestSection, SimClient } from "@coasterworks/protocol";
 import type { ControlHandlers, TerrainData } from "@coasterworks/render";
 import type { ExecResult } from "@coasterworks/sim";
 import { act, cleanup, render } from "@testing-library/react";
@@ -22,6 +22,8 @@ const fake = vi.hoisted(() => ({
     target: { x: number; y: number; z: number };
     clampTarget: (width: number, height: number) => void;
   },
+  /** The scene's calls, in order, as [method, ...args]. */
+  calls: [] as unknown[][],
   pickAt: ((_x: number, _y: number) => null) as (
     x: number,
     y: number,
@@ -30,15 +32,25 @@ const fake = vi.hoisted(() => ({
 vi.mock("@coasterworks/render", () => ({
   createScene: (_canvas: unknown, options: unknown) => {
     fake.options = options;
+    const record =
+      (name: string) =>
+      (...args: unknown[]) => {
+        fake.calls.push([name, ...args]);
+      };
     return {
       rig: fake.rig,
       setTerrain: () => {},
       updateTerrain: () => {},
       setTimeOfDay: () => {},
+      setPaths: record("setPaths"),
+      setGuests: record("setGuests"),
+      setEntrance: record("setEntrance"),
+      setGridVisible: record("setGridVisible"),
+      setQuality: record("setQuality"),
       highlightTile: () => {},
       pickAt: (x: number, y: number) => fake.pickAt(x, y),
       resize: () => {},
-      render: () => {},
+      render: record("render"),
       dispose: () => {},
     };
   },
@@ -65,6 +77,7 @@ beforeEach(() => {
   command.mockResolvedValue(OK);
   fake.pickAt = () => ({ x: 2, y: 5 });
   fake.options = undefined;
+  fake.calls = [];
   fake.rig = {
     distance: 10,
     limits: { distance: [1, 200] },
@@ -310,12 +323,286 @@ describe("Viewport: the pixel ratio cap", () => {
   it("creates the scene with the cap the settings hold", () => {
     settingsStore.getState().setPixelRatioCap(1.5);
     mount();
-    expect(fake.options).toEqual({ pixelRatioCap: 1.5 });
+    expect(fake.options).toEqual({ pixelRatioCap: 1.5, quality: "auto" });
   });
 
   it("creates it with 2, the default cap", () => {
     mount();
-    expect(fake.options).toEqual({ pixelRatioCap: 2 });
+    expect(fake.options).toEqual({ pixelRatioCap: 2, quality: "auto" });
+  });
+});
+
+/** The scene's calls to one method, as their argument lists. */
+const callsTo = (name: string) => fake.calls.filter(([n]) => n === name).map((c) => c.slice(1));
+
+describe("Viewport: the graphics quality", () => {
+  it("creates the scene with the quality the settings hold", () => {
+    settingsStore.getState().setGraphicsQuality("medium");
+    mount();
+    expect(fake.options).toEqual({ pixelRatioCap: 2, quality: "medium" });
+  });
+
+  it("does not ask the new scene again for the quality it was made with", () => {
+    mount();
+    expect(callsTo("setQuality")).toEqual([]);
+    settingsStore.getState().setGraphicsQuality("high");
+    cleanup();
+    fake.calls = [];
+    mount();
+    expect(fake.options).toEqual({ pixelRatioCap: 2, quality: "high" });
+    expect(callsTo("setQuality")).toEqual([]);
+  });
+
+  it("gives a change of quality to the scene that is up, without making another", () => {
+    mount();
+    const options = fake.options;
+    act(() => settingsStore.getState().setGraphicsQuality("low"));
+    expect(callsTo("setQuality")).toEqual([["low"]]);
+    act(() => settingsStore.getState().setGraphicsQuality("auto"));
+    expect(callsTo("setQuality")).toEqual([["low"], ["auto"]]);
+    expect(fake.options).toBe(options);
+  });
+});
+
+describe("Viewport: the path layer and the grid", () => {
+  it("gives the scene the paths it is mounted with, and each new layer after", () => {
+    const first = new Uint8Array(64).fill(1);
+    const view = render(
+      <Viewport terrain={terrain} tick={0} client={client} onResult={vi.fn()} paths={first} />,
+    );
+    // Once: the scene bakes the layer it is given, every time it is given one.
+    expect(callsTo("setPaths")).toEqual([[first]]);
+    const second = new Uint8Array(64).fill(2);
+    view.rerender(
+      <Viewport terrain={terrain} tick={0} client={client} onResult={vi.fn()} paths={second} />,
+    );
+    expect(callsTo("setPaths")).toEqual([[first], [second]]);
+  });
+
+  it("gives null when there are no paths, and when they are taken away", () => {
+    mount();
+    expect(callsTo("setPaths")).toEqual([[null]]);
+    cleanup();
+    fake.calls = [];
+    const paths = new Uint8Array(64).fill(1);
+    const view = render(
+      <Viewport terrain={terrain} tick={0} client={client} onResult={vi.fn()} paths={paths} />,
+    );
+    view.rerender(
+      <Viewport terrain={terrain} tick={0} client={client} onResult={vi.fn()} paths={null} />,
+    );
+    expect(callsTo("setPaths")).toEqual([[paths], [null]]);
+  });
+
+  it("gives a scene that is made anew the layer the last one had", () => {
+    const paths = new Uint8Array(64).fill(1);
+    const props = { terrain, tick: 0, client, onResult: vi.fn(), paths };
+    render(<Viewport {...props} />);
+    cleanup();
+    fake.calls = [];
+    render(<Viewport {...props} />);
+    expect(callsTo("setPaths")).toEqual([[paths]]);
+  });
+
+  it("does not send the same layer again for a render that did not change it", () => {
+    const paths = new Uint8Array(64);
+    const view = render(
+      <Viewport terrain={terrain} tick={0} client={client} onResult={vi.fn()} paths={paths} />,
+    );
+    const before = callsTo("setPaths").length;
+    view.rerender(
+      <Viewport terrain={terrain} tick={5} client={client} onResult={vi.fn()} paths={paths} />,
+    );
+    expect(callsTo("setPaths")).toHaveLength(before);
+  });
+
+  it("shows the grid exactly while a placement is in hand", () => {
+    mount();
+    expect(callsTo("setGridVisible").at(-1)).toEqual([false]);
+    act(() => uiStore.getState().setTool("terrain"));
+    expect(callsTo("setGridVisible").at(-1)).toEqual([true]);
+    act(() => uiStore.getState().cancel());
+    expect(callsTo("setGridVisible").at(-1)).toEqual([false]);
+  });
+});
+
+describe("Viewport: the guests and the entrance", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+  });
+  const frames = (ms: number) =>
+    act(() => {
+      vi.advanceTimersByTime(ms);
+    });
+  const section = (count: number) => ({ count }) as unknown as GuestSection;
+
+  it("reads the guests through the getter in the frame, and gives the scene a new section once", () => {
+    let current: GuestSection | null = section(1);
+    const getGuests = vi.fn(() => current);
+    mount({ getGuests });
+    frames(100);
+    const first = callsTo("setGuests");
+    expect(first).toHaveLength(1);
+    expect(first[0]?.[0]).toBe(current);
+    expect(typeof first[0]?.[1]).toBe("number");
+    expect(getGuests.mock.calls.length).toBeGreaterThan(1);
+    const next = section(2);
+    current = next;
+    frames(100);
+    const all = callsTo("setGuests");
+    expect(all).toHaveLength(2);
+    expect(all[1]?.[0]).toBe(next);
+  });
+
+  it("draws with the frame time, and gives the guests the same time", () => {
+    mount({ getGuests: () => section(1) });
+    frames(50);
+    const times = callsTo("render").map(([now]) => now);
+    expect(times.every((t) => typeof t === "number")).toBe(true);
+    expect(callsTo("setGuests")[0]?.[1]).toBe(times[0]);
+  });
+
+  it("sends no guests, and then none, when there is no getter", () => {
+    mount();
+    frames(50);
+    expect(callsTo("setGuests")).toEqual([[null, expect.any(Number)]]);
+  });
+
+  it("gives the scene the entrance, and again only when it moves", () => {
+    let entrance: { x: number; y: number; side: 0 | 1 | 2 | 3 } | undefined = {
+      x: 3,
+      y: 7,
+      side: 2,
+    };
+    mount({ getEntrance: () => entrance });
+    frames(100);
+    expect(callsTo("setEntrance")).toEqual([[{ x: 3, y: 7, side: 2 }]]);
+    // A new object for the same place, as every snapshot brings, is not a change.
+    entrance = { x: 3, y: 7, side: 2 };
+    frames(100);
+    expect(callsTo("setEntrance")).toHaveLength(1);
+    entrance = { x: 4, y: 7, side: 2 };
+    frames(100);
+    expect(callsTo("setEntrance")).toEqual([[{ x: 3, y: 7, side: 2 }], [{ x: 4, y: 7, side: 2 }]]);
+    entrance = undefined;
+    frames(100);
+    expect(callsTo("setEntrance").at(-1)).toEqual([null]);
+  });
+});
+
+describe("Viewport: the entrance tile, which the sim's path layer leaves out", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+  });
+  const frames = (ms: number) =>
+    act(() => {
+      vi.advanceTimersByTime(ms);
+    });
+  /** The layer the scene was last given. */
+  const laid = () => callsTo("setPaths").at(-1)?.[0] as Uint8Array | null;
+  /** An avenue up column 3 of the 8 by 8 map, stopping short of the entrance tile at (3, 7). */
+  const avenue = () => {
+    const paths = new Uint8Array(64);
+    for (let y = 2; y < 7; y++) paths[y * 8 + 3] = 1;
+    return paths;
+  };
+  const south = { x: 3, y: 7, side: 2 } as const;
+
+  it("is paved in the layer the scene is given, and the host's layer is left as it was", () => {
+    const paths = avenue();
+    mount({ paths, getEntrance: () => south });
+    expect(callsTo("setPaths")).toHaveLength(1);
+    const expected = avenue();
+    expected[7 * 8 + 3] = 1;
+    expect(laid()).toEqual(expected);
+    expect(laid()).not.toBe(paths);
+    expect(paths).toEqual(avenue());
+  });
+
+  it("is given the layer itself when there is no entrance, or its tile is paved already", () => {
+    const bare = avenue();
+    mount({ paths: bare });
+    expect(laid()).toBe(bare);
+    cleanup();
+    const paved = avenue();
+    paved[7 * 8 + 3] = 2;
+    mount({ paths: paved, getEntrance: () => south });
+    expect(laid()).toBe(paved);
+  });
+
+  it("is paved where the entrance moves to, and no longer where it was", () => {
+    let entrance: { x: number; y: number; side: 0 | 1 | 2 | 3 } | null = south;
+    const paths = avenue();
+    mount({ paths, getEntrance: () => entrance });
+    entrance = { x: 0, y: 4, side: 3 };
+    frames(50);
+    expect(callsTo("setPaths")).toHaveLength(2);
+    expect(laid()?.[4 * 8]).toBe(1);
+    expect(laid()?.[7 * 8 + 3]).toBe(0);
+    // With the entrance gone the layer is the sim's own again.
+    entrance = null;
+    frames(50);
+    expect(callsTo("setPaths")).toHaveLength(3);
+    expect(laid()).toBe(paths);
+  });
+
+  it("is paved in each new layer, once per layer however many frames pass", () => {
+    const first = avenue();
+    const view = render(
+      <Viewport
+        terrain={terrain}
+        tick={0}
+        client={client}
+        onResult={vi.fn()}
+        paths={first}
+        getEntrance={() => ({ ...south })}
+      />,
+    );
+    frames(100);
+    expect(callsTo("setPaths")).toHaveLength(1);
+    const second = avenue();
+    second[2 * 8 + 4] = 1;
+    view.rerender(
+      <Viewport
+        terrain={terrain}
+        tick={0}
+        client={client}
+        onResult={vi.fn()}
+        paths={second}
+        getEntrance={() => ({ ...south })}
+      />,
+    );
+    frames(100);
+    expect(callsTo("setPaths")).toHaveLength(2);
+    expect(laid()?.[2 * 8 + 4]).toBe(1);
+    expect(laid()?.[7 * 8 + 3]).toBe(1);
+    expect(callsTo("setEntrance")).toEqual([[south]]);
+  });
+
+  it("is left alone in a layer that is not this map's, and for an entrance that is off it", () => {
+    const other = new Uint8Array(16);
+    mount({ paths: other, getEntrance: () => south });
+    expect(laid()).toBe(other);
+    cleanup();
+    const paths = avenue();
+    mount({ paths, getEntrance: () => ({ x: 8, y: 7, side: 1 }) });
+    expect(laid()).toBe(paths);
+  });
+
+  it("is paved once the terrain says how wide the map is, if the layer came first", () => {
+    const paths = avenue();
+    const props = { tick: 0, client, onResult: vi.fn(), paths, getEntrance: () => south };
+    const view = render(<Viewport {...props} terrain={null} />);
+    expect(callsTo("setPaths")).toHaveLength(1);
+    expect(laid()).toBe(paths);
+    view.rerender(<Viewport {...props} terrain={terrain} />);
+    frames(50);
+    expect(callsTo("setPaths")).toHaveLength(2);
+    expect(laid()?.[7 * 8 + 3]).toBe(1);
+    // Terrain that is only reshaped lays nothing again.
+    view.rerender(<Viewport {...props} terrain={{ ...terrain }} />);
+    frames(50);
+    expect(callsTo("setPaths")).toHaveLength(2);
   });
 });
 

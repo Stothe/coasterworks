@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="icon" href="data:," />
+    <title>Coasterworks look-dev</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+        background: #101418;
+      }
+      canvas {
+        display: block;
+        width: 100vw;
+        height: 100vh;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- The render scene alone, on the sample park, driven by URL parameters. Development only:
+         the production build has one entry, index.html, and does not include this page. -->
+    <canvas id="view"></canvas>
+    <script type="module" src="/src/lookdev/main.ts"></script>
+  </body>
+</html>

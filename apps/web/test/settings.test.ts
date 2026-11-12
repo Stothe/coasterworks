@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  GRAPHICS_QUALITIES,
   PIXEL_RATIO_KEY,
+  QUALITY_KEY,
   SHOW_FPS_KEY,
+  readGraphicsQuality,
   readPixelRatioCap,
   readShowFps,
   settingsStore,
@@ -63,6 +66,62 @@ describe("the pixel ratio cap", () => {
     try {
       settingsStore.getState().setPixelRatioCap(1);
       expect(settingsStore.getState().pixelRatioCap).toBe(1);
+    } finally {
+      vi.stubGlobal("localStorage", real);
+    }
+  });
+});
+
+describe("the graphics quality", () => {
+  it("is stored under coasterworks.quality", () => {
+    expect(QUALITY_KEY).toBe("coasterworks.quality");
+  });
+
+  it("offers Auto, Low, Medium and High, in that order", () => {
+    expect([...GRAPHICS_QUALITIES]).toEqual(["auto", "low", "medium", "high"]);
+  });
+
+  it("is read back as one of the choices", () => {
+    for (const quality of GRAPHICS_QUALITIES) {
+      expect(readGraphicsQuality(storage(quality))).toBe(quality);
+    }
+  });
+
+  it("is auto when nothing, or nothing valid, was stored", () => {
+    expect(readGraphicsQuality(storage(null))).toBe("auto");
+    expect(readGraphicsQuality(storage("ultra"))).toBe("auto");
+    expect(readGraphicsQuality(storage("High"))).toBe("auto");
+    expect(readGraphicsQuality(storage(""))).toBe("auto");
+    expect(readGraphicsQuality(undefined)).toBe("auto");
+  });
+
+  it("is auto when the browser will not let the page read storage", () => {
+    const refusing = {
+      getItem: () => {
+        throw new Error("denied");
+      },
+    };
+    expect(readGraphicsQuality(refusing)).toBe("auto");
+  });
+
+  it("is written to localStorage when it is set", () => {
+    expect(settingsStore.getState().graphicsQuality).toBe("auto");
+    settingsStore.getState().setGraphicsQuality("high");
+    expect(settingsStore.getState().graphicsQuality).toBe("high");
+    expect(localStorage.getItem(QUALITY_KEY)).toBe("high");
+  });
+
+  it("is still set when the browser will not let the page write storage", () => {
+    const real = localStorage;
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem: () => {
+        throw new Error("denied");
+      },
+    });
+    try {
+      settingsStore.getState().setGraphicsQuality("low");
+      expect(settingsStore.getState().graphicsQuality).toBe("low");
     } finally {
       vi.stubGlobal("localStorage", real);
     }

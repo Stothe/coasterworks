@@ -1,5 +1,5 @@
 import type { CameraRig } from "./camera.js";
-import { tileTriangles, type TerrainData } from "./terrain-geometry.js";
+import { tileTriangles, type TerrainData } from "./terrain/geometry.js";
 import type { V3 } from "./units.js";
 
 export interface Ray {
@@ -62,7 +62,8 @@ function intersectTriangle(o: V3, d: V3, tri: Float64Array, off: number): number
 /**
  * Finds the first tile surface a ray hits. It walks the tiles under the ray's footprint on the ground
  * (a 2D DDA from where the ray enters the map's outline, or from its origin when that is inside) and
- * tests both triangles of each tile, split the same way the geometry is. The first tile with a hit
+ * tests both triangles of each tile (`tileTriangles`: the tile as two flat triangles through its
+ * corners, which is within a fraction of a step of the smooth ground drawn). The first tile with a hit
  * holds the nearest one, because the walk visits tiles in the order the ray crosses them. Returns
  * `null` when the ray misses the map.
  */
