@@ -19,7 +19,11 @@ const START_DATE = /March \d+, Year 1/;
 /** Terrain has a sky, grass in two shades, sand, water and a hill; a blank canvas has one colour. */
 const MIN_COLOURS = 8;
 
-/** The README's picture. `UPDATE_SCREENSHOT=1 pnpm e2e` refreshes it; a normal run leaves it be. */
+/**
+ * The README's picture. `UPDATE_SCREENSHOT=1 pnpm e2e` refreshes it from this software-painted run;
+ * `scripts/readme-shot.mjs` takes it on the GPU, which is how it is normally made. A normal run
+ * leaves it be.
+ */
 const README_SCREENSHOT = fileURLToPath(new URL("./__screenshots__/park.png", import.meta.url));
 
 /**
